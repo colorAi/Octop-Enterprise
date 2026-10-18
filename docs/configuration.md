@@ -1,6 +1,6 @@
 # Configuration
 
-> For Octop Enterprise deployment (PostgreSQL, communication, devices and isolation), use the [enterprise deployment and recovery guide](../docker/enterprise/README.md). This document covers general application configuration; single-process descriptions apply to base mode.
+> For Octop Enterprise deployment (PostgreSQL, communication, devices and isolation), use the [enterprise deployment and recovery guide](../docker/enterprise/README_EN.md). This document covers general application configuration; single-process descriptions apply to base mode.
 
 In base mode, Octop stores its state under `~/.octop/`. Enterprise mode
 uses PostgreSQL for control-plane data and retains local files as configured. The directory is created
@@ -31,7 +31,7 @@ keys from the process environment (host/systemd keys that were never in the
 file are left alone). The following environment inheritance rules describe base
 mode. Enterprise Docker isolation filters host variables and disables host tools;
 the employee local runtime runs on the employee computer instead. See
-[employee isolation](employee-isolation.md) and the [employee guide](enterprise-client.md).
+[employee isolation](employee-isolation.md) and the [employee guide](enterprise-client_EN.md).
 
 In base mode:
 
@@ -262,5 +262,5 @@ This switch only affects the write format of the next complete turn —
 once disabled, turns already saved in the new format are still read
 correctly.
 Before enabling, read
-[Segmented history archive & rollback](versioned-history.md), especially
+[Segmented history archive & rollback](versioned-history.md) (Chinese), especially
 the version compatibility and backup/restore boundaries it covers.

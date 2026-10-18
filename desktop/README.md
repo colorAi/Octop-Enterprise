@@ -1,6 +1,6 @@
 # Octop Enterprise desktop (Wails v3 + green portable)
 
-> For employee setup and everyday use, see [the employee guide](../docs/enterprise-client.md). This document covers building the enterprise client and the base-mode desktop packages from source.
+> For employee setup and everyday use, see [the employee guide](../docs/enterprise-client_EN.md). This document covers building the enterprise client and the base-mode desktop packages from source.
 
 All desktop-client code lives here. This is **not** `src/octop/infra/desktop`
 (remote desktop streaming).
@@ -201,7 +201,7 @@ checksums. Build staging is outside the repository, beside the output directory.
 Employees configure the server address at sign-in. Developer ID signing is
 optional; notarization and Windows Authenticode signing are separate release
 steps. Windows installation still requires validation on a Windows machine.
-See [the enterprise client guide](../docs/enterprise-client.md)
+See [the enterprise client guide](../docs/enterprise-client_EN.md)
 for setup, supported workflows and data boundaries.
 
 ### Development build
@@ -249,7 +249,7 @@ GitHub Release names follow `Octop-<kind>-<os>-<arch>-<version>.<ext>`:
 - PyPI wheels stay `octop-<version>-py3-none-any.whl` (PEP 427)
 
 The Linux tar.gz contains only the GUI binary; it has no separate portable zip or
-server terminal process. Octop Enterprise uses [manual upgrades](../docs/updates.md);
+server terminal process. Octop Enterprise uses [manual upgrades](../docs/updates_EN.md);
 the CLI/API online update paths are disabled for this distribution.
 
 The base-mode Wails shell requires macOS 12+; enterprise employee installers
@@ -271,7 +271,7 @@ bar image to the full `NSStatusBar` thickness (22pt) where the glyph should be
 other app. On macOS the Dock icon comes from the bundle's `icons.icns` only —
 see `applyAppIcon` in `src/icons_darwin.go`.
 
-Enterprise source/manifest checks and the native acceptance matrix: [deployment guide](../docker/enterprise/README.md). Before local Wails builds, run `npm ci --prefix dashboard` from the repository root; the shared build task then generates and verifies login assets.
+Enterprise source/manifest checks and the native acceptance matrix: [deployment guide](../docker/enterprise/README_EN.md). Before local Wails builds, run `npm ci --prefix dashboard` from the repository root; the shared build task then generates and verifies login assets.
 
 ## Independent distribution identity
 

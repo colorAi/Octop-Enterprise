@@ -1,6 +1,6 @@
 # Architecture
 
-> For enterprise mode (PostgreSQL, communication, devices and isolation), use the [enterprise deployment and recovery guide](../docker/enterprise/README.md). Single-process descriptions apply to base mode.
+> For enterprise mode (PostgreSQL, communication, devices and isolation), use the [enterprise deployment and recovery guide](../docker/enterprise/README_EN.md). Single-process descriptions apply to base mode.
 
 Octop is a self-hosted AI assistant platform for multiple users and agents,
 delivered as a single Python process.
@@ -127,7 +127,7 @@ backend is a `filesystem` adapter rooted at
 `~/.octop/agents/<agent_id>/`; remote backends (S3, COS) are mounted
 on top of the same root_dir and the Octop service never reads
 content files via `Path.write_text` / `read_text` (see
-[agent-backend-file-io.md](./agent-backend-file-io.md) for the full
+[agent-backend-file-io.md](./agent-backend-file-io.md) (Chinese) for the full
 rules). Checkpointing, langgraph state, and the
 `sessions/*.jsonl` fallbacks stay on the local workspace dir because
 they are harness-managed.
@@ -147,9 +147,9 @@ tool labels from `GET /api/i18n/tools`.
 
 `@Agent` and `ask_agent` flow through the harness `TeamManager`
 (InboxManager + GlobalProcessor) — see
-[agent-interop-mailbox.md](./agent-interop-mailbox.md) for the queue
+[agent-interop-mailbox.md](./agent-interop-mailbox.md) (Chinese) for the queue
 contract and [agent-call-agent.md](./agent-call-agent.md) /
-[agent-delegation.md](./agent-delegation.md) for the two user-side
+[agent-delegation.md](./agent-delegation.md) (Chinese) for the two user-side
 entry points. Octop's `GlobalProcessor` implements the
 `TeamProcessor` protocol so replies land back in the parent thread
 checkpoint and are pushed to the dashboard / IM channel by
@@ -164,7 +164,7 @@ checkpoint and are pushed to the dashboard / IM channel by
 - [CLI reference](cli.md) — every subcommand
 - [Personas](personas.md) — MBTI templates and the mbti_profiles data module
 - [ACP integration](acp.md) — in/out ACP server and runner tool
-- [Agent interop](agent-interop-mailbox.md),
+- [Agent interop](agent-interop-mailbox.md) (Chinese),
   [agent call](agent-call-agent.md),
-  [agent delegation](agent-delegation.md)
-- [Agent backend file I/O](agent-backend-file-io.md) — content file rules
+  [agent delegation](agent-delegation.md) (Chinese)
+- [Agent backend file I/O](agent-backend-file-io.md) (Chinese) — content file rules

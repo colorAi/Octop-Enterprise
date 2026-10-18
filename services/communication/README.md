@@ -1,10 +1,10 @@
-# Octop Enterprise 通信服务
+# Octop Enterprise communication service
 
-基于 PostgreSQL 的独立 Go 通信服务，提供组织、员工身份、私聊、群聊及消息同步。该模块源自项目权利人开发的 Miaox 通信代码，采用 [MIT License](LICENSE)。
+An independent Go communication service backed by PostgreSQL, providing organizations, employee identities, direct messages, groups and message synchronization. It is derived from the Miaox communication code developed by the project rights holder and is licensed under the [MIT License](LICENSE).
 
-员工账号与认证由 Octop 控制面管理，通信服务负责消息、附件及同步。[SOURCE.json](SOURCE.json) 记录首次提取时的源提交与文件摘要，来源与许可说明见 [NOTICE](../../NOTICE.md)。
+The Octop control plane manages employee accounts and authentication; the communication service handles messages, attachments and synchronization. [SOURCE.json](SOURCE.json) records the source commit and file digests from the initial extraction; see [NOTICE](../../NOTICE_EN.md) for provenance and licensing.
 
-企业部署入口见[部署与恢复](../../docker/enterprise/README.md)。以下是服务配置与开发参考。
+For the enterprise deployment entry point, see the [deployment and recovery guide](../../docker/enterprise/README_EN.md). The rest of this document covers service configuration and development.
 
 Required runtime variables:
 
@@ -58,7 +58,7 @@ setting deployment capacity.
 
 Public surface and browser synchronization are documented in
 [api/contract.md](api/contract.md). Deployment, backup and recovery are documented in
-[the enterprise guide](../../docker/enterprise/README.md).
+[the enterprise guide](../../docker/enterprise/README_EN.md).
 
 Targeted real-PostgreSQL checks:
 

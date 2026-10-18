@@ -1,5 +1,7 @@
 # 来源与第三方许可
 
+[English](NOTICE_EN.md)
+
 ## Octop
 
 Octop Enterprise 基于 [TencentCloud/Octop](https://github.com/TencentCloud/Octop) 二次开发，保留上游 `Copyright (c) 2026 Octop` 及 MIT 许可正文。企业桌面本机执行、企业服务适配、内部通信等改造由 Octop Enterprise 贡献者维护；项目不代表腾讯官方企业发行。

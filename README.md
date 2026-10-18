@@ -12,16 +12,16 @@
 <p>
   <a href="https://github.com/colorAi/Octop-Enterprise/releases"><img alt="Version 1.0.0" src="https://img.shields.io/badge/version-1.0.0-F5453A?style=flat-square"></a>
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-17996B?style=flat-square"></a>
-  <a href="docker/enterprise/README.md"><img alt="Self-hosted" src="https://img.shields.io/badge/self--hosted-121417?style=flat-square"></a>
-  <a href="docker/enterprise/README.md"><img alt="Server: Linux + Docker" src="https://img.shields.io/badge/server-Linux%20%2B%20Docker-3B5BDB?style=flat-square"></a>
+  <a href="docker/enterprise/README_EN.md"><img alt="Self-hosted" src="https://img.shields.io/badge/self--hosted-121417?style=flat-square"></a>
+  <a href="docker/enterprise/README_EN.md"><img alt="Server: Linux + Docker" src="https://img.shields.io/badge/server-Linux%20%2B%20Docker-3B5BDB?style=flat-square"></a>
   <a href="desktop/README.md"><img alt="Client: Windows / macOS" src="https://img.shields.io/badge/client-Windows%20%7C%20macOS-6E7781?style=flat-square"></a>
 </p>
 
 <p>
-  <a href="docker/enterprise/README.md">Deployment</a> ·
-  <a href="docs/enterprise-client.md">Employee guide</a> ·
-  <a href="docs/user-guide.md">Quick start</a> ·
-  <a href="CONTRIBUTING.md">Contributing</a> ·
+  <a href="docker/enterprise/README_EN.md">Deployment</a> ·
+  <a href="docs/enterprise-client_EN.md">Employee guide</a> ·
+  <a href="docs/user-guide_EN.md">Quick start</a> ·
+  <a href="CONTRIBUTING_EN.md">Contributing</a> ·
   <a href="README_CN.md">中文</a>
 </p>
 
@@ -43,6 +43,8 @@
 | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Experts and reusable skills**<br>Create or choose experts by role and task, share configurations and reuse skills.<br><br>**Local task execution**<br>Read and write authorized project files, run Python and terminal tasks, process spreadsheets, create documents and write code.<br><br>**Image and media**<br>Generate and edit images through company-configured services; process audio and video with local tools.<br><br>**Memory and knowledge**<br>Experts keep working context; connect company knowledge bases to ground answers in internal material. | **Company directory**<br>Find colleagues by organization and see who is online.<br><br>**Direct messages and groups**<br>Company, department and project groups with text, images and files.<br><br>**Message and result sharing**<br>Forward messages and files between conversations; hand AI output to a colleague or another expert. | **Accounts and permissions**<br>Multiple users, organization structure, roles and feature access.<br><br>**Central model services**<br>Connect internal or external language and image services, configured once and granted by role.<br><br>**Self-hosted deployment**<br>Operate services, accounts, conversations and knowledge yourself, with server workspace isolation plus backup and recovery tools.<br><br>**Server extensions**<br>Scheduled tasks, multi-platform IM channels, connectors (OAuth + MCP), plugins and ACP coding-tool integration. |
 
+Server extensions (scheduled tasks, multi-platform IM channels, connectors, plugins and ACP) depend on deployment, permissions and isolation policy; the local client does not load external connectors or ACP. See the [employee guide](docs/enterprise-client_EN.md).
+
 ## Use cases
 
 - **Office work and research**: organize spreadsheets, summarize material, and produce reports and everyday documents.
@@ -59,7 +61,7 @@
 | **Model services**  | Company-configured internal or external inference, image generation and related capabilities                          |
 
 > [!NOTE]
-> Local execution still connects to company services and their configured models; task context and tool results are sent to these services as needed. Local tools run with the employee&rsquo;s OS permissions, and a project folder is not an OS sandbox. Viewing history across devices does not synchronize project files. See the [employee guide](docs/enterprise-client.md) for data boundaries and limitations.
+> Local execution still connects to company services and their configured models; task context and tool results are sent to these services as needed. Local tools run with the employee&rsquo;s OS permissions, and a project folder is not an OS sandbox. Viewing history across devices does not synchronize project files. See the [employee guide](docs/enterprise-client_EN.md) for data boundaries and limitations.
 
 ## Getting started
 
@@ -67,23 +69,23 @@ Current version: **1.0.0**. This repository provides source code for the server 
 
 | Administrator: deploy and configure                                                                                                                                                                                                                  | Employee: sign in and work                                                                                                                                                                     |
 | :--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1. Prepare a **Linux + Docker Engine + Docker Compose** host.<br>2. Follow the [deployment guide](docker/enterprise/README.md) to initialize services, databases and the communication service.<br>3. Configure models, accounts and roles, and prepare experts for employees.<br>4. Distribute matching clients and validate one employee end to end. | 1. Install the company client and enter the server address from your administrator.<br>2. Sign in with your company account and confirm the local working folder.<br>3. Choose an expert and describe the file or project task.<br>4. Review the result and share it with colleagues, groups or another expert. |
+| 1. Prepare a **Linux + Docker Engine + Docker Compose** host.<br>2. Follow the [deployment guide](docker/enterprise/README_EN.md) to initialize services, databases and the communication service.<br>3. Configure models, accounts and roles, and prepare experts for employees.<br>4. Distribute matching clients and validate one employee end to end. | 1. Install the company client and enter the server address from your administrator.<br>2. Sign in with your company account and confirm the local working folder.<br>3. Choose an expert and describe the file or project task.<br>4. Review the result and share it with colleagues, groups or another expert. |
 
-For client builds see the [desktop instructions](desktop/README.md); for detailed steps see the [employee guide](docs/enterprise-client.md).
+For client builds see the [desktop instructions](desktop/README.md); for detailed steps see the [employee guide](docs/enterprise-client_EN.md).
 
 ## Documentation
 
 | Document                                                                                                              | Contents                                                    |
 | :-------------------------------------------------------------------------------------------------------------------- | :---------------------------------------------------------- |
-| [Deployment and recovery](docker/enterprise/README.md)                                                                | Prerequisites, installation, upgrades, backups and recovery |
-| [Employee quick start](docs/user-guide.md)                                                                            | First login, experts and everyday tasks                     |
-| [Employee guide](docs/enterprise-client.md)                                                                           | Tasks, results, supported scope and data boundaries         |
-| [Contributing](CONTRIBUTING.md) / [Desktop builds](desktop/README.md)                                                 | Development setup, source builds and client packaging       |
+| [Deployment and recovery](docker/enterprise/README_EN.md)                                                                | Prerequisites, installation, upgrades, backups and recovery |
+| [Employee quick start](docs/user-guide_EN.md)                                                                            | First login, experts and everyday tasks                     |
+| [Employee guide](docs/enterprise-client_EN.md)                                                                           | Tasks, results, supported scope and data boundaries         |
+| [Contributing](CONTRIBUTING_EN.md) / [Desktop builds](desktop/README.md)                                                 | Development setup, source builds and client packaging       |
 | [Architecture](docs/architecture.md) / [API](docs/api.md) / [Communication service](services/communication/README.md) | System structure, interfaces and company messaging          |
-| [Update procedures](docs/updates.md)                                                                                  | Configuration changes, server upgrades and client updates   |
+| [Update procedures](docs/updates_EN.md)                                                                                  | Configuration changes, server upgrades and client updates   |
 
 ## License and acknowledgments
 
-The application and our communication service use the [MIT License](LICENSE), retaining Octop&rsquo;s original copyright and license notices. Third-party dependencies, assets and templates retain their own terms. See [NOTICE](NOTICE.md) for the public source distribution scope.
+The application and our communication service use the [MIT License](LICENSE), retaining Octop&rsquo;s original copyright and license notices. Third-party dependencies, assets and templates retain their own terms. See [NOTICE](NOTICE_EN.md) for the public source distribution scope.
 
-Thanks to [Octop](https://github.com/TencentCloud/Octop) and its contributors, Octop Harness, Gateway, Memory and the wider open-source community. File ordinary issues in [this repository](https://github.com/colorAi/Octop-Enterprise/issues); report vulnerabilities privately according to [SECURITY.md](SECURITY.md).
+Thanks to [Octop](https://github.com/TencentCloud/Octop) and its contributors, Octop Harness, Gateway, Memory and the wider open-source community. File ordinary issues in [this repository](https://github.com/colorAi/Octop-Enterprise/issues); report vulnerabilities privately according to [SECURITY.md](SECURITY_EN.md).

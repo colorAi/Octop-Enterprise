@@ -1,10 +1,12 @@
 # 参与 Octop Enterprise
 
+[English](CONTRIBUTING_EN.md)
+
 欢迎提交问题、文档改进和代码。Octop Enterprise 独立维护企业场景改造；问题和 PR 请提交到[本仓库](https://github.com/colorAi/Octop-Enterprise)。向 TencentCloud/Octop 回馈通用修复时，请遵循上游自己的贡献流程。
 
 ## 开发准备
 
-需要 Python 3.12+、uv。日常开发与 Docker 构建使用 Node.js 20（见 `mise.toml`）；桌面便携包本地重建脚本当前使用 Node.js 24。通信服务的 Go 版本见 `services/communication/go.mod`；桌面构建工具见 `desktop/README.md`。
+需要 Python 3.12+、uv。日常开发与 Docker 构建使用 Node.js 20（见 `mise.toml`）；桌面便携包本地重建脚本当前使用 Node.js 24。通信服务的 Go 版本见 `services/communication/go.mod`；桌面构建工具见 `desktop/README.md`（English）。
 
 ```sh
 uv sync --locked

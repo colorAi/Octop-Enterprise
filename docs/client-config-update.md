@@ -1,5 +1,7 @@
 # 员工客户端权限与功能配置更新
 
+[English](client-config-update_EN.md)
+
 本功能适用于服务端网页、Mac 和 Windows 企业员工客户端。首次独立发行版本为 `1.0.0`。
 
 ## 使用

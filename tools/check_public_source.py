@@ -163,6 +163,7 @@ def check(root: Path) -> list[str]:
             "docker/README.md",
             "docker/README_CN.md",
             "docker/enterprise/README.md",
+            "docker/enterprise/README_EN.md",
             "desktop/README.md",
             "desktop/portable/README.md",
             "services/communication/README.md",

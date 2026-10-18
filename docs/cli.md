@@ -1,7 +1,7 @@
 # CLI Reference
 
 This distribution supports source deployment and local builds only; follow the
-[enterprise deployment guide](../docker/enterprise/README.md). The upstream
+[enterprise deployment guide](../docker/enterprise/README_EN.md). The upstream
 `pip install octop` package is not an installation method for Octop Enterprise.
 The source build registers a single Click app named `octop`.
 It is registered in `src/octop/cli/main.py`; commands are loaded
@@ -389,7 +389,7 @@ retention only deletes those files and never touches manual
 
 Online self-update is disabled for Octop Enterprise. Both `octop update` and
 `octop update --check` stop without checking or installing upstream packages.
-Use the [manual upgrade procedure](updates.md) to build this repository’s
+Use the [manual upgrade procedure](updates_EN.md) to build this repository’s
 source and distribute matching clients.
 
 ## `octop plugin`

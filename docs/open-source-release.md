@@ -1,12 +1,14 @@
 # Octop Enterprise 源码发行说明
 
+[English](open-source-release_EN.md)
+
 本文面向维护者，说明 [Octop Enterprise](https://github.com/colorAi/Octop-Enterprise) 的源码导出、校验和发行要求。当前源码版本为 `1.0.0`，主项目及自有通信模块采用 MIT。
 
 本仓库提供源码，服务端镜像与 Windows/macOS 企业客户端按对应构建文档生成。发行材料通过[本仓库 Releases](https://github.com/colorAi/Octop-Enterprise/releases)分发；二进制安装包需单独完成目标平台验证，并记录签名与公证状态。
 
 ## 源码范围
 
-- 保留中文首页、英文介绍、员工指南、贡献说明、安全政策及部署和构建说明。
+- 保留英文首页、中文说明、中英文员工指南、贡献说明、安全政策及部署和构建说明。
 - 根目录及通信服务保留原始 MIT 许可和贡献者声明。第三方来源与分发范围见 [NOTICE](../NOTICE.md)。
 - 本发行版禁用在线更新 CLI/API、上游一键安装脚本及 `make publish` / `publish-test`；安装和升级使用本仓库源码。
 - 公开副本排除 Git 历史、本地工具配置、运行环境文件、浏览器会话、部署记录和构建产物。
@@ -34,7 +36,7 @@ python3 tools/check_public_source.py --root /absolute/new-directory/Octop-Enterp
 
 服务端支持目标是 Linux + Docker Engine + Compose，命令见[企业部署与恢复](../docker/enterprise/README.md)。构建网络需要能获取基础镜像与依赖；当前不提供完整离线服务器安装包。
 
-客户端构建见[桌面说明](../desktop/README.md)。企业员工安装包面向 Windows amd64/arm64 与 macOS 13+ universal；具体支持状态以发行验证记录为准。`desktop/package-company.py` 读取 Git HEAD 和工作树状态，要求已有可解析 `HEAD` 的本地仓库。源码包不含 `.git`，需先建立源码提交，或使用对应发行的 Git 检出。服务端 Docker 构建没有这一 Git 前提。
+客户端构建见[桌面说明](../desktop/README.md)（English）。企业员工安装包面向 Windows amd64/arm64 与 macOS 13+ universal；具体支持状态以发行验证记录为准。`desktop/package-company.py` 读取 Git HEAD 和工作树状态，要求已有可解析 `HEAD` 的本地仓库。源码包不含 `.git`，需先建立源码提交，或使用对应发行的 Git 检出。服务端 Docker 构建没有这一 Git 前提。
 
 登录 bundle、`company-dashboard.zip` 和生成清单不随源码包分发。桌面完整打包器会从源码构建这些资源；单独构建桌面壳时，先按桌面文档生成资源。
 
