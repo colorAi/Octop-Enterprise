@@ -86,7 +86,7 @@ For client builds see the [desktop instructions](desktop/README.md); for detaile
 
 ## Community
 
-**Octop Enterprise community group** (Chinese-language). Scan the QR code to join; the invite is refreshed periodically.
+**Octop Enterprise community group** (Chinese-language). Scan the QR code to join.
 
 <div align="center">
 
@@ -96,10 +96,6 @@ For client builds see the [desktop instructions](desktop/README.md); for detaile
 </picture>
 
 </div>
-
-<sub>QR code updated 2026-10-18. Group invites expire after about 7 days; the code on this page is replaced when it is refreshed. If your scanner cannot read the dark version, switch GitHub to light mode.</sub>
-
-<!-- Community QR: refresh both images every ~7 days; see docs/assets/community/README.md. -->
 
 ## License and acknowledgments
 
