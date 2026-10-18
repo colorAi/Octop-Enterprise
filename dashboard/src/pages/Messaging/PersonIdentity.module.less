@@ -1,7 +1,26 @@
 .avatar {
+  position: relative;
   display: inline-flex;
   flex-shrink: 0;
   vertical-align: middle;
+}
+.presence {
+  position: absolute;
+  // Place the dot beyond the circle's lower-right edge at every avatar size.
+  right: 14.65%;
+  bottom: 14.65%;
+  transform: translate(100%, 100%);
+  width: 6px;
+  height: 6px;
+  border: 1px solid var(--fn-bg-container, #fff);
+  border-radius: 50%;
+  box-sizing: content-box;
+}
+.online {
+  background: #52c41a;
+}
+.offline {
+  background: #bfbfbf;
 }
 .portrait {
   display: inline-flex;

@@ -4,6 +4,7 @@ import {
   CommunicationError,
 } from "../../../api/modules/communication";
 import { CommunicationClient } from "./communicationClient";
+import { connectCommunicationRealtime } from "../../../api/communicationRealtime";
 import type {
   CommunicationMessage,
   SendReceipt,
@@ -78,6 +79,9 @@ beforeEach(() => {
     items: [{ user_id: peer, nickname: "B", can_message: true }],
   });
   vi.spyOn(communicationApi, "departments").mockResolvedValue({ items: [] });
+  vi.spyOn(communicationApi, "presence").mockResolvedValue({
+    online_user_ids: [peer],
+  });
   vi.spyOn(communicationApi, "directorySettings").mockResolvedValue({
     name: "示例公司",
   });
@@ -103,6 +107,44 @@ const boot = async () => {
   await client.synchronize();
 };
 describe("communication synchronization", () => {
+  it("refreshes presence without requiring durable sync events", async () => {
+    await boot();
+    expect(client.state.presence).toEqual({ [peer]: true });
+    vi.mocked(communicationApi.presence).mockResolvedValue({
+      online_user_ids: [],
+    });
+    await client.synchronize();
+    expect(client.state.presence).toEqual({});
+    vi.mocked(communicationApi.presence).mockRejectedValue(
+      new Error("network"),
+    );
+    await client.synchronize();
+    expect(client.state.presence).toBeNull();
+    expect(client.state.phase).toBe("ready");
+    expect(client.state.contacts[peer]).toBeDefined();
+  });
+  it("clears stale presence on disconnect and refreshes on reconnect", async () => {
+    await boot();
+    const onStatus = vi
+      .mocked(connectCommunicationRealtime)
+      .mock.calls.at(-1)![2];
+    onStatus("retrying");
+    expect(client.state.presence).toBeNull();
+    onStatus("online");
+    await client.synchronize();
+    expect(client.state.presence).toEqual({ [peer]: true });
+    client.stop();
+    expect(client.state.presence).toBeNull();
+  });
+  it("connects contacts-only users without loading messaging data", async () => {
+    client = new CommunicationClient("1:session", true, false);
+    vi.mocked(connectCommunicationRealtime).mockClear();
+    await boot();
+    expect(connectCommunicationRealtime).toHaveBeenCalled();
+    expect(communicationApi.snapshot).not.toHaveBeenCalled();
+    expect(communicationApi.sync).not.toHaveBeenCalled();
+    expect(client.state.presence).toEqual({ [peer]: true });
+  });
   it("opens an existing direct chat without waiting for any metadata requests", async () => {
     await boot();
     const direct = vi.spyOn(communicationApi, "direct");

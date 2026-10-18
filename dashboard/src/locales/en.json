@@ -6844,6 +6844,11 @@
     "noDirectoryResults": "No matching people or departments",
     "emptyDepartment": "This department has no members yet",
     "employeeActive": "Active employee",
+    "presence": {
+      "online": "Online",
+      "offline": "Offline",
+      "unknown": "Status unknown"
+    },
     "company": "Company",
     "departmentLabel": "Department",
     "people": "people",

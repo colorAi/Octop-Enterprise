@@ -1,5 +1,5 @@
 // Package realtime implements the WebSocket notification hub. It only carries
-// "sync.available" hints — never message content — per the sync protocol.
+// sync and presence hints — never message content — per the sync protocol.
 package realtime
 
 import (
@@ -58,6 +58,31 @@ func (h *Hub) Count() int {
 	return len(h.conns)
 }
 
+// OnlineUsers returns users with at least one live client connection.
+func (h *Hub) OnlineUsers() []string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	users := make([]string, 0, len(h.byUser))
+	for user := range h.byUser {
+		users = append(users, user)
+	}
+	return users
+}
+
+// presenceChangedLocked sends an identity-free hint to other connected clients.
+func (h *Hub) presenceChangedLocked(except *conn) {
+	for cn := range h.conns {
+		if cn == except {
+			continue
+		}
+		select {
+		case cn.send <- []byte(`{"type":"presence.changed"}`):
+		default:
+			h.dropped++
+		}
+	}
+}
+
 // Wakeup nudges users that new sync data exists; coalesced, best-effort.
 func (h *Hub) Wakeup(userIDs ...string) {
 	now := time.Now().UTC().Format(time.RFC3339)
@@ -103,6 +128,12 @@ func (h *Hub) register(user string, c *websocket.Conn) {
 		h.byUser[user] = map[*conn]struct{}{}
 	}
 	h.byUser[user][cn] = struct{}{}
+	if len(h.byUser[user]) == 1 {
+		h.presenceChangedLocked(cn)
+	}
+	// The public proxy accepts before its upstream connection is registered.
+	// Confirm registration so the new client refreshes its own presence too.
+	cn.send <- []byte(`{"type":"presence.changed"}`)
 	h.mu.Unlock()
 
 	go h.writeLoop(cn)
@@ -123,7 +154,10 @@ func (h *Hub) writeLoop(cn *conn) {
 				return
 			}
 		case <-ticker.C:
-			if err := cn.c.Ping(ctx); err != nil {
+			pingCtx, pingCancel := context.WithTimeout(ctx, 10*time.Second)
+			err := cn.c.Ping(pingCtx)
+			pingCancel()
+			if err != nil {
 				cn.shutdown(websocket.StatusNormalClosure, "")
 				return
 			}
@@ -165,6 +199,7 @@ func (h *Hub) unregister(cn *conn) {
 		delete(m, cn)
 		if len(m) == 0 {
 			delete(h.byUser, cn.user)
+			h.presenceChangedLocked(nil)
 		}
 	}
 	h.mu.Unlock()

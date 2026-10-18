@@ -40,6 +40,7 @@ export interface MessagingState {
   error: CommunicationError | null;
   profile: CommunicationUser | null;
   contacts: Record<string, CommunicationUser>;
+  presence: Record<string, true> | null;
   assets: Record<string, CommunicationAttachment>;
   departments: Department[];
   directoryName: string;
@@ -58,6 +59,7 @@ export const emptyMessagingState = (): MessagingState => ({
   error: null,
   profile: null,
   contacts: {},
+  presence: null,
   assets: {},
   departments: [],
   directoryName: "",
@@ -165,6 +167,7 @@ export class CommunicationClient {
         phase: this.state.phase === "ready" ? "ready" : "error",
         error: value,
         realtime: "retrying",
+        presence: null,
       });
   }
   synchronize = ({ throwOnError = false } = {}): Promise<void> => {
@@ -183,6 +186,7 @@ export class CommunicationClient {
             if (!this.cursor || this.state.phase !== "ready")
               await this.bootstrap();
             else await this.pull();
+            await this.refreshPresence();
           }
         } catch (error) {
           this.failure(error);
@@ -242,14 +246,32 @@ export class CommunicationClient {
     if (!this.valid()) return;
     this.update({ phase: "ready", error: null });
     if (this.focused) await this.loadHistory(this.focused);
-    if (this.hasMessaging && !this.socketStop)
+    if ((this.hasMessaging || this.hasContacts) && !this.socketStop)
       this.socketStop = connectCommunicationRealtime(
         this.controller.signal,
         () => void this.synchronize(),
-        (status) => this.update({ realtime: status }),
+        (status) =>
+          this.update({
+            realtime: status,
+            ...(status === "online" ? {} : { presence: null }),
+          }),
         (error) => this.failure(error),
       );
     if (this.hasMessaging) await this.pull();
+  }
+  private async refreshPresence() {
+    if (!this.hasContacts) return;
+    try {
+      const value = await communicationApi.presence(this.controller.signal);
+      this.update({
+        presence: Object.fromEntries(
+          value.online_user_ids.map((id) => [id, true as const]),
+        ),
+      });
+    } catch (error) {
+      this.update({ presence: null });
+      if ([401, 403].includes(communicationError(error).status)) throw error;
+    }
   }
   private async refreshMetadata() {
     const signal = this.controller.signal;

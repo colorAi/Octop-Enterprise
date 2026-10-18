@@ -56,6 +56,8 @@ describe("communication realtime", () => {
     expect(Socket.instances[1].url).toContain("ticket=second");
     Socket.instances[1].onopen?.();
     expect(wake).toHaveBeenCalledTimes(3);
+    Socket.instances[1].onmessage?.({ data: '{"type":"presence.changed"}' });
+    expect(wake).toHaveBeenCalledTimes(4);
     stop();
     await vi.advanceTimersByTimeAsync(60000);
     expect(ticket).toHaveBeenCalledTimes(2);

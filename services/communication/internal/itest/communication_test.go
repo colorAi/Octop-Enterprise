@@ -252,6 +252,9 @@ func TestRealtimeDurableWakeupAndDisable(t *testing.T) {
 	}
 	t.Cleanup(h.App.Stop)
 	_, data, e := ws.Read(ctx)
+	for e == nil && bytes.Contains(data, []byte("presence.changed")) {
+		_, data, e = ws.Read(ctx)
+	}
 	if e != nil || !bytes.Contains(data, []byte("sync.available")) {
 		t.Fatal("wakeup missing", e, string(data))
 	}

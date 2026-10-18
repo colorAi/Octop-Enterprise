@@ -34,6 +34,7 @@ def bridge(tmp_path: Path):
 
 def test_whitelist_and_credential_signature():
     assert match_route("GET", "/contacts").permission == "contacts"
+    assert match_route("GET", "/presence").permission == "contacts"
     assert match_route("POST", "/groups").permission == "groups_create"
     assert match_route("POST", "/organization/company-group").permission == "departments"
     for method, path in [
@@ -45,6 +46,28 @@ def test_whitelist_and_credential_signature():
     ]:
         assert match_route(method, path) is None
     assert sign_credential(b"x" * 32, {"sub": "a"}) != sign_credential(b"y" * 32, {"sub": "a"})
+
+
+@pytest.mark.asyncio
+async def test_contacts_only_realtime_retains_messaging_permission_boundary(bridge):
+    uid = bridge.services.user_repo.create(
+        username="directory", role="user", permissions=["contacts"]
+    )
+    bridge._http = httpx.AsyncClient(
+        transport=httpx.MockTransport(
+            lambda req: httpx.Response(200, json={"data": {"version": "1"}})
+        )
+    )
+    ticket = await bridge.issue_ticket(
+        uid, "contacts-session", int(__import__("time").time()) + 100
+    )
+    assert (await bridge.consume_ticket(ticket["ticket"]))["user_id"] == uid
+    with pytest.raises(OctopError):
+        await bridge.authorize(uid, "contacts-session", "messaging")
+    bridge.services.user_repo.set_permissions(uid, [])
+    with pytest.raises(OctopError):
+        await bridge.issue_ticket(uid, "contacts-session", int(__import__("time").time()) + 100)
+    await bridge.stop()
 
 
 @pytest.mark.asyncio

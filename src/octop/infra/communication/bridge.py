@@ -183,7 +183,9 @@ class CommunicationBridge:
                 logger.warning("communication control-plane unavailable; reconciliation will retry")
             await asyncio.sleep(1)
 
-    async def authorize(self, user_id: int, session: str, permission: str) -> dict[str, Any]:
+    async def authorize(
+        self, user_id: int, session: str, permission: str | tuple[str, ...]
+    ) -> dict[str, Any]:
         if not self.enabled or self._http is None:
             raise OctopError(ErrorCode.INTERNAL_ERROR, "communication is disabled", status=503)
         state = await asyncio.to_thread(self.repo.current, user_id)
@@ -192,14 +194,17 @@ class CommunicationBridge:
         if await asyncio.to_thread(self.repo.session_revoked, session):
             raise OctopError(ErrorCode.AUTH_FAILED, "communication session revoked")
         user = User(user_id, "", state["role"], state["nickname"], permissions=state["permissions"])
-        if not user_has_permission(user, permission):
+        permissions = (permission,) if isinstance(permission, str) else permission
+        if not any(user_has_permission(user, item) for item in permissions):
             raise OctopError(
                 ErrorCode.FORBIDDEN, "permission required", details={"permission": permission}
             )
         state["effective_permissions"] = effective_permissions(user)
         return state
 
-    async def ready(self, user_id: int, session: str, permission: str) -> dict[str, Any]:
+    async def ready(
+        self, user_id: int, session: str, permission: str | tuple[str, ...]
+    ) -> dict[str, Any]:
         await self.authorize(user_id, session, permission)
         # Deliver every preceding revision in order; no stale credential can bypass a pending disable.
         async with self._delivery_lock:
@@ -256,7 +261,7 @@ class CommunicationBridge:
     async def issue_ticket(
         self, user_id: int, session: str, session_expires: int
     ) -> dict[str, Any]:
-        await self.ready(user_id, session, "messaging")
+        await self.ready(user_id, session, ("contacts", "messaging"))
         raw = secrets.token_urlsafe(32)
         expires = min(int(time.time()) + 30, session_expires)
         await asyncio.to_thread(
@@ -277,14 +282,14 @@ class CommunicationBridge:
         )
         if value is None or int(value["session_expires_at"]) <= int(time.time()):
             raise OctopError(ErrorCode.AUTH_FAILED, "invalid realtime ticket")
-        await self.authorize(int(value["user_id"]), value["session_id"], "messaging")
+        await self.authorize(int(value["user_id"]), value["session_id"], ("contacts", "messaging"))
         return value
 
     async def realtime(self, ticket: dict[str, Any], browser: Any) -> None:
         from websockets.asyncio.client import connect
 
         user_id, session = int(ticket["user_id"]), ticket["session_id"]
-        state = await self.ready(user_id, session, "messaging")
+        state = await self.ready(user_id, session, ("contacts", "messaging"))
         token = self.credential(
             user_id, int(state["version"]), session, state["effective_permissions"]
         )
@@ -317,7 +322,7 @@ class CommunicationBridge:
                     await asyncio.sleep(1)
                     if int(ticket["session_expires_at"]) <= int(time.time()):
                         return
-                    await self.authorize(user_id, session, "messaging")
+                    await self.authorize(user_id, session, ("contacts", "messaging"))
 
             tasks = [asyncio.create_task(fn()) for fn in (to_browser, to_upstream, guard)]
             try:

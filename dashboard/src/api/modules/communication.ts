@@ -99,6 +99,8 @@ export const communicationApi = {
     call<{ name: string }>("/directory-settings", "GET", undefined, signal),
   contacts: (signal?: AbortSignal) =>
     call<{ items: CommunicationUser[] }>("/contacts", "GET", undefined, signal),
+  presence: (signal?: AbortSignal) =>
+    call<{ online_user_ids: string[] }>("/presence", "GET", undefined, signal),
   departments: (signal?: AbortSignal) =>
     call<{ items: Department[] }>("/departments", "GET", undefined, signal),
   conversations: (cursor?: string, signal?: AbortSignal) =>

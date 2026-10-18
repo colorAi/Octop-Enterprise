@@ -102,6 +102,8 @@ export default function ContactsPage() {
     : undefined;
   const hasDetail = !!(personId || conversationId || departmentId);
   const unread = communicationUnreadCount(state);
+  const isOnline = (id: string) =>
+    state.presence == null ? undefined : !!state.presence[id];
   const treeData = (items: DirectoryNode[]): DataNode[] =>
     items.map((node) => ({
       key: node.key,
@@ -109,7 +111,11 @@ export default function ContactsPage() {
       title: (
         <div className={styles.treeTitle}>
           {node.person ? (
-            <PersonAvatar person={node.person} size={24} />
+            <PersonAvatar
+              person={node.person}
+              size={24}
+              online={isOnline(node.person.user_id)}
+            />
           ) : !node.department ? (
             <Users size={16} aria-hidden />
           ) : node.department.parent_id ? (
@@ -178,7 +184,7 @@ export default function ContactsPage() {
             className={styles.personRow}
             onClick={() => openPerson(p.user_id)}
           >
-            <PersonAvatar person={p} />
+            <PersonAvatar person={p} online={isOnline(p.user_id)} />
             <span className={styles.personInfo}>
               <strong>
                 {p.nickname}{" "}
@@ -369,7 +375,11 @@ export default function ContactsPage() {
               ) : person ? (
                 <div className={styles.profile}>
                   <div className={styles.profileHero}>
-                    <PersonAvatar person={person} size={76} />
+                    <PersonAvatar
+                      person={person}
+                      size={76}
+                      online={isOnline(person.user_id)}
+                    />
                     <h2>{person.nickname}</h2>
                     {person.job_title && (
                       <span
@@ -380,7 +390,17 @@ export default function ContactsPage() {
                       </span>
                     )}
                     <p>{breadcrumb(person.department_id)}</p>
-                    <Tag color="green">{t("communication.employeeActive")}</Tag>
+                    <Tag color={isOnline(person.user_id) ? "green" : "default"}>
+                      {t(
+                        `communication.presence.${
+                          isOnline(person.user_id) === undefined
+                            ? "unknown"
+                            : isOnline(person.user_id)
+                            ? "online"
+                            : "offline"
+                        }`,
+                      )}
+                    </Tag>
                   </div>
                   <dl>
                     <div>

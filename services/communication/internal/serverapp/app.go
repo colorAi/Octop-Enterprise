@@ -45,7 +45,7 @@ func New(d *deps.Deps) *App {
 	syncsrv.New(d).Register(a.Mux)
 	mediasvc.New(d).Register(a.Mux)
 	organization.New(d).Register(a.Mux)
-	a.Mux.HandleFunc("GET /api/app/v1/realtime", auth.Middleware(d, func(w http.ResponseWriter, r *http.Request) { u, _ := auth.From(r); a.Hub.Attach(w, r, u.UserID) }))
+	a.Mux.HandleFunc("GET /api/app/v1/realtime", auth.RequireAny(d, []string{"contacts", "messaging"}, func(w http.ResponseWriter, r *http.Request) { u, _ := auth.From(r); a.Hub.Attach(w, r, u.UserID) }))
 	a.Mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		if !d.Store.Healthy(r.Context()) {
 			w.WriteHeader(503)

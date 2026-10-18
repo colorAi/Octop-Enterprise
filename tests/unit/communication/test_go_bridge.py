@@ -176,6 +176,10 @@ async def test_real_python_go_identity_messages_and_realtime(tmp_path: Path, mon
         browser.receive_text = receive_text
         socket_task = asyncio.create_task(bridge.realtime(value, browser))
         try:
+            event = await asyncio.wait_for(events.get(), 3)
+            assert json.loads(event)["type"] == "presence.changed"
+            presence = await request(alice, "GET", "/presence")
+            assert presence["online_user_ids"] == [bridge.mapped_id(bob)]
             for attempt in range(10):
                 await request(
                     alice,

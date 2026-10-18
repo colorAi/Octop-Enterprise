@@ -29,6 +29,7 @@ func (s *Service) Register(m *http.ServeMux) {
 	m.HandleFunc("GET /api/app/v1/organization/users", auth.Require(s.D, "departments", s.users))
 	m.HandleFunc("PUT /internal/identities/{id}", auth.Credential(s.D, "identity", s.identity))
 	m.HandleFunc("GET /api/app/v1/contacts", auth.Require(s.D, "contacts", s.contacts))
+	m.HandleFunc("GET /api/app/v1/presence", auth.Require(s.D, "contacts", s.presence))
 	m.HandleFunc("GET /api/app/v1/departments", auth.Require(s.D, "contacts", s.departments))
 	m.HandleFunc("GET /api/app/v1/organization/departments", auth.Require(s.D, "departments", s.departments))
 	m.HandleFunc("POST /api/app/v1/organization/departments", auth.Require(s.D, "departments", s.create))

@@ -13,6 +13,7 @@ bytes with `Cache-Control: no-store`. `/api/im/realtime-ticket` returns its own
 | Method/path after `/api/im` | Permission | Request or query |
 |---|---|---|
 | `GET /contacts` | contacts | optional `q`; active company colleagues, including unassigned people; public name/avatar/job title/department/message capability only |
+| `GET /presence` | contacts | `{online_user_ids:[...]}`; active non-admin colleagues with at least one live client connection |
 | `GET /departments` | contacts | enabled company departments, including empty departments; `parent_id` and direct `member_count` |
 | `GET /directory-settings` | contacts | shared directory `name`; empty uses the localized Contacts label |
 | `GET/PUT /organization/directory-settings` | departments | read or set `{name}`; at most 80 characters, audited and synchronized |
@@ -50,8 +51,8 @@ bytes with `Cache-Control: no-store`. `/api/im/realtime-ticket` returns its own
 | `POST /media/uploads/{id}/complete` | messaging | no body; enqueues attachment processing |
 | `DELETE /media/uploads/{id}` | messaging | abort upload |
 | `GET /media/{id}` | messaging | `kind=original` or `thumbnail`; membership, interval, recall and clear checks apply |
-| `POST /realtime-ticket` | messaging | Bearer JWT; one-use ticket, at most 30 seconds |
-| `WS /realtime?ticket=...` | messaging | exact same-origin browser connection; no JWT in URL |
+| `POST /realtime-ticket` | contacts or messaging | Bearer JWT; one-use ticket, at most 30 seconds |
+| `WS /realtime?ticket=...` | contacts or messaging | exact same-origin browser connection; no JWT in URL |
 | `GET /organization/users` | departments | mirrored people for assignment; no login or secret fields |
 | `GET /organization/groups/{id}` | departments | administration settings and roles; no history/media |
 | `GET/POST /organization/departments` | departments | create: `{name,parent_id?,sort_order?,enabled?}` |
@@ -88,7 +89,14 @@ on `sync.available`, reconnect and page visibility changes. Handle
 `sync_cursor_expired` with a fresh snapshot. Account events and conversation
 history have distinct pagination. `sync_wakeup` is persisted in the transaction
 with events; reconnect clients must still pull incrementals. Realtime carries
-`sync.available`, `ping`, `pong`, `resync` only. Logout revokes the stable JWT
+`sync.available`, `presence.changed`, `ping`, `pong`, `resync` only.
+`presence.changed` carries no identities; contacts-enabled clients refresh
+`GET /presence` on this hint, reconnect, visibility changes and every 30 seconds.
+Presence is transient connection state, not a durable account event or an activity
+status. A user stays online until their final client disconnects; unresponsive
+connections are checked by a 45-second heartbeat with a 10-second response timeout.
+If a client cannot refresh presence it shows an unknown state.
+Logout revokes the stable JWT
 session id for authenticated HTTP requests and new WebSocket connections, including
 communication; renewals retain that id and revoked sessions cannot renew. Existing JWTs without a
 session id use their fingerprint. Active proxy sockets recheck the source account

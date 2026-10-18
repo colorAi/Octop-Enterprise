@@ -111,6 +111,7 @@ ROUTES = (
     Route("DELETE", "/media/uploads/{id}", "messaging", "Abort image upload"),
     Route("GET", "/media/{id}", "messaging", "Download a visible image variant"),
     Route("GET", "/contacts", "contacts", "Search active company colleagues"),
+    Route("GET", "/presence", "contacts", "List online company colleagues"),
     Route("GET", "/departments", "contacts", "Read enabled company departments and counts"),
     Route("GET", "/organization/departments", "departments", "List organization departments"),
     Route("GET", "/organization/job-titles", "departments", "List reusable company job titles"),

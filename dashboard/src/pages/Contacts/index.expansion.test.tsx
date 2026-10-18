@@ -13,7 +13,11 @@ import {
   useConversationNavigation,
 } from "../../layouts/ConversationNavigation";
 
-const account = vi.hoisted(() => ({ id: 1, phase: "ready" }));
+const account = vi.hoisted(() => ({
+  id: 1,
+  phase: "ready",
+  presence: { alice: true } as Record<string, true> | null,
+}));
 vi.mock("../../hooks/useCurrentUser", () => ({
   useCurrentUser: () => ({
     id: account.id,
@@ -36,6 +40,7 @@ vi.mock("../Messaging/hooks/CommunicationContext", () => ({
       error: null,
       phase: account.phase,
       realtime: "offline",
+      presence: account.presence,
       directoryName: "Test Company",
       profile: { user_id: "self" },
       conversations: {},
@@ -110,6 +115,7 @@ async function employeeHidden() {
 beforeEach(() => {
   account.id = 1;
   account.phase = "ready";
+  account.presence = { alice: true };
   localStorage.clear();
 });
 
@@ -127,6 +133,39 @@ it("shows the account portrait and company position on the contact profile", () 
     "/api/users/2/avatar?v=123",
   );
   expect(within(profile).getByText("产品经理")).toBeInTheDocument();
+  expect(
+    within(profile).getByText("communication.presence.online"),
+  ).toBeInTheDocument();
+});
+
+it("updates directory dots and profile labels for offline and unknown states", () => {
+  const page = () => (
+    <MemoryRouter initialEntries={["/contacts/alice"]}>
+      <Routes>
+        <Route path="/contacts/:personId" element={<ContactsPage />} />
+      </Routes>
+    </MemoryRouter>
+  );
+  const view = render(page());
+  expect(
+    tree().getByTitle("communication.presence.online"),
+  ).toBeInTheDocument();
+  account.presence = {};
+  view.rerender(page());
+  expect(
+    tree().getByTitle("communication.presence.offline"),
+  ).toBeInTheDocument();
+  expect(
+    screen.getByText("communication.presence.offline"),
+  ).toBeInTheDocument();
+  account.presence = null;
+  view.rerender(page());
+  expect(
+    tree().queryByTitle("communication.presence.offline"),
+  ).not.toBeInTheDocument();
+  expect(
+    screen.getByText("communication.presence.unknown"),
+  ).toBeInTheDocument();
 });
 
 it("keeps a collapsed department through Agent switching, recent view, and page remount", async () => {

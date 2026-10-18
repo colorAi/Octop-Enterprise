@@ -6844,6 +6844,11 @@
     "noDirectoryResults": "没有找到匹配的人员或部门",
     "emptyDepartment": "这个部门暂时没有成员",
     "employeeActive": "在职",
+    "presence": {
+      "online": "在线",
+      "offline": "离线",
+      "unknown": "状态未知"
+    },
     "company": "公司",
     "departmentLabel": "所属部门",
     "people": "人",

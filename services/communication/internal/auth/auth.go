@@ -84,6 +84,11 @@ func Credential(d *deps.Deps, purpose string, next func(http.ResponseWriter, *ht
 	}
 }
 func Require(d *deps.Deps, permission string, next http.HandlerFunc) http.HandlerFunc {
+	return RequireAny(d, []string{permission}, next)
+}
+
+// RequireAny permits a shared notification connection for contacts or messaging.
+func RequireAny(d *deps.Deps, permissions []string, next http.HandlerFunc) http.HandlerFunc {
 	return Credential(d, "request", func(w http.ResponseWriter, r *http.Request, c Claims) {
 		var status string
 		var version int64
@@ -96,7 +101,11 @@ func Require(d *deps.Deps, permission string, next http.HandlerFunc) http.Handle
 			httpx.WriteError(w, r, httpx.ErrAccountDisabled)
 			return
 		}
-		if version != c.Version || !Has(c.Permissions, permission) || !Has(perms, permission) {
+		allowed := false
+		for _, permission := range permissions {
+			allowed = allowed || (Has(c.Permissions, permission) && Has(perms, permission))
+		}
+		if version != c.Version || !allowed {
 			httpx.WriteError(w, r, httpx.ErrForbidden)
 			return
 		}

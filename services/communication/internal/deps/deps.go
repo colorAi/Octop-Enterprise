@@ -18,4 +18,5 @@ type Deps struct {
 type RealtimeNotifier interface {
 	Wakeup(...string)
 	Kick(...string)
+	OnlineUsers() []string
 }

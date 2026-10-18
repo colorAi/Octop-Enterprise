@@ -59,7 +59,11 @@ export function connectCommunicationRealtime(
       ws.onmessage = (event) => {
         if (signal.aborted || stopped) return;
         try {
-          if (JSON.parse(String(event.data)).type === "sync.available")
+          if (
+            ["sync.available", "presence.changed"].includes(
+              JSON.parse(String(event.data)).type,
+            )
+          )
             onWake();
         } catch {
           /* invalid notification contains no state */
