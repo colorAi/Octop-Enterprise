@@ -1,78 +1,89 @@
-# Octop Enterprise
+<div align="center">
 
-**开源、自托管的企业 AI 工作与协作平台。**
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/readme-hero-en-dark.png">
+  <img src="docs/assets/readme-hero-en.png" alt="Octop Enterprise: AI runs on employee devices, control stays with IT" width="880">
+</picture>
 
-为每位员工配备可按任务切换的 AI 专家，让 AI 直接参与文档、表格、代码和媒体处理，并通过企业通讯录、私聊和群组连接团队。企业统一管理账号、模型和权限，员工在自己的电脑上完成工作、分享成果。
+<h1>Octop Enterprise</h1>
 
-> 基于腾讯云开源项目 [TencentCloud/Octop](https://github.com/TencentCloud/Octop) 二次开发，由 [Octop Enterprise 项目维护者](https://github.com/colorAi/Octop-Enterprise) 独立维护，非腾讯官方版本。
+<p><strong>AI runs on employee devices. Accounts, models and permissions stay with IT.</strong></p>
 
-[English](README_EN.md) · [企业部署](docker/enterprise/README.md) · [客户端使用](docs/enterprise-client.md) · [参与开发](CONTRIBUTING.md)
+<p>
+  <a href="https://github.com/colorAi/Octop-Enterprise/releases"><img alt="Version 1.0.0" src="https://img.shields.io/badge/version-1.0.0-F5453A?style=flat-square"></a>
+  <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-17996B?style=flat-square"></a>
+  <a href="docker/enterprise/README.md"><img alt="Self-hosted" src="https://img.shields.io/badge/self--hosted-121417?style=flat-square"></a>
+  <a href="docker/enterprise/README.md"><img alt="Server: Linux + Docker" src="https://img.shields.io/badge/server-Linux%20%2B%20Docker-3B5BDB?style=flat-square"></a>
+  <a href="desktop/README.md"><img alt="Client: Windows / macOS" src="https://img.shields.io/badge/client-Windows%20%7C%20macOS-6E7781?style=flat-square"></a>
+</p>
 
-## 功能亮点
+<p>
+  <a href="docker/enterprise/README.md">Deployment</a> ·
+  <a href="docs/enterprise-client.md">Employee guide</a> ·
+  <a href="docs/user-guide.md">Quick start</a> ·
+  <a href="CONTRIBUTING.md">Contributing</a> ·
+  <a href="README_CN.md">中文</a>
+</p>
 
-| 能力                 | 说明                                                                                                |
-| -------------------- | --------------------------------------------------------------------------------------------------- |
-| **企业账号与权限**   | 多用户、组织架构、角色与功能授权，统一管理员工的 AI 使用范围                                        |
-| **统一模型服务**     | 接入企业内网或外部大模型及图像服务，集中配置、按需授权，员工无需各自管理供应商密钥                  |
-| **多专家与技能**     | 按岗位和任务创建或选择专业 Agent，共享专家配置、复用技能，积累团队的工作方法                        |
-| **本机任务执行**     | AI 直接读写员工授权目录中的项目文件，执行 Python 和终端任务，处理表格、生成文档、编写代码与运行脚本 |
-| **图像与媒体处理**   | 通过企业配置的服务生成和编辑图像，结合本机工具处理音视频等素材                                      |
-| **企业即时通信**     | 内置通讯录、同事私聊、公司总群、部门群和项目群，支持文字、图片和文件沟通                            |
-| **消息与成果共享**   | 在专家对话、同事私聊和群聊之间转发消息与文件，将 AI 产出分享给团队，或交给其他专家继续处理          |
-| **长期记忆与知识库** | 专家持续积累工作上下文；按需配置企业文档知识库，让回答和任务结合内部资料                            |
-| **私有化部署**       | 企业自行部署和管理服务、账号、会话与知识资料，提供服务端工作区隔离及备份恢复工具                    |
+<sub>Based on <a href="https://github.com/TencentCloud/Octop">TencentCloud/Octop</a> · Independently maintained by <a href="https://github.com/colorAi/Octop-Enterprise">the Octop Enterprise maintainers</a> · Not an official Tencent edition</sub>
 
-服务端支持 **定时任务、多平台 IM 通道、连接器（OAuth + MCP）、插件和 ACP 编程工具集成**。实际可用范围取决于执行模式和隔离策略，见[企业客户端指南](docs/enterprise-client.md)。
+</div>
 
-## 适用场景
+<p>An open-source, self-hosted AI work and collaboration platform. Every employee can switch AI experts per task and have them work directly on local documents, spreadsheets, code, images, audio and video; results travel to colleagues through the company directory, direct messages and groups. Project files stay on the employee&rsquo;s computer, while accounts, models and permissions remain under company control.</p>
 
-- **办公与资料整理**：整理表格、汇总资料、生成报告和日常工作文档。
-- **研发与项目处理**：围绕本机代码和文件开展开发、运行项目脚本、分析日志与排查问题。
-- **内容与素材制作**：生成或修改图像，处理音视频素材，将产出保存在项目目录。
-- **团队知识与协作**：复用专业 Agent 和技能，检索企业资料，在同事与群组之间交流需求、分享成果。
+## Why Octop Enterprise
 
-## 工作方式
+| For employees                                                                                                                       | For IT                                                                                                                                | For teams                                                                                                                       |
+| :---------------------------------------------------------------------------------------------------------------------------------- | :------------------------------------------------------------------------------------------------------------------------------------ | :------------------------------------------------------------------------------------------------------------------------------ |
+| **One workspace, an expert per task**<br>Documents, spreadsheets, code and media in one window, with results landing back in the project folder. | **Accounts, models and permissions in one place**<br>No provider keys to manage per employee; admins grant access by role and adjust scope anytime. | **Results move through the directory, DMs and groups**<br>Forward AI output to a colleague, or hand it to another expert.        |
 
-| 位置       | 职责                                                     |
-| ---------- | -------------------------------------------------------- |
-| 企业服务器 | 账号与权限、模型接入、专家配置、长期记忆、会话和内部通信 |
-| 员工电脑   | 执行任务工具，保存和处理本机项目文件与成果               |
-| 模型服务   | 提供企业配置的内网或外部模型推理、图像生成等能力         |
+## Capabilities
 
-本机执行仍需连接企业服务及其配置的模型，任务上下文和工具结果会按需发送给这些服务。本机工具使用员工的系统权限，项目目录不是操作系统沙箱；跨设备查看历史不会自动同步项目文件。数据边界与使用限制见[客户端指南](docs/enterprise-client.md)。
+| Work                                                                                                                                                                                                                                                                                                                       | Collaboration                                                                                                                                                                                                                                    | Administration and deployment                                                                                                                                                                                                                                                                                                     |
+| :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Experts and reusable skills**<br>Create or choose experts by role and task, share configurations and reuse skills.<br><br>**Local task execution**<br>Read and write authorized project files, run Python and terminal tasks, process spreadsheets, create documents and write code.<br><br>**Image and media**<br>Generate and edit images through company-configured services; process audio and video with local tools.<br><br>**Memory and knowledge**<br>Experts keep working context; connect company knowledge bases to ground answers in internal material. | **Company directory**<br>Find colleagues by organization and see who is online.<br><br>**Direct messages and groups**<br>Company, department and project groups with text, images and files.<br><br>**Message and result sharing**<br>Forward messages and files between conversations; hand AI output to a colleague or another expert. | **Accounts and permissions**<br>Multiple users, organization structure, roles and feature access.<br><br>**Central model services**<br>Connect internal or external language and image services, configured once and granted by role.<br><br>**Self-hosted deployment**<br>Operate services, accounts, conversations and knowledge yourself, with server workspace isolation plus backup and recovery tools.<br><br>**Server extensions**<br>Scheduled tasks, multi-platform IM channels, connectors (OAuth + MCP), plugins and ACP coding-tool integration. |
 
-## 快速开始
+## Use cases
 
-当前版本：**1.0.0**。本仓库提供源码，服务端镜像和 Windows/macOS 企业客户端均从本仓库构建。
+- **Office work and research**: organize spreadsheets, summarize material, and produce reports and everyday documents.
+- **Development and project work**: work with local code and files, run project scripts, analyze logs and troubleshoot.
+- **Content and media production**: generate or edit images, process audio and video, and keep results in the project folder.
+- **Team knowledge and collaboration**: reuse experts and skills, search company material, and discuss or share results with colleagues and groups.
 
-### 管理员部署
+## How it works
 
-企业服务端面向 **Linux + Docker Engine + Docker Compose 插件**，当前从源码构建部署。按[企业部署指南](docker/enterprise/README.md)准备服务和数据库，配置模型与员工权限，再分发匹配的 Windows 或 macOS 企业客户端。
+| Location          | Responsibility                                                                                                        |
+| :---------------- | :-------------------------------------------------------------------------------------------------------------------- |
+| **Company server** | Accounts and permissions, model access, expert configurations, long-term memory, conversations and internal messaging |
+| **Employee computer** | Task tools and local project files and results                                                                        |
+| **Model services**  | Company-configured internal or external inference, image generation and related capabilities                          |
 
-首次安装、网络入口、升级、备份与恢复均见部署指南；客户端构建见[桌面说明](desktop/README.md)。
+> [!NOTE]
+> Local execution still connects to company services and their configured models; task context and tool results are sent to these services as needed. Local tools run with the employee&rsquo;s OS permissions, and a project folder is not an OS sandbox. Viewing history across devices does not synchronize project files. See the [employee guide](docs/enterprise-client.md) for data boundaries and limitations.
 
-### 员工使用
+## Getting started
 
-1. 安装企业提供的客户端，连接管理员提供的服务器地址。
-2. 使用企业账号登录，确认默认工作目录；如需更换，在左侧菜单“设置”分组下打开“本地工作目录”。
-3. 选择专家，描述任务，让 AI 处理文件或项目。
-4. 查看成果，分享给同事、群聊或其他专家。
+Current version: **1.0.0**. This repository provides source code for the server and Windows/macOS enterprise clients, both built from this repository.
 
-详细操作见[企业客户端指南](docs/enterprise-client.md)。
+| Administrator: deploy and configure                                                                                                                                                                                                                  | Employee: sign in and work                                                                                                                                                                     |
+| :--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1. Prepare a **Linux + Docker Engine + Docker Compose** host.<br>2. Follow the [deployment guide](docker/enterprise/README.md) to initialize services, databases and the communication service.<br>3. Configure models, accounts and roles, and prepare experts for employees.<br>4. Distribute matching clients and validate one employee end to end. | 1. Install the company client and enter the server address from your administrator.<br>2. Sign in with your company account and confirm the local working folder.<br>3. Choose an expert and describe the file or project task.<br>4. Review the result and share it with colleagues, groups or another expert. |
 
-## 文档
+For client builds see the [desktop instructions](desktop/README.md); for detailed steps see the [employee guide](docs/enterprise-client.md).
 
-| 文档                                                                                             | 内容                                     |
-| ------------------------------------------------------------------------------------------------ | ---------------------------------------- |
-| [企业部署与恢复](docker/enterprise/README.md)                                                    | 服务准备、首次安装、升级、备份和恢复     |
-| [员工快速上手](docs/user-guide.md) | 首次登录、专家和日常操作 |
-| [企业客户端指南](docs/enterprise-client.md)                                                      | 员工使用、任务与成果、支持范围和数据边界 |
-| [参与开发](CONTRIBUTING.md) / [桌面构建](desktop/README.md)                                      | 开发环境、源码构建和客户端打包           |
-| [架构](docs/architecture.md) / [API](docs/api.md) / [通信服务](services/communication/README.md) | 系统结构、接口与企业通信                 |
-| [更新说明](docs/updates.md)                                                                      | 配置变更、服务器升级与客户端更新         |
+## Documentation
 
-## 开源与致谢
+| Document                                                                                                              | Contents                                                    |
+| :-------------------------------------------------------------------------------------------------------------------- | :---------------------------------------------------------- |
+| [Deployment and recovery](docker/enterprise/README.md)                                                                | Prerequisites, installation, upgrades, backups and recovery |
+| [Employee quick start](docs/user-guide.md)                                                                            | First login, experts and everyday tasks                     |
+| [Employee guide](docs/enterprise-client.md)                                                                           | Tasks, results, supported scope and data boundaries         |
+| [Contributing](CONTRIBUTING.md) / [Desktop builds](desktop/README.md)                                                 | Development setup, source builds and client packaging       |
+| [Architecture](docs/architecture.md) / [API](docs/api.md) / [Communication service](services/communication/README.md) | System structure, interfaces and company messaging          |
+| [Update procedures](docs/updates.md)                                                                                  | Configuration changes, server upgrades and client updates   |
 
-主项目和自有通信模块采用 [MIT License](LICENSE)，保留 Octop 的原始版权和许可声明。第三方依赖、素材与模板遵循各自许可证；公开源码的分发范围见 [NOTICE](NOTICE.md)。
+## License and acknowledgments
 
-感谢 [Octop](https://github.com/TencentCloud/Octop) 及其贡献者，以及 Octop Harness、Gateway、Memory 等项目和开源社区。问题与建议请提交到[本仓库 Issues](https://github.com/colorAi/Octop-Enterprise/issues)；安全问题请按 [SECURITY.md](SECURITY.md) 私密报告。
+The application and our communication service use the [MIT License](LICENSE), retaining Octop&rsquo;s original copyright and license notices. Third-party dependencies, assets and templates retain their own terms. See [NOTICE](NOTICE.md) for the public source distribution scope.
+
+Thanks to [Octop](https://github.com/TencentCloud/Octop) and its contributors, Octop Harness, Gateway, Memory and the wider open-source community. File ordinary issues in [this repository](https://github.com/colorAi/Octop-Enterprise/issues); report vulnerabilities privately according to [SECURITY.md](SECURITY.md).

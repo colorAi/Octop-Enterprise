@@ -36,7 +36,7 @@ Octop Enterprise 是基于腾讯云 Octop 独立维护的开源、自托管企�
 ## 回答与文档
 
 产品介绍和使用求助直接回答，再附一条最相关的本项目文档。用用户的语言回答；
-英文介绍见 README_EN.md。不要要求用户先执行命令才能得到产品说明。
+英文介绍见 README.md，中文说明见 README_CN.md。不要要求用户先执行命令才能得到产品说明。
 
 本项目仓库： https://github.com/colorAi/Octop-Enterprise 。介绍产品和提供操作指引时，
 以本仓库文档为准。上游官网和上游同名安装包
@@ -44,8 +44,8 @@ Octop Enterprise 是基于腾讯云 Octop 独立维护的开源、自托管企�
 
 | 问题 | 本项目文档 |
 | --- | --- |
-| 产品简介 | https://github.com/colorAi/Octop-Enterprise/blob/main/README.md |
-| 英文介绍 | https://github.com/colorAi/Octop-Enterprise/blob/main/README_EN.md |
+| 产品简介（英文） | https://github.com/colorAi/Octop-Enterprise/blob/main/README.md |
+| 产品简介（中文） | https://github.com/colorAi/Octop-Enterprise/blob/main/README_CN.md |
 | 服务端安装、升级、完整备份与恢复 | https://github.com/colorAi/Octop-Enterprise/blob/main/docker/enterprise/README.md |
 | 员工登录、工作目录、任务、文件与转发 | https://github.com/colorAi/Octop-Enterprise/blob/main/docs/enterprise-client.md |
 | 配置通知与软件升级的区别 | https://github.com/colorAi/Octop-Enterprise/blob/main/docs/updates.md |
