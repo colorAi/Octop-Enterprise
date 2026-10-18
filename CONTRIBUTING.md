@@ -1,6 +1,6 @@
-# 参与 Octop Ent
+# 参与 Octop Enterprise
 
-欢迎提交问题、文档改进和代码。Octop Ent 独立维护企业场景改造；问题和 PR 请提交到[本仓库](https://github.com/colorAi/Octop-Enterprise)。向 TencentCloud/Octop 回馈通用修复时，请遵循上游自己的贡献流程。
+欢迎提交问题、文档改进和代码。Octop Enterprise 独立维护企业场景改造；问题和 PR 请提交到[本仓库](https://github.com/colorAi/Octop-Enterprise)。向 TencentCloud/Octop 回馈通用修复时，请遵循上游自己的贡献流程。
 
 ## 开发准备
 
@@ -16,7 +16,7 @@ make build-frontend
 
 ## 修改和验证
 
-- 从本仓库 `main` 建立工作分支，向本仓库 `main` 提交 PR；不沿用上游自动发布分支流程。
+- 从本仓库 `main` 建立工作分支，向本仓库 `main` 提交 PR。
 - Python 代码位于 `src/octop/`，前端源代码位于 `dashboard/`；不要直接编辑 `src/octop/dashboard/` 构建产物。
 - 只修改与问题相关的部分，说明原因、实际行为和验证范围。
 - 运行受影响模块及关联测试；非必要不做全量检查。Python 测试使用 `uv run pytest`。
@@ -37,4 +37,4 @@ go test ./internal/groups ./internal/store
 
 只贡献有权提供的代码和资料。自有改动按根目录 MIT 许可提交；引入第三方内容须保留许可和来源，不能把限制再分发的材料放入公开源码包。
 
-版本升级、Git 提交和发布按维护者明确安排执行；不自动推送、打标签或发布到 PyPI/镜像仓库。公开资料与导出方法见[发布准备](docs/open-source-release.md)。
+提交 PR 时说明修改内容和验证结果。版本、标签与正式发行由维护者统一管理；源码导出与发行要求见[源码发行说明](docs/open-source-release.md)。

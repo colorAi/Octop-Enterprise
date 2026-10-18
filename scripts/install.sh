@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-printf '%s\n' 'Octop Ent: use source deployment from docker/enterprise/README.md. The upstream installer is disabled for this distribution.' >&2
+printf '%s\n' 'Octop Enterprise: use source deployment from docker/enterprise/README.md. The upstream installer is disabled for this distribution.' >&2
 exit 1
 
 # Octop 安装脚本 (macOS / Linux)

@@ -1,8 +1,8 @@
-# Octop Ent 通信服务
+# Octop Enterprise 通信服务
 
-基于 PostgreSQL 的独立 Go 通信服务，提供组织、员工身份、私聊、群聊及消息同步。该模块从权利人自行开发的 Miaox 通信代码提取并持续改造，现与 Octop Ent 一并按 [MIT License](LICENSE) 开源。
+基于 PostgreSQL 的独立 Go 通信服务，提供组织、员工身份、私聊、群聊及消息同步。该模块源自项目权利人开发的 Miaox 通信代码，采用 [MIT License](LICENSE)。
 
-`SOURCE.json` 保留首次提取时的源提交与文件摘要，已移除本机路径和无关工作树信息。账户注册、独立认证、AI、钱包、返利、原管理站点和 iOS 客户端不在本模块范围内。
+员工账号与认证由 Octop 控制面管理，通信服务负责消息、附件及同步。[SOURCE.json](SOURCE.json) 记录首次提取时的源提交与文件摘要，来源与许可说明见 [NOTICE](../../NOTICE.md)。
 
 企业部署入口见[部署与恢复](../../docker/enterprise/README.md)。以下是服务配置与开发参考。
 
@@ -51,16 +51,14 @@ when a user or administrator uploads, removes, or replaces a portrait with a pre
 Contacts, snapshots, and group rosters return `avatar_url` and `avatar_icon`; images
 remain on the control plane and require authenticated `/api/users/{id}/avatar` access.
 
-The initial implementation uses one organization transaction lock before the
-existing conversation/pair/sync locks. It makes membership changes and sends
-serializable against one another. This is a deliberate correctness baseline;
-high-volume deployments need separate capacity measurement before replacing this
-ordering with more granular policy-version locking.
+The service acquires an organization transaction lock before conversation,
+pair and sync locks, making membership changes and message sends serializable
+against one another. Measure throughput with representative traffic before
+setting deployment capacity.
 
 Public surface and browser synchronization are documented in
 [api/contract.md](api/contract.md). Deployment, backup and recovery are documented in
-[the enterprise guide](../../docker/enterprise/README.md). Release notes must state
-which target-platform and production checks were actually completed.
+[the enterprise guide](../../docker/enterprise/README.md).
 
 Targeted real-PostgreSQL checks:
 

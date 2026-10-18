@@ -4,23 +4,9 @@
 
 解压即用：内置便携 CPython + Octop 及依赖，通过 `start.sh` / `start.bat` 启动。  
 **不依赖**系统 Python，也**不包含** Wails / 桌面壳——用浏览器打开 Dashboard。  
-首启走上游正常 setup wizard（本目录**不含** OOB / UI 裁剪）。
+首次启动通过设置向导创建管理员账号。
 
-## 与上游解耦
-
-本能力全部落在：
-
-- `desktop/portable/**`（脚本 / 模板 / 本目录 Makefile）
-- 上游多平台工作流；公开源码中归档为 `.github/upstream-workflows/octop-desktop.yml.disabled`，默认不运行
-- `desktop/portable/.gitignore`（`/release/` `/runtimes/` `/wheels/` 等忽略构建产物）
-- `tests/unit/test_green_launch.py`（launch.py PATH / addsitedir）
-
-**不修改** `src/`、`dashboard/`、`pyproject.toml`、`uv.lock`、根 `Makefile`。  
-合并上游时只需留意上述路径；日常用：
-
-```bash
-make -f desktop/portable/Makefile green
-```
+## 依赖与校验
 
 依赖版本必须以仓库根目录 `uv.lock` 为准：`package.sh` 使用
 `uv export --frozen`，出包后跑 `desktop/portable/verify_imports.py`
@@ -31,7 +17,7 @@ make -f desktop/portable/Makefile green
 
 ## 产物布局
 
-公开文件名：`Octop-portable-<plat>-<version>.zip`。zip 内目录仍是：
+文件名：`Octop-portable-<plat>-<version>.zip`。zip 内目录结构：
 
 ```
 Octop-<plat>/
@@ -55,7 +41,7 @@ Octop-<plat>/
 make -f desktop/portable/Makefile green
 
 # 或分步：
-make build-frontend                  # 上游已有目标
+make build-frontend
 bash desktop/portable/bootstrap-runtime.sh
 bash desktop/portable/package.sh
 ```
@@ -87,7 +73,7 @@ OCTOP_GREEN_OFFLINE=1 bash desktop/portable/package.sh
 
 锁定的 `cryptography` 49.x **不再发布** macOS x86_64 / universal2 wheel。若允许从 sdist 编译，会链到构建机 Homebrew 的 `/usr/local/opt/openssl@3`，用户机缺库即启动失败。
 
-绿包脚本已做：
+打包脚本执行以下依赖配置与检查：
 
 1. `darwin-amd64` 覆盖钉死 `cryptography==46.0.3`（仍有 `macosx_*_universal2` wheel）
 2. 全平台 `--only-binary cryptography`，禁止源码编译

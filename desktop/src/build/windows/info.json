@@ -5,11 +5,11 @@
   "info": {
     "0000": {
       "ProductVersion": "1.0.0",
-      "CompanyName": "Octop Ent contributors",
-      "FileDescription": "Octop Ent desktop",
+      "CompanyName": "Octop Enterprise contributors",
+      "FileDescription": "Octop Enterprise desktop",
       "LegalCopyright": "Copyright © 2026",
-      "ProductName": "Octop Ent",
-      "Comments": "Octop Ent desktop shell"
+      "ProductName": "Octop Enterprise",
+      "Comments": "Octop Enterprise desktop shell"
     }
   }
 }

@@ -1,10 +1,10 @@
-# Octop Ent
+# Octop Enterprise
 
 **An open-source, self-hosted AI work and collaboration platform for enterprise teams.**
 
 Give each employee AI experts they can choose for different tasks. Work on documents, spreadsheets, code and media, then connect with the team through a company directory, direct messages and groups. The company manages accounts, models and permissions centrally; employees work on their own computers and share the results.
 
-> Based on [TencentCloud/Octop](https://github.com/TencentCloud/Octop), independently maintained by [the Octop Ent maintainers](https://github.com/colorAi/Octop-Enterprise). This is not an official Tencent edition. Ent stands for Enterprise.
+> Based on [TencentCloud/Octop](https://github.com/TencentCloud/Octop), independently maintained by [the Octop Enterprise maintainers](https://github.com/colorAi/Octop-Enterprise). This is not an official Tencent edition.
 
 [中文](README.md) · [Deployment](docker/enterprise/README.md) · [Employee guide](docs/enterprise-client.md) · [Contributing](CONTRIBUTING.md)
 
@@ -22,7 +22,7 @@ Give each employee AI experts they can choose for different tasks. Work on docum
 | **Long-term memory and knowledge bases** | Retain working context with each expert and configure document knowledge bases to ground answers and tasks in company information                                     |
 | **Self-hosted deployment**               | Operate company services and manage accounts, conversations and knowledge, with server workspace isolation and backup and recovery tools                              |
 
-Octop's server-side extensions are also retained: **scheduled tasks, multi-platform IM channels, connectors (OAuth + MCP), plugins and ACP coding-tool integration**. Availability depends on execution mode and isolation policy; see the [employee guide](docs/enterprise-client.md).
+Server-side extensions include **scheduled tasks, multi-platform IM channels, connectors (OAuth + MCP), plugins and ACP coding-tool integration**. Availability depends on execution mode and isolation policy; see the [employee guide](docs/enterprise-client.md).
 
 ## Use cases
 
@@ -43,7 +43,7 @@ Local execution still connects to company services and their configured models; 
 
 ## Getting started
 
-Current source release: **1.0.0**. This is a source-only distribution; prebuilt server images and Windows/macOS installers are not promised. Build clients using the [desktop instructions](desktop/README.md). Source archives omit `.git`; the enterprise packager requires a local repository with a resolvable `HEAD`. Published sources, checksums, platforms and signing status belong in [this repository’s Releases](https://github.com/colorAi/Octop-Enterprise/releases).
+Current version: **1.0.0**. This repository provides source code for building the server images and Windows/macOS enterprise clients.
 
 ### Administrator deployment
 
@@ -70,7 +70,6 @@ See the [employee guide](docs/enterprise-client.md) for detailed instructions.
 | [Contributing](CONTRIBUTING.md) / [Desktop builds](desktop/README.md)                                                 | Development setup, source builds and client packaging       |
 | [Architecture](docs/architecture.md) / [API](docs/api.md) / [Communication service](services/communication/README.md) | System structure, interfaces and company messaging          |
 | [Update procedures](docs/updates.md)                                                                                  | Configuration changes, server upgrades and client updates   |
-| [Release preparation](docs/open-source-release.md)                                                                    | Public source exports and release instructions              |
 
 ## License and acknowledgments
 

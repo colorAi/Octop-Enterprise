@@ -39,7 +39,7 @@ def test_direct_upgrade_is_blocked_before_any_install(
     monkeypatch.setattr(self_update, "stash_console_scripts", stash)
     result = self_update.run_upgrade(version="999.0.0", allow_prerelease=True)
     assert result.success is False
-    assert "Octop Ent" in (result.error or "")
+    assert "Octop Enterprise" in (result.error or "")
     install.assert_not_called()
     stash.assert_not_called()
 
@@ -51,7 +51,7 @@ def test_cli_update_reports_manual_policy_without_probing(monkeypatch: pytest.Mo
     monkeypatch.setattr(update_cmd, "fetch_pypi_info", probe)
     result = CliRunner().invoke(cli, ["update", "--yes"])
     assert result.exit_code != 0
-    assert "Octop Ent" in result.output
+    assert "Octop Enterprise" in result.output
     probe.assert_not_called()
 
 

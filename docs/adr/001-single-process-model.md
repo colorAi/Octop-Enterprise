@@ -3,7 +3,7 @@
 **Status:** Accepted
 **Date:** 2026-06
 
-> Historical base-mode architecture decision. Octop Ent enterprise deployment also
+> Historical base-mode architecture decision. Octop Enterprise deployment also
 > uses PostgreSQL, the communication service and Docker isolation; follow the
 > [enterprise deployment guide](../../docker/enterprise/README.md) for current installation.
 

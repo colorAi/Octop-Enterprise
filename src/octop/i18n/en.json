@@ -1,6 +1,6 @@
 {
   "distribution": {
-    "manual_update": "Octop Ent uses manual upgrades. Online self-update is disabled to prevent installing the upstream octop package. Follow this repository's release instructions."
+    "manual_update": "Octop Enterprise uses manual upgrades. Online self-update is unavailable. Follow this project's update guide."
   },
   "slash": {
     "error": {

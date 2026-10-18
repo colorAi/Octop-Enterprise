@@ -1,6 +1,6 @@
 {
   "distribution": {
-    "manual_update": "Octop Ent 当前采用手动升级。在线自更新已停用，避免安装腾讯上游 octop 包覆盖本版本，请按本仓库发行说明升级。"
+    "manual_update": "Octop Enterprise 使用手动升级，不支持在线自更新。请按本项目的更新说明操作。"
   },
   "slash": {
     "error": {

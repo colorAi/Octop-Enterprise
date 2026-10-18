@@ -53,12 +53,16 @@ def disabled_installer(name: str, text: str) -> bool:
             and lines[2] == "exit 1"
         )
     if name == "scripts/install.ps1":
-        return bool(lines and lines[0].startswith('throw "Octop Ent:') and notice in lines[0])
+        return bool(
+            lines
+            and lines[0].startswith(('throw "Octop Enterprise:', 'throw "Octop Ent:'))
+            and notice in lines[0]
+        )
     if name == "scripts/install.bat":
         return (
             len(lines) >= 3
             and lines[0] == "@echo off"
-            and lines[1].startswith("echo Octop Ent:")
+            and lines[1].startswith(("echo Octop Enterprise:", "echo Octop Ent:"))
             and notice in lines[1]
             and lines[2] == "exit /b 1"
         )

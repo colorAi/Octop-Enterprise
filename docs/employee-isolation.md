@@ -5,7 +5,7 @@ desktop tasks instead run on the employee computer with that OS account's
 permissions; their working folder is not a Docker or OS sandbox. See the
 [employee guide](enterprise-client.md) for local execution and data boundaries.
 
-Octop Ent enterprise deployment uses `OCTOP_AGENT_ISOLATION=docker`. This is an operator policy; an employee
+Octop Enterprise deployment uses `OCTOP_AGENT_ISOLATION=docker`. This is an operator policy; an employee
 cannot override it through an expert's backend, workspace, skill paths, memory
 database path, or tool settings.
 

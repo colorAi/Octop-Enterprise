@@ -1,13 +1,13 @@
-# Octop Ent desktop (Wails v3 + green portable)
+# Octop Enterprise desktop (Wails v3 + green portable)
 
-> For enterprise users, start with [the employee guide](../docs/enterprise-client.md). The exported public source archives upstream CI workflows; their release automation is not enabled. Base-mode build notes below are reference material, not a claim that enterprise installers have been published.
+> For employee setup and everyday use, see [the employee guide](../docs/enterprise-client.md). This document covers building the enterprise client and the base-mode desktop packages from source.
 
 All desktop-client code lives here. This is **not** `src/octop/infra/desktop`
 (remote desktop streaming).
 
 | Path | Role |
 |------|------|
-| [`portable/`](portable/) | Green zip packaging (was `scripts/green/`) |
+| [`portable/`](portable/) | Portable Python runtime and application packaging |
 | [`src/`](src/) | Wails v3 shell: load bundled zip, spawn Octop, tray/settings |
 | [`package-release.sh`](package-release.sh) | Native end-to-end portable + Wails release build |
 
@@ -30,11 +30,9 @@ From repo root:
 make -f desktop/portable/Makefile green
 ```
 
-This is the base-mode portable server package, not an enterprise employee installer.
-The upstream desktop workflow described these builds, but the public source export
-archives it under `.github/upstream-workflows/` with a `.disabled` extension.
-It does not build or publish packages automatically. Use `package-company.py`
-below for enterprise employee installers.
+This builds the base-mode portable server package. Use `package-company.py`
+below to build enterprise employee installers. Run packaging commands locally;
+the reference workflows in `.github/upstream-workflows/` are inactive.
 
 ## Build a complete desktop release
 
@@ -48,9 +46,8 @@ desktop/package-release.sh
 desktop/package-release.sh darwin-arm64 --reuse-portable
 ```
 
-These base-mode release scripts target the matching native host; the archived
-workflow describes six platform/architecture variants. Enterprise packaging is
-separate: `package-company.py` can also assemble Windows installers on macOS
+Base-mode release scripts run on the matching native host. For enterprise
+packaging, `package-company.py` can also assemble Windows installers on macOS
 using supplied Windows runtime payloads.
 Windows packaging also needs [NSIS](https://nsis.sourceforge.io/) (`makensis`)
 so the `.exe` is an installer rather than a portable single-file binary.
@@ -156,12 +153,10 @@ To produce company installers from macOS (Node with dashboard dependencies insta
 Python 3.11+, Go, the pinned Wails CLI,
 NSIS and Xcode command-line tools):
 
-The current `package-company.py` also requires a Git checkout with a resolvable
-`HEAD`, because it records the source commit and dirty state. A public source
-archive intentionally contains no `.git` history and cannot be passed directly to
-this packager. The maintainer must first establish its source commit in a local
-repository, or build from a checkout of the corresponding release. No remote
-push is required. Server Docker builds do not have this prerequisite.
+`package-company.py` requires a Git checkout with a resolvable `HEAD` to record
+the source commit and local changes. Build from a checkout of the target release.
+For an exported source archive, initialize a local Git repository and commit the
+imported sources before packaging. Server Docker builds do not require Git history.
 
 ```bash
 python3 desktop/package-company.py \
@@ -184,14 +179,13 @@ The packager refuses missing dependencies and mismatched verification records. T
 all listed files before first launch. Tool payload updates use content-addressed
 directories, preserving account receipts and project files during rollback.
 
-The 2026-10-15 upstream sync pins Harness 1.0.3 and Gateway 1.0.2. Rebuild the
-company runtime payload and native shell together when deploying this source;
-an older Harness 1.0.2 payload fails the existing server/client version check.
-The new shell exposes text steering and withdrawal over the existing nonce-bound
-IPC. While a task is running, queue a draft and choose **插入 / Steer** to add it
-at the next completed tool batch (or the end of a text-only reply). Older shells
-retain queued drafts and show an update hint. See
-[the source and license notice](../NOTICE.md) for verification.
+The runtime requires Harness 1.0.3 and Gateway 1.0.2 or later, as specified by
+the source dependencies. Rebuild the company runtime payload and native shell
+together; Harness 1.0.2 payloads fail the server/client version check.
+The shell supports text steering and withdrawal over nonce-bound IPC. While a
+task is running, queue a draft and choose **插入 / Steer** to add it at the next
+completed tool batch (or the end of a text-only reply). Older shells retain queued
+drafts and show an update hint.
 
 `--legacy-shell-only` is an explicit compatibility option and labels its artifacts
 `legacy-shell`; it is not a complete local execution installer. The package output
@@ -204,8 +198,8 @@ Supply `MicrosoftEdgeWebView2RuntimeInstallerX64.exe` and
 WebView2 download page. The script builds a macOS 13+ universal DMG and separate
 Windows amd64/arm64 installers, includes offline WebView2, and writes SHA-256
 checksums. Build staging is outside the repository, beside the output directory.
-No server address is compiled in and no version is changed. Developer ID signing
-is optional; notarization and Windows Authenticode signing are separate release
+Employees configure the server address at sign-in. Developer ID signing is
+optional; notarization and Windows Authenticode signing are separate release
 steps. Windows installation still requires validation on a Windows machine.
 See [the enterprise client guide](../docs/enterprise-client.md)
 for setup, supported workflows and data boundaries.
@@ -249,15 +243,14 @@ GitHub Release names follow `Octop-<kind>-<os>-<arch>-<version>.<ext>`:
 
 - Desktop GUI: `Octop-desktop-<plat>-<version>.dmg` (macOS; open and drag
   `Octop.app` into Applications), `.exe` (Windows NSIS installer — copies
-  into `Program Files\Octop` and creates Start Menu + desktop shortcuts),
+  into the configured product directory and creates Start Menu + desktop shortcuts),
   `.tar.gz` (Linux)
 - Green runtime zip: `Octop-portable-<plat>-<version>.zip`
 - PyPI wheels stay `octop-<version>-py3-none-any.whl` (PEP 427)
 
 The Linux tar.gz contains only the GUI binary; it has no separate portable zip or
-server terminal process. Octop Ent currently uses manual upgrades. The inherited
-`--target` installer mechanics remain available in source for future adaptation,
-but the CLI/API online update paths are disabled for this distribution.
+server terminal process. Octop Enterprise uses [manual upgrades](../docs/updates.md);
+the CLI/API online update paths are disabled for this distribution.
 
 The base-mode Wails shell requires macOS 12+; enterprise employee installers
 built by `package-company.py` require macOS 13+. Linux also needs GTK4 + WebKitGTK 6 to link.
@@ -282,6 +275,6 @@ Enterprise source/manifest checks and the native acceptance matrix: [deployment 
 
 ## Independent distribution identity
 
-Octop Ent uses `io.github.colorai.octop.enterprise` for the macOS bundle and Windows assembly identity. Windows installers display Octop Ent and use a separate product directory and uninstall entry. Build metadata identifies Octop Ent contributors; artifact filenames and the internal `Octop` executable name retain their current packaging conventions.
+The macOS bundle and Windows assembly identity is `io.github.colorai.octop.enterprise`. Product metadata is configured in [`src/build/config.yml`](src/build/config.yml) and the platform-specific files under [`src/build/`](src/build/). Artifact filenames follow the conventions above; the executable is named `Octop`.
 
-These identity changes do not migrate existing installations or employee data. Preserve working folders, account settings and task receipts before replacing an older client. Signing and notarization status must be stated for each actual binary release.
+Preserve working folders, account settings and task receipts before replacing an older client. Check the target release's upgrade instructions, signing status and notarization status before distribution.

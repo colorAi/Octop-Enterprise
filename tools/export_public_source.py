@@ -144,7 +144,7 @@ def export(root: Path, destination: Path) -> int:
     )
     # No absolute paths, original working-tree listings, repository credentials or Git history.
     manifest = {
-        "project": "Octop Ent",
+        "project": "Octop Enterprise",
         "repository_name": "Octop-Enterprise",
         "repository_url": "https://github.com/colorAi/Octop-Enterprise",
         "source_commit": subprocess.check_output(

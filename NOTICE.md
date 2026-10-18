@@ -2,15 +2,15 @@
 
 ## Octop
 
-Octop Ent 基于 [TencentCloud/Octop](https://github.com/TencentCloud/Octop) 二次开发，保留上游 `Copyright (c) 2026 Octop` 及 MIT 许可正文。企业桌面本机执行、企业服务适配、内部通信等改造由 Octop Ent 贡献者维护；项目不代表腾讯官方企业发行。
+Octop Enterprise 基于 [TencentCloud/Octop](https://github.com/TencentCloud/Octop) 二次开发，保留上游 `Copyright (c) 2026 Octop` 及 MIT 许可正文。企业桌面本机执行、企业服务适配、内部通信等改造由 Octop Enterprise 贡献者维护；项目不代表腾讯官方企业发行。
 
-本地分支从上游 `eb280112`（1.0.2b6）之后继续开发，并选择性移植了截至 `f79015b078c4d5d4c309a1bf6f3cd39ac06cc18f` 的部分上游变更。公开导出的 `PUBLIC_SOURCE.json` 记录本地源提交、工作树状态和逐文件摘要，不代表已完整合并该上游提交。
+本项目基于上游 `eb280112`（1.0.2b6），并选择性移植了截至 `f79015b078c4d5d4c309a1bf6f3cd39ac06cc18f` 的部分变更。源码发行包中的 `PUBLIC_SOURCE.json` 记录导出时的源提交、工作树状态和逐文件摘要；上游提交用于标识来源范围，不表示完整合并。
 
 ## 自有通信服务
 
-`services/communication/` 从项目权利人自行开发的 Miaox 通信代码提取并持续改造。本次由权利人明确选择与主项目一并开源，采用目录内的 [MIT License](services/communication/LICENSE)。此前来源清单未附独立许可；现有开源授权以随包许可证为准。
+`services/communication/` 源自项目权利人开发的 Miaox 通信代码，采用目录内的 [MIT License](services/communication/LICENSE)。
 
-[SOURCE.json](services/communication/SOURCE.json) 中的提交和摘要记录首次提取时的来源，不保证等于后续已修改文件的当前摘要。绝对本机路径和与通信无关的工作树清单已从公开来源记录中移除。
+[SOURCE.json](services/communication/SOURCE.json) 中的提交和摘要记录首次提取时的来源；后续修改文件的发行摘要以源码包中的 `PUBLIC_SOURCE.json` 为准。
 
 ## 第三方组件
 
@@ -28,6 +28,6 @@ Octop Ent 基于 [TencentCloud/Octop](https://github.com/TencentCloud/Octop) 二
 
 ## 未纳入公开导出的材料
 
-本地 `office-automation` 专家中的 docx、pptx、pdf、xlsx 技能附有 Anthropic 限制性许可，明确限制复制、衍生和再分发。公开导出工具排除整个该专家目录，避免留下依赖缺失技能的专家介绍；未在公开包中将其改标为 MIT。
+`office-automation` 专家中的 docx、pptx、pdf、xlsx 技能受 Anthropic 许可的复制、衍生和再分发限制，未纳入本项目的公开源码发行。
 
-这不影响本项目基于 python-docx、python-pptx、pypdf、openpyxl 等独立依赖实现的文档工具。上述第三方材料的本地副本保持原样；若以后取得明确分发授权或完成独立替代，再评估是否纳入公开发行。
+本项目的文档工具基于 python-docx、python-pptx、pypdf、openpyxl 等独立依赖实现，各依赖遵循自身许可证。

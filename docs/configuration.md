@@ -1,8 +1,6 @@
-> Octop Ent 企业模式的实际配置入口见[企业部署](../docker/enterprise/README.md)。本文保留通用配置参考；安装和更新使用本仓库的手动发行流程。
-
 # Configuration
 
-> For enterprise mode (PostgreSQL, communication, devices and isolation), use the [enterprise deployment and recovery guide](../docker/enterprise/README.md). Single-process descriptions apply to base mode.
+> For Octop Enterprise deployment (PostgreSQL, communication, devices and isolation), use the [enterprise deployment and recovery guide](../docker/enterprise/README.md). This document covers general application configuration; single-process descriptions apply to base mode.
 
 In base mode, Octop stores its state under `~/.octop/`. Enterprise mode
 uses PostgreSQL for control-plane data and retains local files as configured. The directory is created

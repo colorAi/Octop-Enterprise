@@ -52,9 +52,9 @@ Name "${INFO_PRODUCTNAME}"
 !endif
 OutFile "${INSTALLER_OUTFILE}"
 !if "${WAILS_INSTALL_SCOPE}" == "user"
-    InstallDir "$LOCALAPPDATA\Programs\${INFO_PRODUCTNAME}"
+    InstallDir "$LOCALAPPDATA\Programs\${OCTOP_INSTALL_DIR_NAME}"
 !else
-    InstallDir "$PROGRAMFILES64\${INFO_PRODUCTNAME}"
+    InstallDir "$PROGRAMFILES64\${OCTOP_INSTALL_DIR_NAME}"
 !endif
 ShowInstDetails show
 
@@ -77,6 +77,9 @@ Section
         File "/oname=${OCTOP_COMPANY_RUNTIME_NAME}" "${OCTOP_COMPANY_RUNTIME_ZIP}"
     !endif
 
+    ; Replace shortcuts from the previous display name during upgrades.
+    Delete "$SMPROGRAMS\Octop Ent.lnk"
+    Delete "$DESKTOP\Octop Ent.lnk"
     CreateShortcut "$SMPROGRAMS\${INFO_PRODUCTNAME}.lnk" "$INSTDIR\${PRODUCT_EXECUTABLE}"
     CreateShortcut "$DESKTOP\${INFO_PRODUCTNAME}.lnk" "$INSTDIR\${PRODUCT_EXECUTABLE}"
 

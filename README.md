@@ -1,10 +1,10 @@
-# Octop Ent
+# Octop Enterprise
 
 **开源、自托管的企业 AI 工作与协作平台。**
 
 为每位员工配备可按任务切换的 AI 专家，让 AI 直接参与文档、表格、代码和媒体处理，并通过企业通讯录、私聊和群组连接团队。企业统一管理账号、模型和权限，员工在自己的电脑上完成工作、分享成果。
 
-> 基于腾讯云开源项目 [TencentCloud/Octop](https://github.com/TencentCloud/Octop) 二次开发，由 [Octop Ent 项目维护者](https://github.com/colorAi/Octop-Enterprise) 独立维护，非腾讯官方版本。Ent 是 Enterprise 的缩写。
+> 基于腾讯云开源项目 [TencentCloud/Octop](https://github.com/TencentCloud/Octop) 二次开发，由 [Octop Enterprise 项目维护者](https://github.com/colorAi/Octop-Enterprise) 独立维护，非腾讯官方版本。
 
 [English](README_EN.md) · [企业部署](docker/enterprise/README.md) · [客户端使用](docs/enterprise-client.md) · [参与开发](CONTRIBUTING.md)
 
@@ -22,7 +22,7 @@
 | **长期记忆与知识库** | 专家持续积累工作上下文；按需配置企业文档知识库，让回答和任务结合内部资料                            |
 | **私有化部署**       | 企业自行部署和管理服务、账号、会话与知识资料，提供服务端工作区隔离及备份恢复工具                    |
 
-同时保留 Octop 的服务端扩展能力：**定时任务、多平台 IM 通道、连接器（OAuth + MCP）、插件和 ACP 编程工具集成**。实际可用范围取决于执行模式和隔离策略，见[企业客户端指南](docs/enterprise-client.md)。
+服务端支持 **定时任务、多平台 IM 通道、连接器（OAuth + MCP）、插件和 ACP 编程工具集成**。实际可用范围取决于执行模式和隔离策略，见[企业客户端指南](docs/enterprise-client.md)。
 
 ## 适用场景
 
@@ -43,7 +43,7 @@
 
 ## 快速开始
 
-当前源码发行版本：**1.0.0**。当前仅提供源码，不承诺提供预构建服务端镜像或 Windows/macOS 安装包。客户端需按[桌面说明](desktop/README.md)自行构建；源码包不含 `.git`，企业打包器需要先建立可解析 `HEAD` 的本地仓库。正式发行的源码、校验值、平台与签名状态统一在[本仓库 Releases](https://github.com/colorAi/Octop-Enterprise/releases)说明。
+当前版本：**1.0.0**。本仓库提供源码，服务端镜像和 Windows/macOS 企业客户端均从本仓库构建。
 
 ### 管理员部署
 
@@ -70,7 +70,6 @@
 | [参与开发](CONTRIBUTING.md) / [桌面构建](desktop/README.md)                                      | 开发环境、源码构建和客户端打包           |
 | [架构](docs/architecture.md) / [API](docs/api.md) / [通信服务](services/communication/README.md) | 系统结构、接口与企业通信                 |
 | [更新说明](docs/updates.md)                                                                      | 配置变更、服务器升级与客户端更新         |
-| [开源发布准备](docs/open-source-release.md)                                                      | 公开源码导出与发行说明                   |
 
 ## 开源与致谢
 

@@ -11,22 +11,26 @@
     !define INFO_PROJECTNAME "Octop"
 !endif
 !ifndef INFO_COMPANYNAME
-    !define INFO_COMPANYNAME "Octop Ent contributors"
+    !define INFO_COMPANYNAME "Octop Enterprise contributors"
 !endif
 !ifndef INFO_PRODUCTNAME
-    !define INFO_PRODUCTNAME "Octop Ent"
+    !define INFO_PRODUCTNAME "Octop Enterprise"
 !endif
 !ifndef INFO_PRODUCTVERSION
     !define INFO_PRODUCTVERSION "1.0.0"
 !endif
 !ifndef INFO_COPYRIGHT
-    !define INFO_COPYRIGHT "(c) 2026, Octop Ent contributors"
+    !define INFO_COPYRIGHT "(c) 2026, Octop Enterprise contributors"
 !endif
 !ifndef PRODUCT_EXECUTABLE
     !define PRODUCT_EXECUTABLE "${INFO_PROJECTNAME}.exe"
 !endif
+# Keep installation storage and registration stable when the display name changes.
+!ifndef OCTOP_INSTALL_DIR_NAME
+    !define OCTOP_INSTALL_DIR_NAME "Octop Ent"
+!endif
 !ifndef UNINST_KEY_NAME
-    !define UNINST_KEY_NAME "${INFO_COMPANYNAME}${INFO_PRODUCTNAME}"
+    !define UNINST_KEY_NAME "Octop Ent contributorsOctop Ent"
 !endif
 !define UNINST_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\${UNINST_KEY_NAME}"
 

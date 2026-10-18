@@ -1,14 +1,14 @@
 # 安全问题报告
 
-Octop Ent 是独立维护的 Octop 衍生项目。请向本项目维护者报告企业改造中的安全问题，不要使用上游作者的个人邮箱作为本项目联系人。
+Octop Enterprise 是独立维护的 Octop 衍生项目。请向本项目维护者报告与本项目有关的安全问题。
 
 ## 私密报告
 
 不要在公开 Issue 中提交密钥、漏洞利用细节、真实员工资料或可识别的业务数据。
 
-请先查看[本仓库安全政策](https://github.com/colorAi/Octop-Enterprise/security/policy)。若页面提供 **Report a vulnerability**，通过该入口私密提交。当前仓库为私有仓库，尚未验证该入口可用；入口不可用或你无仓库访问权限时，先通过已获得的维护者联系方式请求私密渠道。有仓库访问权限者也可在[本仓库 Issues](https://github.com/colorAi/Octop-Enterprise/issues)提交不含漏洞细节、密钥或业务数据的联系请求，收到私密渠道后再发送详情。
+若[本仓库安全页面](https://github.com/colorAi/Octop-Enterprise/security)提供 **Report a vulnerability**，通过该入口私密提交。入口不可用时，可通过已有的维护者联系方式请求私密渠道，或在[本仓库 Issues](https://github.com/colorAi/Octop-Enterprise/issues)提交仅请求联系的消息；收到私密渠道后再发送漏洞详情。
 
-目前没有承诺固定响应或修复时限；支持版本和维护安排由正式发行说明确定。不要把腾讯上游的响应承诺视为本项目承诺。
+本项目未设定固定响应或修复时限，支持版本和维护范围以本项目的发行说明为准。
 
 ## 部署边界
 

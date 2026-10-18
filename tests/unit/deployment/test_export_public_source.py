@@ -190,7 +190,7 @@ def test_distribution_check_preserves_attribution_but_requires_installer_entry_g
     upstream = 'OCTOP_REPO="https://github.com/TencentCloud/Octop.git"\n'
     script.write_text(
         "#!/usr/bin/env bash\n"
-        "printf '%s\\n' 'Octop Ent: upstream installer is disabled for this distribution.' >&2\n"
+        "printf '%s\\n' 'Octop Enterprise: upstream installer is disabled for this distribution.' >&2\n"
         "exit 1\n" + upstream
     )
     assert checker.check_distribution(tmp_path) == []

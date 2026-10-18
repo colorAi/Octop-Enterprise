@@ -1,5 +1,5 @@
 @echo off
-echo Octop Ent: use source deployment from docker/enterprise/README.md. The upstream installer is disabled for this distribution. 1>&2
+echo Octop Enterprise: use source deployment from docker/enterprise/README.md. The upstream installer is disabled for this distribution. 1>&2
 exit /b 1
 setlocal EnableDelayedExpansion
 

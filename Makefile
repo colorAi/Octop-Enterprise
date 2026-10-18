@@ -128,7 +128,7 @@ build-wheel:
 
 .PHONY: publish
 publish:
-	@echo "Octop Ent: publishing is disabled until an independent package name and release channel are configured."
+	@echo "Octop Enterprise: automated package publishing is disabled. See docs/open-source-release.md."
 	@exit 1
 
 .PHONY: publish-test

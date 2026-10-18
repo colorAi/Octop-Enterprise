@@ -28,7 +28,7 @@ from octop.infra.setup.self_update import (
     help="Include and allow installing pre-releases (alpha / beta / rc / dev).",
 )
 def update(check: bool, yes: bool, verbose: bool, allow_prerelease: bool) -> None:
-    """Disabled for Octop Ent; use manual source upgrades."""
+    """Disabled for Octop Enterprise; use manual source upgrades."""
     if reason := self_update_disabled_reason():
         raise click.ClickException(reason)
     current = get_local_version()

@@ -1,10 +1,8 @@
-> Octop Ent 的 `octop update` 在线自更新已停用；本文中继承上游的更新命令仅作接口参考，不代表可从上游包源升级本版本。
-
 # CLI Reference
 
 This distribution supports source deployment and local builds only; follow the
 [enterprise deployment guide](../docker/enterprise/README.md). The upstream
-`pip install octop` package is not an installation method for Octop Ent.
+`pip install octop` package is not an installation method for Octop Enterprise.
 The source build registers a single Click app named `octop`.
 It is registered in `src/octop/cli/main.py`; commands are loaded
 lazily from `src/octop/cli/registry.py`.
@@ -42,7 +40,7 @@ Commands:
   run        Run octop-server in the foreground.
   service    System service lifecycle (start/stop/restart/status).
   skills     Per-agent skill enable/disable.
-  update     Disabled for Octop Ent; use manual source upgrades.
+  update     Disabled for Octop Enterprise; use manual source upgrades.
   user       User management commands.
   version    Show the installed octop version.
 ```
@@ -389,11 +387,10 @@ retention only deletes those files and never touches manual
 
 ## `octop update` (disabled)
 
-Online self-update is disabled for Octop Ent. Both `octop update` and
+Online self-update is disabled for Octop Enterprise. Both `octop update` and
 `octop update --check` stop without checking or installing upstream packages.
 Use the [manual upgrade procedure](updates.md) to build this repository’s
-source and distribute matching clients. Legacy installer internals remain in
-source for maintainers; they are not a supported update channel.
+source and distribute matching clients.
 
 ## `octop plugin`
 

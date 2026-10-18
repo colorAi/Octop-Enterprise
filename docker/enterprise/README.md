@@ -1,14 +1,14 @@
-# Octop Ent 企业部署与恢复
+# Octop Enterprise 企业部署与恢复
 
-本目录是当前源码的企业部署入口，适用于 Linux Docker Engine + Compose v2。基础单机模式继续使用 `docker/docker-compose.yml`。企业模式包含 Octop 控制面、Go 通信服务、两个 PostgreSQL 数据库和员工隔离工作区。客户端在员工电脑执行项目工具，服务器保留账号、模型授权、记忆、历史和恢复回执。
+本指南适用于 Linux Docker Engine + Compose v2。基础单机模式使用 `docker/docker-compose.yml`。企业模式包含 Octop 控制面、Go 通信服务、两个 PostgreSQL 数据库和员工隔离工作区。客户端在员工电脑执行项目工具，服务器保留账号、模型授权、记忆、历史和恢复回执。
 
-Octop Ent 首次独立发行的源码版本为 **1.0.0**，Harness 固定 **1.0.3**，数据库 schema **25**，设备协议 **2**，公司运行时协议 **1**。这些是源码契约，不代表此前的 1.0.2b6 安装包或线上实例已经更新。构建输入仅来自本仓库源码。
+本指南对应 Octop Enterprise **1.0.0**，依赖 Harness **1.0.3**，主数据库 schema **25**，设备协议 **2**，公司运行时协议 **1**。服务端镜像与客户端工具环境需使用匹配的源码和协议版本构建。
 
 ## 部署前先了解
 
-当前是**面向企业 IT 的源码部署**：Compose 管理应用、通信和 PostgreSQL 服务，脚本生成私有配置；管理员仍需准备 Docker、构建镜像、完成初始化、配置访问地址和分发客户端。尚无一键安装器、公共企业镜像、自动化完整恢复向导或完整离线服务器部署包。
+采用**面向企业 IT 的源码部署**：Compose 管理应用、通信和 PostgreSQL 服务，脚本生成私有配置；管理员准备 Docker、构建镜像、完成初始化、配置访问地址和分发客户端。安装、备份与恢复按本指南执行；离线环境需另行准备镜像与依赖。
 
-先在企业内网完成一名员工的登录、模型调用、本机任务、消息与附件验证，再扩大试用。当前没有容量压测得出的最低硬件或支持人数；根据构建内存、数据库与媒体增长和实际并发预留资源，不把本地执行等同于服务器零负载。
+先在企业内网完成一名员工的登录、模型调用、本机任务、消息与附件验证，再扩大使用。硬件与人数配额需通过实际业务负载测试确定，并为镜像构建、数据库、媒体存储和并发请求预留资源。
 
 ### 服务器准备
 
@@ -33,7 +33,7 @@ Docker daemon 无法连接时，先处理 Docker 启动或 socket 权限。默�
 
 ## 首次安装
 
-使用本项目源码包或确定的发行提交，在仓库根目录逐步执行。采用源码包时记录 `PUBLIC_SOURCE.json` 与源码包校验值；采用 Git 时记录 commit 和工作树是否干净。下列 `ent-1.0.0` 是首次发行的本地镜像标签，同一标签不要用于覆盖不同源码的正式部署。
+使用本项目源码包或确定的发行提交，在仓库根目录逐步执行。采用源码包时记录 `PUBLIC_SOURCE.json` 与源码包校验值；采用 Git 时记录 commit 和本地改动。下列 `enterprise-1.0.0` 是本指南使用的本地镜像标签；每次部署使用可追溯到对应源码的唯一标签。
 
 ### 1. 生成新的私有配置
 
@@ -50,9 +50,9 @@ sudo python3 docker/enterprise/prepare.py --data /srv/octop --env /etc/octop.env
 使用管理员编辑器修改 `/etc/octop.env`，保留已生成的密码与密钥，在原文件内将三个镜像值改为：
 
 ```dotenv
-OCTOP_BASE_IMAGE="octop:ent-1.0.0"
-OCTOP_APP_IMAGE="octop-enterprise:ent-1.0.0"
-OCTOP_IM_IMAGE="octop-im:ent-1.0.0"
+OCTOP_BASE_IMAGE="octop:enterprise-1.0.0"
+OCTOP_APP_IMAGE="octop-enterprise:enterprise-1.0.0"
+OCTOP_IM_IMAGE="octop-im:enterprise-1.0.0"
 ```
 
 默认 `OCTOP_BIND_ADDRESS="127.0.0.1"`，8088 端口只供服务器本机或本机反向代理访问，员工电脑无法直接连接。按部署场景选择：
@@ -67,7 +67,7 @@ OCTOP_IM_IMAGE="octop-im:ent-1.0.0"
 ### 3. 构建、初始化并启动
 
 ```sh
-sudo docker build -f docker/Dockerfile -t octop:ent-1.0.0 .
+sudo docker build -f docker/Dockerfile -t octop:enterprise-1.0.0 .
 sudo docker compose --env-file /etc/octop.env -f docker/enterprise/compose.yml config -q
 sudo docker compose --env-file /etc/octop.env -f docker/enterprise/compose.yml build
 sudo docker compose --env-file /etc/octop.env -f docker/enterprise/compose.yml up -d --wait postgres
@@ -97,7 +97,7 @@ curl -sS http://127.0.0.1:8088/api/health/ready
 4. 员工在桌面客户端登录后，打开左侧“设置”分组的“本地工作目录”，确认默认目录或点击“更换文件夹”选择项目。让专家读取一份样例文件并输出摘要，确认成果和历史可查看。
 5. 检查同事消息、附件与实际需要的群聊，再修改测试员工权限并核对配置通知。手动发布配置通知的入口是左侧“管理 → 应用设置”的“应用更新”标签。完整企业备份与恢复还需另做演练。
 
-这份源码不声明所有目标平台都完成实机验收；签名、公证和客户端验证范围以相应发行记录为准。
+分发客户端前，核对安装包的平台、签名、公证和设备验证记录。
 
 ### 常见问题
 
@@ -121,7 +121,7 @@ sudo docker compose --env-file /etc/octop.env -f docker/enterprise/compose.yml l
 
 密钥文件不得在重建时重新生成；改变通信身份或游标签名密钥会破坏已有身份及同步状态。企业容器的服务端隔离 worker 使用同次构建的镜像，UID/GID 1000、只读根、无网络、drop ALL capabilities、no-new-privileges，并挂载各自命名卷。服务器的 Docker socket 仅供受信任管理员维护的控制面使用，不得挂入员工 worker。
 
-本目录提供单机 Compose 运维入口，不包含高可用集群、自动扩缩容或一键灾备切换的部署方案。公网访问仍需部署方配置 HTTPS 和访问策略；源码具备远程访问能力不等于已经完成公网历史图片性能与容量验收。
+本目录提供单机 Compose 运维入口，不包含高可用集群、自动扩缩容或一键灾备切换方案。公网访问需配置 HTTPS 和访问策略，并测试历史消息、图片加载及实际并发性能。
 
 ## 配置
 
@@ -143,7 +143,7 @@ sudo docker compose --env-file /etc/octop.env -f docker/enterprise/compose.yml l
 | `OCTOP_MEDIA_HTTP_ORIGINS` | 可由环境文件覆盖；管理员批准的 HTTP 生图 origin，逗号分隔，默认空；精确匹配域名和端口，无通配符。例如显式配置 `http://image-service.example.internal:3001` |
 | `OCTOP_DEFAULT_TIMEZONE` | 可由环境文件覆盖；默认 Asia/Shanghai，用户日期和定时任务沿用服务器设置 |
 
-移动到本入口前，先将旧部署的变量、数据库和密钥映射到这些配置；本目录不自动迁移既有服务器。不要对原数据运行 `prepare.py`。
+迁移已有部署时，先核对原有环境变量、数据库和密钥与上表的对应关系；保留原数据与密钥，按下节执行升级，不运行 `prepare.py`。
 
 ## 升级与回退
 
@@ -168,7 +168,7 @@ sudo python3 docker/enterprise/backup.py --env /etc/octop.env --output /srv/back
 
 每个属于本实例的工作区卷都必须逐一提供 `--volume`（可重复参数），不能只填一个示例。通过 `docker volume inspect` 和 `docker inspect` 核实卷的 `octop.agent.id` 标签及 worker 挂载关系。确实没有任何隔离工作区才使用 `--no-sandbox-volumes`。命令拒绝旧输出目录、无标签卷、驱动自定义选项卷和数据目录内部的输出路径；不会删除任何数据。
 
-备份会暂时停止原先运行的应用、通信和指定卷关联的 worker，分别 `pg_dump -Fc` 两库，归档 app/media/secrets、部署环境和各卷，在 finally 中恢复原先运行的组件。`manifest.json` 的 `complete` 必须为 true，并核对文件 SHA-256；失败备份会保留 `complete=false`，不能用于宣称恢复保障。部署环境和备份中包含密钥，离机保存时加密并保持仅管理员可读。外部数据库、外部工作区及员工电脑项目需按其系统另外备份。
+备份会暂时停止原先运行的应用、通信和指定卷关联的 worker，分别 `pg_dump -Fc` 两库，归档 app/media/secrets、部署环境和各卷，结束时恢复原先运行的组件。`manifest.json` 的 `complete` 必须为 true，并核对文件 SHA-256；`complete=false` 表示备份未完成，不能作为完整恢复的备份。部署环境和备份中包含密钥，离机保存时加密并保持仅管理员可读。外部数据库、外部工作区及员工电脑项目需按其系统另外备份。
 
 恢复只在另一台干净主机或明确准备好的空实例中执行：
 
@@ -184,14 +184,14 @@ sudo python3 docker/enterprise/backup.py --env /etc/octop.env --output /srv/back
    ```
 
 4. 按 manifest 创建**同名**命名卷，恢复原有 `octop.agent.id` 标签。使用同版企业镜像、root 用户、无网络，将对应 tar 解到卷根；保留文件 uid/gid。不要启动 worker 直到所有卷恢复完成。
-5. 启动应用/通信，检查 readiness 和两库迁移状态，再验证真实附件、历史消息、技能下载、隔离文件和设备签名认证。记录恢复耗时、丢失窗口与验证结果；未演练不能标记“恢复验收通过”。
+5. 启动应用/通信，检查 readiness 和两库迁移状态，再验证真实附件、历史消息、技能下载、隔离文件和设备签名认证。记录恢复耗时、数据丢失窗口与验证结果，确认满足企业的恢复要求。
 
 ## 运维与容量
 
 - `/api/health` 保留兼容的存活探针；`/api/health/ready` 检查主库查询、已启用通信 `/healthz`、Docker 可达和 sandbox 镜像存在，异常返回 503。它不能替代真正执行隔离工具的验收。
 - 管理员访问 `/api/health/storage` 可查看任务/事件/检查点/写入/操作回执行数、序列化内容字符数（不是数据库物理字节数）、任务状态、技能缓存文件与字节、设备数量、身份投递积压条数与最大尝试次数。接口只读，不返回消息、路径或凭据。扫描较大的数据库可能耗时，不应作为每秒探针。
 - 保留策略：任务、检查点、操作回执和技能哈希由历史恢复引用；当前不自动过期或按时间删除。仍在运行、取消请求中或结果未知的任务尤其禁止清理。删除员工/专家/线程沿用关联清理。需要容量回收时先确认引用、完成备份和恢复验收，再设计专用管理流程，禁止直接按 mtime 删除技能缓存。
-- 在得到业务保留周期和员工规模之前，不设置可能丢数据的自动清理期限。观察实际数据库增长、PG 锁等待、消息/文件/AI 并发延迟和内存，再设配额。本次未做容量压测，不承诺支持人数。
+- 根据业务保留周期与员工规模制定清理策略；先观察数据库增长、PG 锁等待、消息/文件/AI 并发延迟和内存占用，再通过负载测试确定配额。
 - readiness 503：先查主库、通信迁移和 Docker socket 权限；技能读取失败检查 host data 路径与包目录权限。桌面进程退出显示安全异常类型与退出码，原始 stderr 不写日志，避免泄露提示词/路径/凭据。
 
 ## 定向验收与四架构交付
@@ -210,4 +210,4 @@ make check-enterprise ARGS='--section packaging'
 
 四架构解包后可用 `make check-enterprise ARGS='--section packaging --manifest-dir /path/to/unpacked'` 检查版本矩阵。支持的构建目标是 macOS arm64/amd64 和 Windows amd64/arm64；每次发行应分别记录构建与 manifest、原生工具烟测、安装/升级/卸载、签名/公证、登录/断线/撤销的结果和日期。矩阵检查与包内目标烟测不等于真实安装或签名验收，具体状态以对应发行记录为准。
 
-公开使用范围见[企业客户端指南](../../docs/enterprise-client.md)。本目录不声明已部署、已签名或所有真机已通过。
+员工操作与功能范围见[企业客户端指南](../../docs/enterprise-client.md)。
