@@ -84,7 +84,25 @@ For client builds see the [desktop instructions](desktop/README.md); for detaile
 | [Architecture](docs/architecture.md) / [API](docs/api.md) / [Communication service](services/communication/README.md) | System structure, interfaces and company messaging          |
 | [Update procedures](docs/updates_EN.md)                                                                                  | Configuration changes, server upgrades and client updates   |
 
+## Community
+
+**Octop Enterprise community group** (Chinese-language). Scan the QR code to join; the invite is refreshed periodically.
+
+<div align="center">
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/community/octop-group-dark-20261018.jpg">
+  <img src="docs/assets/community/octop-group-light-20261018.jpg" alt="Octop Enterprise community group QR code" width="300">
+</picture>
+
+</div>
+
+<sub>QR code updated 2026-10-18. Group invites expire after about 7 days; the code on this page is replaced when it is refreshed. If your scanner cannot read the dark version, switch GitHub to light mode.</sub>
+
+<!-- Community QR: refresh both images every ~7 days; see docs/assets/community/README.md. -->
+
 ## License and acknowledgments
+
 
 The application and our communication service use the [MIT License](LICENSE), retaining Octop&rsquo;s original copyright and license notices. Third-party dependencies, assets and templates retain their own terms. See [NOTICE](NOTICE_EN.md) for the public source distribution scope.
 

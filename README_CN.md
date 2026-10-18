@@ -86,7 +86,25 @@
 
 开发、API 与桌面构建类文档当前以英文维护；员工与部署文档提供中英文两版。
 
+## 交流群
+
+**Octop 企业版交流群**。扫码加入；群邀请约 7 天有效，过期后会更新。
+
+<div align="center">
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/community/octop-group-dark-20261018.jpg">
+  <img src="docs/assets/community/octop-group-light-20261018.jpg" alt="Octop 企业版交流群二维码" width="300">
+</picture>
+
+</div>
+
+<sub>二维码更新于 2026-10-18。群邀请约 7 天有效；过期后会在本页更新。深色版扫码不顺利时，可切换 GitHub 浅色主题。</sub>
+
+<!-- 交流群二维码：约每 7 天更新一次；替换 docs/assets/community 下的图片并更新本页日期。 -->
+
 ## 开源与致谢
+
 
 主项目和自有通信模块采用 [MIT License](LICENSE)，保留 Octop 的原始版权和许可声明。第三方依赖、素材与模板遵循各自许可证；公开源码的分发范围见 [NOTICE](NOTICE.md)。
 
