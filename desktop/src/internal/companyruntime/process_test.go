@@ -90,6 +90,92 @@ for line in sys.stdin:
 		t.Fatal("closed process marked alive")
 	}
 }
+
+func TestLargeImageSnapshotKeepsRuntimeResponsive(t *testing.T) {
+	python, err := exec.LookPath("python3")
+	if err != nil {
+		t.Skip("test fixture requires Python")
+	}
+	root := t.TempDir()
+	launch := filepath.Join(root, "launch.py")
+	script := `import json,sys
+for line in sys.stdin:
+ r=json.loads(line)
+ if r['method']=='start':
+  print(json.dumps({'event':'chunk','thread_id':'thread','data':{'type':'state_snapshot','data':{'image':'data:image/png;base64,'+'A'*(9*1024*1024)}}}),flush=True)
+ print(json.dumps({'id':r['id'],'result':{'method':r['method']}}),flush=True)
+ if r['method']=='cancel':
+  print(json.dumps({'event':'done','thread_id':'thread','status':'cancelled'}),flush=True)
+`
+	if err := os.WriteFile(launch, []byte(script), 0600); err != nil {
+		t.Fatal(err)
+	}
+	events := make(chan Message, 4)
+	p, err := Start(python, launch, root, os.Environ(), func(m Message) { events <- m })
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	for _, method := range []string{"start", "status", "steer", "cancel"} {
+		if _, err := p.Request(ctx, method, nil); err != nil {
+			t.Fatalf("%s after large image snapshot: %v", method, err)
+		}
+	}
+	select {
+	case m := <-events:
+		if m.Event != "chunk" || len(m.Data) < 9*1024*1024 {
+			t.Fatal("large snapshot was lost or truncated")
+		}
+	case <-ctx.Done():
+		t.Fatal("missing large snapshot")
+	}
+	select {
+	case m := <-events:
+		if m.Event != "done" || m.Status != "cancelled" {
+			t.Fatalf("missing cancellation confirmation: %+v", m)
+		}
+	case <-ctx.Done():
+		t.Fatal("cancel did not finish")
+	}
+}
+
+func TestBrokenRuntimeOutputTerminatesWorker(t *testing.T) {
+	python, err := exec.LookPath("python3")
+	if err != nil {
+		t.Skip("test fixture requires Python")
+	}
+	for _, output := range []string{"!private-prompt-and-token", strings.Repeat("x", 9*1024*1024)} {
+		t.Run(fmtID(uint64(len(output))), func(t *testing.T) {
+			root := t.TempDir()
+			launch := filepath.Join(root, "launch.py")
+			encoded, _ := json.Marshal(output)
+			script := "import sys,time\nsys.stdout.write(" + string(encoded) + "+'\\n')\nsys.stdout.flush()\ntime.sleep(60)\n"
+			if err := os.WriteFile(launch, []byte(script), 0600); err != nil {
+				t.Fatal(err)
+			}
+			events := make(chan Message, 1)
+			p, err := Start(python, launch, root, os.Environ(), func(m Message) { events <- m })
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer p.Close()
+			select {
+			case m := <-events:
+				if m.Event != "runtime_exit" || m.Status != "unknown" || !strings.Contains(m.Error, "ipc_decode_error") {
+					t.Fatalf("missing output failure diagnostic: %+v", m)
+				}
+				if strings.Contains(m.Error, "private-prompt-and-token") || p.Alive() {
+					t.Fatal("protocol failure leaked content or left worker alive")
+				}
+			case <-time.After(4 * time.Second):
+				t.Fatal("unreadable output left worker blocked instead of reporting exit")
+			}
+		})
+	}
+}
+
 func TestEnvironmentIsolatesPythonAndOctopHome(t *testing.T) {
 	t.Setenv("PYTHONPATH", "foreign")
 	t.Setenv("PYTHONHOME", "foreign")

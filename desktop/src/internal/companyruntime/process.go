@@ -3,7 +3,6 @@
 package companyruntime
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -64,12 +63,20 @@ func Start(python, launch, dir string, env []string, event func(Message)) (*Proc
 	}
 	p := &Process{cmd: cmd, stdin: stdin, pending: map[string]chan Message{}, done: make(chan struct{})}
 	go func() {
-		scanner := bufio.NewScanner(stdout)
-		scanner.Buffer(make([]byte, 65536), 8*1024*1024)
-		for scanner.Scan() {
+		// Image tool results accumulate in state snapshots and can exceed a
+		// Scanner token limit. Keep consuming the trusted worker's JSON stream.
+		decoder := json.NewDecoder(stdout)
+		outputFailure := ""
+		for {
 			var m Message
-			if json.Unmarshal(scanner.Bytes(), &m) != nil {
-				continue
+			if err := decoder.Decode(&m); err != nil {
+				if !errors.Is(err, io.EOF) {
+					// Decoder errors can include private payload bytes; expose only
+					// the category. Stop the writer before waiting for its exit.
+					outputFailure = "ipc_decode_error"
+				}
+				p.Close()
+				break
 			}
 			if m.ID != "" {
 				p.mu.Lock()
@@ -86,7 +93,11 @@ func Start(python, launch, dir string, env []string, event func(Message)) (*Proc
 			}
 		}
 		_ = cmd.Wait()
-		diagnostic := fmt.Sprintf("%s (exit=%d)", diagnostics.category(), cmd.ProcessState.ExitCode())
+		category := diagnostics.category()
+		if outputFailure != "" {
+			category = outputFailure
+		}
+		diagnostic := fmt.Sprintf("%s (exit=%d)", category, cmd.ProcessState.ExitCode())
 		close(p.done)
 		if event != nil {
 			event(Message{Event: "runtime_exit", Status: "unknown", Error: "本地运行时已退出；请核对任务结果后重新连接，不会自动重做已执行操作。诊断：" + diagnostic})

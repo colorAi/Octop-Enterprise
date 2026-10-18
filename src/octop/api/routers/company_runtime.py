@@ -48,9 +48,6 @@ async def service(request: Request, server: Any = Depends(get_server)) -> Compan
     )
     if identity is None:
         raise denied("device_session_expired", 401)
-    # Bound all JSON bodies, including chunked requests, before Pydantic consumes them.
-    if request.method == "POST" and len(await request.body()) > 16 * 1024 * 1024:
-        raise denied("request_too_large", 413)
     return CompanyRuntimeService(server, identity)
 
 
