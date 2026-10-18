@@ -1,0 +1,108 @@
+.summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-bottom: 18px;
+  color: var(--fn-text-secondary, #667085);
+  font-size: 13px;
+}
+.announcement {
+  border: 1px solid var(--fn-border-primary, #eaecf0);
+  background: var(--fn-bg-tertiary, #f8fafc);
+  border-radius: 12px;
+  padding: 16px;
+  margin-bottom: 24px;
+  h3 {
+    margin: 0 0 8px;
+    font-size: 13px;
+    font-weight: 600;
+  }
+  p {
+    margin: 0;
+    color: var(--fn-text-secondary, #667085);
+    line-height: 1.7;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+}
+.rosterHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 6px;
+  h3 {
+    margin: 0;
+    font-size: 14px;
+    font-weight: 600;
+  }
+}
+.invitation {
+  display: grid;
+  gap: 10px;
+  margin: 14px 0;
+}
+.member {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-width: 0;
+}
+.memberIdentity {
+  flex: 1;
+  min-width: 0;
+}
+.memberName {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  overflow-wrap: anywhere;
+}
+.memberSource {
+  margin-top: 4px;
+  color: var(--fn-text-tertiary, #98a2b3);
+  font-size: 12px;
+}
+.settings {
+  margin-top: 20px;
+  :global(.ant-collapse-header) {
+    padding-left: 0 !important;
+    padding-right: 0 !important;
+  }
+  :global(.ant-collapse-content-box) {
+    padding: 0 0 18px !important;
+  }
+}
+.form {
+  display: grid;
+  gap: 14px;
+  label {
+    display: grid;
+    gap: 6px;
+    font-size: 13px;
+  }
+}
+.switchRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  font-size: 13px;
+}
+.hint {
+  color: var(--fn-text-secondary, #667085);
+  font-size: 12px;
+  line-height: 1.6;
+  margin: 0;
+}
+.footer {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  border-top: 1px solid var(--fn-border-primary, #eaecf0);
+  padding-top: 16px;
+  margin-top: 16px;
+}

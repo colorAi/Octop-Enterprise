@@ -1,0 +1,139 @@
+{
+  "source": "Miaox (author-owned project)",
+  "head": "5107297f107b87e12fe2287c3c1b8b58cd842457",
+  "files": [
+    {
+      "path": "internal/idgen/idgen.go",
+      "sha256": "f1904252f62b1dc74a4ddb64197063fa211be83a3fbf44a0311448636dfca407"
+    },
+    {
+      "path": "internal/httpx/keyset.go",
+      "sha256": "56f24002abdca6cb2e7b6e461652b86bb3be8468970257ef16c786200faeac99"
+    },
+    {
+      "path": "internal/httpx/response.go",
+      "sha256": "1b8ddf00116d8eb6cd38690d42c4347c36262b32fd6be8b332024099c290dd28"
+    },
+    {
+      "path": "internal/httpx/cursor.go",
+      "sha256": "5390ec285dcdedfcf32f48c7c8900940603edb56ed0f85cd6bbf53374ea9672e"
+    },
+    {
+      "path": "internal/httpx/errors.go",
+      "sha256": "356c370ad8244d32d80b9956b7e5afa8bb63f67703b304e69db3f1b93a706304"
+    },
+    {
+      "path": "internal/observability/log.go",
+      "sha256": "2d72a025050af3bd5c4aae2b99f59f20ba205e4dc66e366c098132b4d5cf3165"
+    },
+    {
+      "path": "internal/mediasvc/mediasvc.go",
+      "sha256": "5d485978741411f6050ad21ba28cac3a57177256b56ee82e26dee5c359811955"
+    },
+    {
+      "path": "internal/mediasvc/normalize.go",
+      "sha256": "64943406562032d9a8dc2dc7d17a9df6d9a5dd39e97675c84b7c2b903023e1ca"
+    },
+    {
+      "path": "internal/mediasvc/normalize_test.go",
+      "sha256": "c0aa7c3c3ab071884a91773319eab63cd5f0efa8eda779cab9791aeadb86de41"
+    },
+    {
+      "path": "internal/store/store_test.go",
+      "sha256": "4d38fe315a4a1f7f0411592d46b17ef798d22fea1619541c074d36407f604a43"
+    },
+    {
+      "path": "internal/store/store.go",
+      "sha256": "1770c43e87179468580993cce4e61f6c56b646b8054ae8998efe94d4346f4413"
+    },
+    {
+      "path": "internal/store/write_admission_test.go",
+      "sha256": "80b8ec72a0656696f1357ee8ad1f950ce82ae2190cd9bc3357c599bc9285548a"
+    },
+    {
+      "path": "internal/store/write_admission.go",
+      "sha256": "3f0416a9dfeac5ee262730a4d6a77e4f4c0a55b9a3751bb63493cc1efcc4c82b"
+    },
+    {
+      "path": "internal/jobs/jobs.go",
+      "sha256": "68930d6d2de7abdde725eba3e2b13da39e778b5aa2e9152abf1f6af2149645e8"
+    },
+    {
+      "path": "internal/chat/chat.go",
+      "sha256": "b3c07aacb967cb606604a563f44900e5024f4a79d89a376faef97293937a3333"
+    },
+    {
+      "path": "internal/groups/groups.go",
+      "sha256": "55bf6ffc7b3d75d34cc2c2c95e5bfedd585f96c49f2cd1b7f46ce34f5a1c7c7b"
+    },
+    {
+      "path": "internal/syncsrv/syncsrv.go",
+      "sha256": "af77e64fc885c6ddc488090cca1cea9083077f7b45d2280a44e52e43dadb00f3"
+    },
+    {
+      "path": "internal/syncsrv/snapshot_state.go",
+      "sha256": "8697b8e874021a17dc422c8e795d347079792210a4960f317f2cc5fd69435433"
+    },
+    {
+      "path": "internal/syncsrv/cursor_test.go",
+      "sha256": "deaa85528e186b93f08b0a760553c1a0375658145d2277c89ff1cb6dcaf77fe8"
+    },
+    {
+      "path": "internal/realtime/hub.go",
+      "sha256": "3a42e3c5bc464782f937e90fbd0962bb9d64fb85784d116cbea4987b1b603f74"
+    },
+    {
+      "path": "internal/testdb/testdb.go",
+      "sha256": "c8ab527cc2edf572adc8acea34436e168c12bc6c96cf366d05ff05b57ae5df0f"
+    },
+    {
+      "path": "go.mod",
+      "sha256": "014f540fe8d2df25f553c065f36c944c56a170303edbd6ffbdfeba6b2a0c82bc"
+    },
+    {
+      "path": "go.sum",
+      "sha256": "4753638c9c90050203cf6af933a4899935fdbaad6c8c845354305effb8b718e6"
+    },
+    {
+      "path": "migrations/embed.go",
+      "sha256": "355efe760cdd10228ac3d382e950415d9430349296c335e6ccf293d4411792e1"
+    },
+    {
+      "path": "migrations/0003_conversations.sql",
+      "sha256": "99043dcc13ea8a81301bbfbc6508c6557f563b0998564dadb83486ac5a068efa"
+    },
+    {
+      "path": "migrations/0004_media.sql",
+      "sha256": "d13ac66962a2c885a889bb33fc93f339e2df6c0600137fa2702559bf24c9e41e"
+    },
+    {
+      "path": "migrations/0005_messages.sql",
+      "sha256": "106611b72551c337a0afd0e465a7ce90604319b25bad6308ba704d2dcc7a7e90"
+    },
+    {
+      "path": "migrations/0006_sync.sql",
+      "sha256": "eaea30ade8ea083d74c66bddb801939a9f69c31a25439170e83f30a23aff79c3"
+    },
+    {
+      "path": "migrations/0007_jobs_push.sql",
+      "sha256": "15a7d215bd47086b74310ef225f93481ee5452b3e3cb8a0a5193bd38bf3bd798"
+    },
+    {
+      "path": "migrations/0010_jobs_instance.sql",
+      "sha256": "65d4bd815772bcbff8692a651a260b1f6d846ca6cf5193644e7635f7c001dcb1"
+    },
+    {
+      "path": "migrations/0012_sync_min_seq.sql",
+      "sha256": "ecc796528f87cb69ffe75987e8afb53810cf52fd00d971177636422a370b09e6"
+    },
+    {
+      "path": "migrations/0013_operation_receipts.sql",
+      "sha256": "323953c8bcec0adf7bcb742ced6d17c4a0dc25a3c86307165603f2a620017ce1"
+    }
+  ],
+  "license_files": [
+    "LICENSE"
+  ],
+  "license": "MIT",
+  "license_note": "The rights holder authorized this communication module for MIT release with Octop Ent. File hashes describe the initial extraction, not later modifications."
+}

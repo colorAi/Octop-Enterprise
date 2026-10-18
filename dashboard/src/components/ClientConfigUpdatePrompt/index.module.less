@@ -1,0 +1,44 @@
+.banner {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  flex-shrink: 0;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--fn-border-primary);
+  background: var(--fn-bg-elevated);
+  color: var(--fn-text-primary);
+}
+.copy {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  flex: 1;
+  min-width: 180px;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+  span {
+    color: var(--fn-text-secondary);
+  }
+}
+.primary,
+.later {
+  border-radius: 8px;
+  padding: 7px 12px;
+  font-size: 12px;
+  cursor: pointer;
+  &:disabled {
+    opacity: 0.6;
+    cursor: default;
+  }
+}
+.primary {
+  border: 1px solid transparent;
+  background: var(--fn-color-brand);
+  color: #fff;
+}
+.later {
+  border: 1px solid var(--fn-border-primary);
+  background: transparent;
+  color: var(--fn-text-secondary);
+}

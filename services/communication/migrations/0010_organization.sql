@@ -1,0 +1,5 @@
+CREATE TABLE departments(id text PRIMARY KEY,name text NOT NULL CHECK(length(name) BETWEEN 1 AND 100),parent_id text REFERENCES departments(id),sort_order int NOT NULL DEFAULT 0,enabled bool NOT NULL DEFAULT true,created_at timestamptz NOT NULL DEFAULT now());
+CREATE TABLE department_members(department_id text NOT NULL REFERENCES departments(id),user_id text NOT NULL REFERENCES users(id),is_primary bool NOT NULL DEFAULT true,joined_at timestamptz NOT NULL DEFAULT now(),PRIMARY KEY(department_id,user_id));
+CREATE UNIQUE INDEX department_members_primary ON department_members(user_id) WHERE is_primary;
+CREATE TABLE department_groups(department_id text PRIMARY KEY REFERENCES departments(id),conversation_id text NOT NULL UNIQUE REFERENCES conversations(id));
+CREATE TABLE organization_audit(id text PRIMARY KEY,actor_id text NOT NULL,action text NOT NULL,object_id text NOT NULL,before_data jsonb,after_data jsonb,request_id text NOT NULL DEFAULT '',created_at timestamptz NOT NULL DEFAULT now());

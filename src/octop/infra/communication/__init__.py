@@ -1,0 +1,1 @@
+"""Internal departmental communication bridge."""

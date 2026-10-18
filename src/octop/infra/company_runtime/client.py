@@ -1,0 +1,240 @@
+"""Native-only company transport; no credentials in URLs, logs or projects."""
+
+from __future__ import annotations
+
+import base64
+import ssl
+from collections.abc import AsyncIterator, Sequence
+from typing import Any, cast
+from urllib.parse import urlsplit
+
+import httpx
+from langchain_core.language_models import BaseChatModel
+from langchain_core.messages import BaseMessageChunk, messages_from_dict, messages_to_dict
+from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResult
+from langchain_core.utils.function_calling import convert_to_openai_tool
+from langgraph.checkpoint.base import WRITES_IDX_MAP, BaseCheckpointSaver, CheckpointTuple
+from pydantic import ConfigDict, Field
+
+
+class CompanyServiceError(RuntimeError):
+    def __init__(self, reason: str, status: int) -> None:
+        super().__init__(reason)
+        self.status = status
+
+
+class CompanyClient:
+    def __init__(self, base: str, credential: str, *, transport: Any = None) -> None:
+        url = urlsplit(base)
+        if (
+            url.scheme not in {"http", "https"}
+            or not url.hostname
+            or url.username
+            or url.password
+            or url.query
+            or url.fragment
+            or url.path not in {"", "/"}
+        ):
+            raise ValueError("invalid_company_origin")
+        tls_context: ssl.SSLContext
+        try:
+            import truststore
+
+            tls_context = truststore.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        except ImportError:
+            tls_context = ssl.create_default_context()
+        self.http = httpx.AsyncClient(
+            base_url=base.rstrip("/") + "/api/company-runtime/",
+            headers={"X-Octop-Device-Credential": credential},
+            timeout=httpx.Timeout(120, connect=10),
+            follow_redirects=False,
+            trust_env=False,
+            transport=transport,
+            verify=tls_context,
+        )
+
+    async def request(self, path: str, body: dict[str, Any] | None = None) -> Any:
+        timeout = httpx.Timeout(900, connect=10) if path.endswith("/images") else self.http.timeout
+        response = await self.http.request(
+            "GET" if body is None else "POST", path, json=body, timeout=timeout
+        )
+        if response.is_error:
+            reason = f"company_service_{response.status_code}"
+            try:
+                data = response.json()
+                reason = data.get("error", {}).get("details", {}).get("reason", reason)
+            except (ValueError, AttributeError):
+                pass
+            raise CompanyServiceError(reason, response.status_code)
+        response.raise_for_status()
+        return response.json()
+
+    async def close(self) -> None:
+        await self.http.aclose()
+
+
+class CompanyChatModel(BaseChatModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+    client: Any = Field(exclude=True)
+    task_id: str
+    model_ref: str
+
+    @property
+    def _llm_type(self) -> str:
+        return "octop-company"
+
+    def _generate(self, *args: Any, **kwargs: Any) -> Any:
+        raise RuntimeError("Company runtime requires asynchronous model calls")
+
+    def bind_tools(self, tools: Sequence[Any], *, tool_choice: Any = None, **kwargs: Any) -> Any:
+        return self.bind(tools=[convert_to_openai_tool(tool) for tool in tools])
+
+    async def _astream(
+        self, messages: Any, stop: Any = None, run_manager: Any = None, **kwargs: Any
+    ) -> AsyncIterator[ChatGenerationChunk]:
+        body = {
+            "model": self.model_ref,
+            "messages": messages_to_dict(messages),
+            "tools": kwargs.get("tools", []),
+        }
+        async with self.client.http.stream(
+            "POST", f"tasks/{self.task_id}/model", json=body
+        ) as response:
+            response.raise_for_status()
+            async for line in response.aiter_lines():
+                if not line:
+                    continue
+                import json
+
+                value = json.loads(line)
+                if "error" in value:
+                    raise RuntimeError(value["error"])
+                yield ChatGenerationChunk(
+                    message=cast(BaseMessageChunk, messages_from_dict([value])[0])
+                )
+
+    async def _agenerate(
+        self, messages: Any, stop: Any = None, run_manager: Any = None, **kwargs: Any
+    ) -> ChatResult:
+        combined = None
+        async for chunk in self._astream(messages, stop, run_manager, **kwargs):
+            combined = chunk if combined is None else combined + chunk
+        if combined is None:
+            raise RuntimeError("company_model_empty_response")
+        from langchain_core.messages import message_chunk_to_message
+
+        return ChatResult(
+            generations=[ChatGeneration(message=message_chunk_to_message(combined.message))]
+        )
+
+
+class RemoteCheckpointSaver(BaseCheckpointSaver[int]):
+    """All official graph state is remote; serialization never enables pickle."""
+
+    def __init__(self, client: CompanyClient, task_id: str, thread_id: str) -> None:
+        super().__init__()
+        self.client, self.task_id, self.thread_id = client, task_id, thread_id
+
+    def pack(self, value: Any) -> list[str]:
+        kind, data = self.serde.dumps_typed(value)
+        if kind == "pickle":
+            raise ValueError("pickle_checkpoint_forbidden")
+        return [kind, base64.b64encode(data).decode()]
+
+    def unpack(self, value: list[str]) -> Any:
+        if value[0] == "pickle":
+            raise ValueError("pickle_checkpoint_forbidden")
+        return self.serde.loads_typed((value[0], base64.b64decode(value[1], validate=True)))
+
+    def scope(self, config: Any) -> dict[str, Any]:
+        cfg = config["configurable"]
+        if cfg["thread_id"] != self.thread_id:
+            raise ValueError("checkpoint_thread_mismatch")
+        return {
+            "namespace": cfg.get("checkpoint_ns", ""),
+            "checkpoint_id": cfg.get("checkpoint_id"),
+        }
+
+    async def aget_tuple(self, config: Any) -> Any:
+        value = await self.client.request(
+            f"tasks/{self.task_id}/checkpoint/get", self.scope(config)
+        )
+        if value is None:
+            return None
+        return CheckpointTuple(
+            config=value["config"],
+            checkpoint=self.unpack(value["checkpoint"]),
+            metadata=self.unpack(value["metadata"]),
+            parent_config=value.get("parent_config"),
+            pending_writes=[tuple(self.unpack(w)) for w in value["pending_writes"]],
+        )
+
+    async def aput(self, config: Any, checkpoint: Any, metadata: Any, new_versions: Any) -> Any:
+        scope = self.scope(config)
+        result = {
+            "configurable": {
+                "thread_id": self.thread_id,
+                "checkpoint_ns": scope["namespace"],
+                "checkpoint_id": checkpoint["id"],
+            }
+        }
+        payload = {
+            "config": result,
+            "checkpoint": self.pack(checkpoint),
+            "metadata": self.pack(metadata),
+            "parent_config": {
+                "configurable": {
+                    "thread_id": self.thread_id,
+                    "checkpoint_ns": scope["namespace"],
+                    "checkpoint_id": scope["checkpoint_id"],
+                }
+            }
+            if scope["checkpoint_id"]
+            else None,
+        }
+        await self.client.request(
+            f"tasks/{self.task_id}/checkpoint/put",
+            {
+                "namespace": scope["namespace"],
+                "checkpoint_id": checkpoint["id"],
+                "payload": payload,
+            },
+        )
+        return result
+
+    async def aput_writes(
+        self, config: Any, writes: Any, task_id: str, task_path: str = ""
+    ) -> None:
+        await self.client.request(
+            f"tasks/{self.task_id}/checkpoint/writes",
+            {
+                **self.scope(config),
+                "task_key": task_id,
+                "writes": [
+                    {
+                        "idx": WRITES_IDX_MAP.get(channel, i),
+                        "value": self.pack([task_id, channel, value]),
+                    }
+                    for i, (channel, value) in enumerate(writes)
+                ],
+            },
+        )
+
+    async def alist(
+        self, config: Any, *, filter: Any = None, before: Any = None, limit: Any = None
+    ) -> AsyncIterator[Any]:
+        # Follow parent links, bounded by the caller. No unrelated threads exposed.
+        current = config
+        count = 0
+        while current and (limit is None or count < limit):
+            item = await self.aget_tuple(current)
+            if item is None:
+                break
+            if (
+                not before
+                or item.config["configurable"]["checkpoint_id"]
+                < before["configurable"]["checkpoint_id"]
+            ) and (not filter or all(item.metadata.get(k) == v for k, v in filter.items())):
+                yield item
+                count += 1
+            current = item.parent_config

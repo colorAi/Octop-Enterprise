@@ -1,0 +1,239 @@
+import { describe, expect, it } from "vitest";
+import { convertHistoryMessages } from "./useChat";
+
+describe("history token usage", () => {
+  it("restores desktop image receipts without constructing a server media URL", () => {
+    const path = "C:\\work\\inbound\\image.png";
+    const sha256 = "a".repeat(64);
+    const messages = convertHistoryMessages(
+      [
+        {
+          role: "user",
+          id: "desktop-user",
+          content: `Edit this\n\n[file: ${path}]`,
+          inbound_attachments: [
+            {
+              workspace_path: path,
+              filename: "image.png",
+              media_type: "image/png",
+              kind: "image",
+              execution_location: "desktop",
+              size: 42,
+              sha256,
+            },
+          ],
+        },
+      ],
+      "agent_1",
+    );
+    expect(messages[0].attachments).toEqual([
+      expect.objectContaining({
+        url: "",
+        workspacePath: path,
+        kind: "image",
+        localFile: { path, size: 42, sha256 },
+      }),
+    ]);
+  });
+
+  it("does not turn incomplete desktop attachment receipts into server attachments", () => {
+    const messages = convertHistoryMessages(
+      [
+        {
+          role: "user",
+          content: "Edit",
+          inbound_attachments: [
+            {
+              workspace_path: "C:\\work\\image.png",
+              filename: "image.png",
+              execution_location: "desktop",
+            },
+          ],
+        },
+      ],
+      "agent_1",
+    );
+    expect(messages[0].attachments).toBeUndefined();
+  });
+
+  it("normalizes provider cache details and rolls up every model call", () => {
+    const messages = convertHistoryMessages([
+      { role: "user", content: "hello", id: "u1" },
+      {
+        role: "assistant",
+        content: "working",
+        id: "a1",
+        usage: {
+          input_tokens: 100,
+          output_tokens: 5,
+          input_token_details: { cache_read: 70 },
+        },
+      },
+      {
+        role: "assistant",
+        content: "done",
+        id: "a2",
+        usage: {
+          input_tokens: 120,
+          output_tokens: 6,
+          input_token_details: { cache_read: 90 },
+          output_token_details: { reasoning: 2 },
+        },
+      },
+    ]);
+
+    expect(messages[1]?.usage).toBeUndefined();
+    expect(messages[2]?.usage).toMatchObject({
+      input_tokens: 220,
+      uncached_input_tokens: 60,
+      cache_read_tokens: 160,
+      cache_write_tokens: 0,
+      output_tokens: 11,
+      reasoning_tokens: 2,
+      total_tokens: 231,
+      model_calls: 2,
+      last_input_tokens: 120,
+    });
+  });
+
+  it("maps inbound_attachments from the history API into gallery attachments", () => {
+    const messages = convertHistoryMessages(
+      [
+        {
+          role: "user",
+          content: [{ type: "text", text: "这图是啥" }],
+          id: "u1",
+          inbound_attachments: [
+            {
+              filename: "1787277960_baidu_map.png",
+              media_type: "image/png",
+              kind: "image",
+              workspace_path: "inbound/1787277960_baidu_map.png",
+            },
+          ],
+        },
+      ],
+      "agent_1",
+    );
+    expect(messages).toHaveLength(1);
+    expect(messages[0]?.content).toBe("这图是啥");
+    expect(messages[0]?.attachments?.[0]).toMatchObject({
+      workspacePath: "inbound/1787277960_baidu_map.png",
+      kind: "image",
+    });
+    expect(messages[0]?.attachments?.[0]?.url).toContain(
+      "/api/agents/agent_1/",
+    );
+  });
+
+  it("keeps a team member speaker on the history bubble", () => {
+    const messages = convertHistoryMessages([
+      { role: "user", content: "ask the doctor", id: "u1" },
+      { role: "assistant", content: "I will ask", id: "h1" },
+      {
+        role: "assistant",
+        content: "please rest",
+        id: "m1",
+        agent_id: "doctor",
+      },
+      {
+        role: "assistant",
+        content: "that is the wrap-up",
+        id: "w1",
+        agent_id: "host",
+        team_wrapup: true,
+      },
+    ]);
+    expect(messages[1]?.speakerAgentId).toBeUndefined();
+    expect(messages[2]?.speakerAgentId).toBe("doctor");
+    expect(messages[3]?.teamWrapup).toBe(true);
+    expect(messages[3]?.speakerAgentId).toBe("host");
+  });
+
+  it("rewrites peer team speakers onto local Bridge shadow ids", () => {
+    const room = "bridge:cid:host";
+    const messages = convertHistoryMessages(
+      [
+        { role: "user", content: "ask the doctor", id: "u1" },
+        {
+          role: "assistant",
+          content: "please rest",
+          id: "m1",
+          agent_id: "doctor",
+        },
+        {
+          role: "assistant",
+          content: "wrap",
+          id: "w1",
+          agent_id: "host",
+        },
+      ],
+      room,
+    );
+    expect(messages[1]?.speakerAgentId).toBe("bridge:cid:doctor");
+    expect(messages[2]?.speakerAgentId).toBe("bridge:cid:host");
+  });
+
+  it("maps stamped edited_files onto history bubbles for the edit card", () => {
+    const messages = convertHistoryMessages([
+      { role: "user", content: "write a plan", id: "u1" },
+      {
+        role: "assistant",
+        content: "done",
+        id: "m1",
+        agent_id: "doctor",
+        edited_files: ["notes/plan.md", ""],
+      },
+    ]);
+    expect(messages[1]?.editedFiles).toEqual(["notes/plan.md"]);
+    expect(messages[1]?.speakerAgentId).toBe("doctor");
+  });
+
+  it("maps persisted stream errors to assistant error bubbles", () => {
+    const messages = convertHistoryMessages([
+      { role: "user", content: "continue this", id: "u1" },
+      { role: "assistant", content: "partial answer", id: "a1" },
+      {
+        role: "assistant",
+        content: "模型服务返回余额或额度不足。",
+        id: "a2",
+        status: "error",
+        error_code: "TOKEN_QUOTA_EXCEEDED",
+      },
+    ]);
+
+    expect(messages).toHaveLength(3);
+    expect(messages[1]?.content).toBe("partial answer");
+    expect(messages[1]?.status).toBe("done");
+    expect(messages[2]?.status).toBe("error");
+    expect(messages[2]?.errorInfo).toMatchObject({
+      code: "TOKEN_QUOTA_EXCEEDED",
+      source: "history",
+    });
+  });
+
+  it("promotes an unanswered ask_user_question tool call into a pending card", () => {
+    const messages = convertHistoryMessages([
+      { role: "user", content: "help me choose", id: "u1" },
+      {
+        role: "assistant",
+        id: "a1",
+        content: [
+          {
+            type: "tool_use",
+            name: "ask_user_question",
+            id: "call-1",
+            input: {
+              questions: [{ question: "Which database?", header: "Storage" }],
+            },
+          },
+        ],
+      },
+    ]);
+    expect(messages[1]?.hitlData?.status).toBe("pending");
+    expect(messages[1]?.hitlData?.action_requests?.[0]?.name).toBe(
+      "ask_user_question",
+    );
+    expect(messages[1]?.status).toBe("done");
+  });
+});

@@ -1,0 +1,102 @@
+.edge {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 16px;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: auto;
+
+  &:hover {
+    .btn {
+      opacity: 1;
+      transform: translateY(-50%) scale(1);
+    }
+
+    .line {
+      background: var(--fn-color-brand);
+      opacity: 0.55;
+    }
+  }
+}
+
+.edgeEnd {
+  right: -8px;
+}
+
+.edgeStart {
+  left: -8px;
+}
+
+.edgeCollapsed {
+  /* Keep a hit target when the panel is gone */
+  width: 12px;
+}
+
+.line {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 1px;
+  transform: translateX(-50%);
+  background: var(--fn-chat-divider, var(--fn-border-primary));
+  opacity: 1;
+  transition:
+    background 0.15s ease,
+    opacity 0.15s ease;
+  pointer-events: none;
+}
+
+.btn {
+  position: absolute;
+  top: 50%;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 36px;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  color: var(--fn-text-tertiary);
+  box-shadow: none;
+  cursor: pointer;
+  opacity: 0;
+  transform: translateY(-50%) scale(0.96);
+  transition:
+    opacity 0.15s ease,
+    transform 0.15s ease,
+    color 0.15s ease;
+  padding: 0;
+
+  &:hover {
+    color: var(--fn-text-primary);
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--fn-color-brand);
+    outline-offset: 1px;
+    opacity: 1;
+  }
+}
+
+.chevron {
+  display: block;
+  flex-shrink: 0;
+}
+
+/* Expanded: collapse button sits to the left of the vertical line */
+.edgeExpanded .btn {
+  right: calc(50% + 1px);
+  left: auto;
+}
+
+/* Collapsed: expand button sits to the right of the vertical line */
+.edgeCollapsed .btn {
+  left: calc(50% + 1px);
+  right: auto;
+}

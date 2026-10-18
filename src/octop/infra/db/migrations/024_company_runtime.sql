@@ -1,0 +1,57 @@
+-- Additive: existing accounts, experts, messages and device protocol stay intact.
+CREATE TABLE IF NOT EXISTS company_runtime_threads (
+    thread_id TEXT PRIMARY KEY REFERENCES threads(thread_id) ON DELETE CASCADE,
+    owner_user_id INTEGER NOT NULL REFERENCES users(id),
+    agent_id TEXT NOT NULL REFERENCES agents(agent_id),
+    device_id TEXT NOT NULL,
+    project_name TEXT NOT NULL,
+    installation_hash TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS company_runtime_tasks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id TEXT NOT NULL UNIQUE,
+    thread_id TEXT NOT NULL REFERENCES company_runtime_threads(thread_id) ON DELETE CASCADE,
+    device_id TEXT NOT NULL,
+    status TEXT NOT NULL,
+    request_json TEXT NOT NULL,
+    expert_json TEXT NOT NULL,
+    recovery_hash TEXT NOT NULL,
+    started_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS company_runtime_active_thread ON company_runtime_tasks(thread_id)
+    WHERE status IN ('running','cancel_requested','unknown');
+CREATE TABLE IF NOT EXISTS company_runtime_events (
+    task_id TEXT NOT NULL REFERENCES company_runtime_tasks(task_id) ON DELETE CASCADE,
+    event_id TEXT NOT NULL,
+    seq INTEGER NOT NULL,
+    payload TEXT NOT NULL,
+    PRIMARY KEY(task_id,event_id),
+    UNIQUE(task_id,seq)
+);
+CREATE TABLE IF NOT EXISTS company_runtime_checkpoints (
+    thread_id TEXT NOT NULL REFERENCES company_runtime_threads(thread_id) ON DELETE CASCADE,
+    namespace TEXT NOT NULL,
+    checkpoint_id TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    PRIMARY KEY(thread_id,namespace,checkpoint_id)
+);
+CREATE TABLE IF NOT EXISTS company_runtime_writes (
+    thread_id TEXT NOT NULL REFERENCES company_runtime_threads(thread_id) ON DELETE CASCADE,
+    namespace TEXT NOT NULL,
+    checkpoint_id TEXT NOT NULL,
+    task_key TEXT NOT NULL,
+    idx INTEGER NOT NULL,
+    payload TEXT NOT NULL,
+    PRIMARY KEY(thread_id,namespace,checkpoint_id,task_key,idx)
+);
+CREATE TABLE IF NOT EXISTS company_runtime_operations (
+    task_id TEXT NOT NULL REFERENCES company_runtime_tasks(task_id) ON DELETE CASCADE,
+    operation_id TEXT NOT NULL,
+    request_hash TEXT NOT NULL,
+    status TEXT NOT NULL,
+    result_json TEXT,
+    PRIMARY KEY(task_id,operation_id)
+);
+UPDATE _schema_version SET version = 24;

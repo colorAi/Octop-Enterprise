@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="zh">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'"
+    />
+    <title>Octop company device</title>
+    <link rel="stylesheet" href="/company.css" />
+  </head>
+  <body>
+    <main>
+      <p class="eyebrow">OCTOP · COMPANY</p>
+      <h1 id="title">本机文件授权</h1>
+      <p id="intro">
+        先在主窗口登录，再在这里连接设备并选择允许访问的目录。
+      </p>
+      <p id="server"></p>
+      <p role="alert" id="error"></p>
+      <details id="device-panel" open>
+        <summary id="device-title">本机文件与设备授权</summary>
+        <p id="pair-note">
+          普通聊天登录后即可使用。操作本机文件时，在公司界面“我的设备”中生成配对码，连接后再选择目录授权。
+        </p>
+        <label id="code-label" for="code">一次性配对码</label>
+        <input
+          id="code"
+          type="password"
+          autocomplete="off"
+          spellcheck="false"
+          placeholder="octop-pair.…"
+        />
+        <div class="actions">
+          <button id="pair">连接设备</button
+          ><button id="disconnect" class="secondary">断开设备</button>
+        </div>
+        <p role="status" id="status"></p>
+        <p class="note" id="note">
+          基础文件工具支持文本、CSV、DOCX 和
+          XLSX；不运行宏、不重算公式。凭证仅保存在本次客户端进程内；退出客户端后需要重新配对。退出公司账号会撤销设备。
+        </p>
+        <section>
+          <h2 id="folders-title">本机目录授权</h2>
+          <p class="note" id="folders-note">
+            只有你在此选择的目录可被本机工具访问。目录名称会显示在公司界面；文件内容的传递需另行同意。
+          </p>
+          <label class="check"
+            ><input type="checkbox" id="writable" /><span id="writable-label"
+              >允许创建新文件（不会覆盖已有文件）</span
+            ></label
+          >
+          <label class="check"
+            ><input type="checkbox" id="allow-company" /><span id="company-label"
+              >允许此目录的摘录、文件名和工具结果进入公司服务器及会话历史</span
+            ></label
+          >
+          <button id="add-folder">选择目录并授权</button>
+          <div id="folders"></div>
+        </section>
+        <section>
+          <h2 id="results-title">本机写入记录</h2>
+          <p class="note" id="results-note">
+            断线或取消后仍可检查最终状态；“待核对”不代表未写入。
+          </p>
+          <div id="results"></div>
+        </section>
+      </details>
+      <p class="note" id="local-note">
+        独立使用本机 Octop
+        的用户可切换到本机模式，需要已安装或随包提供的本机运行环境。
+      </p>
+      <button id="use-local" class="secondary">使用本机独立模式</button>
+    </main>
+    <script type="module" src="/company.js"></script>
+  </body>
+</html>
