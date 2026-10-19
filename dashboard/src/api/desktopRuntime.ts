@@ -13,7 +13,13 @@ export interface LocalArtifactTurn {
   files: LocalArtifact[];
 }
 export interface RuntimeEvent {
-  event: "chunk" | "done" | "runtime_exit" | "steer";
+  event:
+    | "chunk"
+    | "done"
+    | "runtime_exit"
+    | "steer"
+    | "process"
+    | "process_output";
   thread_id?: string;
   task_id?: string;
   data?: HarnessChunk;
@@ -21,6 +27,11 @@ export interface RuntimeEvent {
   status?: "completed" | "failed" | "cancelled" | "unknown";
   error?: string;
   artifacts?: LocalArtifact[];
+  sync_state?: "pending" | "synced";
+  pid?: number;
+  stream?: "stdout" | "stderr";
+  content?: string;
+  tool_call_id?: string;
 }
 export interface RuntimeStart {
   task_id: string;
@@ -47,6 +58,7 @@ export interface DesktopRuntimeBridge {
       thread_id: string;
       status?: string;
       recovery_state?: string;
+      sync_state?: "pending" | "synced";
     }[];
     capabilities?: string[];
     tools?: Record<string, string>;

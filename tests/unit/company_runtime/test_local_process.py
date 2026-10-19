@@ -99,6 +99,35 @@ async def test_image_inspection_returns_size_and_format_from_real_python(tmp_pat
 
 
 @pytest.mark.asyncio
+async def test_long_command_budget_and_output_before_completion(tmp_path):
+    events = []
+    backend = ProjectBackend(
+        tmp_path, tmp_path / "state", events.append, tool_path=str(Path(sys.executable).parent)
+    )
+    assert backend._default_timeout == 900
+    task = asyncio.create_task(
+        backend.aexecute(
+            f'"{sys.executable}" -u -c "import time; print(123,flush=True); time.sleep(0.4); print(456)"'
+        )
+    )
+    try:
+        for _ in range(100):
+            if any(event.get("event") == "process_output" for event in events):
+                break
+            await asyncio.sleep(0.01)
+        assert not task.done()
+        assert any("123" in event.get("content", "") for event in events)
+        result = await asyncio.wait_for(task, 5)
+        assert result.exit_code == 0 and "456" in result.output
+        assert events[-1]["status"] == "completed"
+    finally:
+        if not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        await backend.shutdown()
+
+
+@pytest.mark.asyncio
 async def test_timeout_returns_even_when_an_orphan_retains_output_pipe(tmp_path, monkeypatch):
     monkeypatch.setattr(os, "killpg", lambda *_: None, raising=False)
 

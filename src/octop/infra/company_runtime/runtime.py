@@ -19,6 +19,7 @@ from typing import Any
 
 import httpx
 from deepagents.backends import CompositeBackend, FilesystemBackend
+from langchain.agents.middleware import ModelRetryMiddleware
 from langchain_core.messages import HumanMessage, messages_to_dict
 from langchain_core.tools import ToolException, tool
 from octop_harness import HarnessAgent, HarnessAgentConfig
@@ -26,11 +27,12 @@ from octop_harness.config import ModelConfig, ProviderConfig
 from octop_harness.llm.factory import ChatModelFactory
 
 from octop.infra.backend.grep_safety import install_safe_grep_fallback
+from octop.infra.company_runtime.checkpoints import LocalCheckpointSaver, flush_checkpoints
 from octop.infra.company_runtime.client import (
     CompanyChatModel,
     CompanyClient,
+    CompanyModelError,
     CompanyServiceError,
-    RemoteCheckpointSaver,
 )
 from octop.infra.company_runtime.local import (
     OperationJournal,
@@ -107,6 +109,8 @@ class EnterpriseRuntime:
 
         self.emit = emit_scoped
         self.work: dict[str, asyncio.Task[Any]] = {}
+        self.sync_work: dict[str, asyncio.Task[Any]] = {}
+        self.sync_locks: dict[str, asyncio.Lock] = {}
         self.workspace = Path()
         self.state = Path()
         self.authorized = False
@@ -135,7 +139,9 @@ class EnterpriseRuntime:
         self.authorized = params.get("execute_authorized") is True
         self.client = CompanyClient(params["company_url"], params["credential"])
         capabilities = await self.client.request("capabilities")
-        if capabilities["protocol_version"] != 1:
+        if capabilities["protocol_version"] != 1 or "checkpoint_batches" not in capabilities.get(
+            "features", []
+        ):
             raise RuntimeError("company_protocol_incompatible")
         self.tools = {"python": sys.version.split()[0], "harness": version("octop-harness")}
         # The native shell supplies a verified package path. Development is explicit.
@@ -177,9 +183,19 @@ class EnterpriseRuntime:
                 saved["status"] = "unknown"
             await offload(atomic_json, path, saved)
             self.tasks[saved["thread_id"]] = saved
+            if saved.get("sync_state") == "synced" and saved["status"] in {
+                "completed",
+                "failed",
+                "cancelled",
+            }:
+                continue
             # Restore receipts only; never restart a graph or local command.
             with contextlib.suppress(Exception):
                 await self.recover(saved, path.parent)
+            if saved.get("sync_state") == "pending" and saved["task_id"] not in self.sync_work:
+                self.sync_work[saved["task_id"]] = asyncio.create_task(
+                    self.retry_sync(saved, path.parent)
+                )
 
     def status(self) -> dict[str, Any]:
         return {
@@ -190,7 +206,7 @@ class EnterpriseRuntime:
             "active_tasks": [
                 {
                     k: value[k]
-                    for k in ("task_id", "thread_id", "status", "recovery_state")
+                    for k in ("task_id", "thread_id", "status", "recovery_state", "sync_state")
                     if k in value
                 }
                 for value in self.tasks.values()
@@ -221,6 +237,9 @@ class EnterpriseRuntime:
                 "agent_id",
                 "text",
                 "model",
+                "reasoning_mode",
+                "reasoning_effort",
+                "conversation_mode",
                 "knowledge_base_ids",
                 "edit_message_id",
             )
@@ -229,6 +248,8 @@ class EnterpriseRuntime:
         request["recovery_token"] = recovery
         request["installation_token"] = self.installation_token
         previous = self.tasks.get(thread)
+        if previous and previous.get("sync_state") == "pending":
+            await self.recover(previous, self.state / "tasks" / previous["task_id"])
         if (
             previous
             and previous.get("project_path")
@@ -260,6 +281,10 @@ class EnterpriseRuntime:
         return {"task_id": task["task_id"]}
 
     async def recover(self, task: dict[str, Any], directory: Path) -> None:
+        async with self.sync_locks.setdefault(task["task_id"], asyncio.Lock()):
+            await self._recover(task, directory)
+
+    async def _recover(self, task: dict[str, Any], directory: Path) -> None:
         assert self.client
         # Explicitly acknowledged missing receipts remain local; do not resurrect them.
         if task.get("recovery_state") == "missing" and (
@@ -282,21 +307,47 @@ class EnterpriseRuntime:
             await offload(atomic_json, directory / "task.json", task)
             return
         task.pop("recovery_state", None)
-        for pending in sorted((directory / "pending").glob("*.json")):
-            event = json.loads(await offload(pending.read_text, encoding="utf-8"))
-            await self.client.request(f"tasks/{task['task_id']}/events", event)
-            await offload(pending.unlink)
+        if remote.get("status") not in {"completed", "failed", "cancelled"}:
+            await flush_checkpoints(self.client, task["task_id"], directory)
+        await self.flush_events(task, directory)
         remote_status = remote.get("status")
         terminal = task.get("reported_status")
         if remote_status in {"completed", "failed", "cancelled"}:
             # The server's final receipt wins over an interrupted local status.
             task["status"] = remote_status
             task["reported_status"] = remote_status
+            task["sync_state"] = "synced"
             await offload(atomic_json, directory / "task.json", task)
         elif terminal in {"completed", "failed", "cancelled"}:
             await self.client.request(f"tasks/{task['task_id']}/status", {"status": terminal})
             task["status"] = terminal
+            task["sync_state"] = "synced"
             await offload(atomic_json, directory / "task.json", task)
+
+    async def flush_events(self, task: dict[str, Any], directory: Path) -> None:
+        assert self.client
+        for pending in sorted((directory / "pending").glob("*.json")):
+            event = json.loads(await offload(pending.read_text, encoding="utf-8"))
+            await self.client.request(f"tasks/{task['task_id']}/events", event)
+            await offload(pending.unlink)
+
+    async def retry_sync(self, task: dict[str, Any], directory: Path) -> None:
+        delay = 1
+        try:
+            while task.get("sync_state") == "pending":
+                await asyncio.sleep(delay)
+                try:
+                    await self.recover(task, directory)
+                except CompanyServiceError as exc:
+                    if exc.status in {401, 403, 404, 409}:
+                        return
+                except (httpx.TransportError, httpx.HTTPStatusError):
+                    pass
+                else:
+                    return
+                delay = min(delay * 2, 30)
+        finally:
+            self.sync_work.pop(task["task_id"], None)
 
     async def reconcile(self, params: dict[str, Any]) -> dict[str, str]:
         thread, resolution = params["thread_id"], params.get("resolution")
@@ -335,8 +386,6 @@ class EnterpriseRuntime:
         event = {"event_id": f"{task['task_id']}_{seq}", "seq": seq, "payload": payload}
         pending = directory / "pending" / f"{seq:08}.json"
         await offload(atomic_json, pending, event)
-        await self.client.request(f"tasks/{task['task_id']}/events", event)
-        await offload(pending.unlink)
         await offload(atomic_json, directory / "task.json", task)
 
     async def run(
@@ -351,6 +400,7 @@ class EnterpriseRuntime:
         thread, task_id = task["thread_id"], task["task_id"]
         project = self.workspace / acquired["project_name"]
         backend = None
+        saver = None
         agent = None
         watcher = None
         status, error, artifacts = "completed", "", []
@@ -364,7 +414,7 @@ class EnterpriseRuntime:
             if snapshot["harness_version"] != version("octop-harness"):
                 raise RuntimeError("公司引擎版本与客户端不兼容，请安装匹配的客户端")
             cache = await offload(cache_expert, self.state / "experts", snapshot)
-            saver = RemoteCheckpointSaver(client, task_id, thread)
+            saver = LocalCheckpointSaver(client, task_id, thread, directory)
             backend = ProjectBackend(
                 project,
                 directory,
@@ -591,11 +641,18 @@ class EnterpriseRuntime:
                     load_company_skill,
                 ],
                 middleware=[
+                    ModelRetryMiddleware(
+                        max_retries=3,
+                        initial_delay=1.0,
+                        max_delay=10.0,
+                        retry_on=lambda exc: isinstance(exc, CompanyModelError) and exc.retryable,
+                        on_failure="error",
+                    ),
                     ReceiptMiddleware(
                         OperationJournal(self.state / "threads" / thread / "operations"),
                         saver,
                         authorize,
-                    )
+                    ),
                 ],
                 system_prompt=instructions,
             )
@@ -651,7 +708,19 @@ class EnterpriseRuntime:
                     {"kind": "messages", "messages": messages_to_dict([steer_message])},
                 )
 
-            async for chunk in self.steering.stream(agent, thread, message, persist_steer):
+            from octop.infra.agents.settings.runtime_limits import (
+                apply_agent_runtime_to_stream_request,
+            )
+
+            stream_options = apply_agent_runtime_to_stream_request(
+                {"conversation_mode": request["conversation_mode"]}
+                if request.get("conversation_mode")
+                else {},
+                snapshot.get("runtime_settings", {}),
+            )
+            async for chunk in self.steering.stream(
+                agent, thread, message, persist_steer, options=stream_options
+            ):
                 # Harness native protocol state snapshots contain serializable message dicts.
                 self.emit({"event": "chunk", "thread_id": thread, "data": chunk})
             messages = await agent.aget_history(thread)
@@ -708,13 +777,19 @@ class EnterpriseRuntime:
                 await backend.shutdown()
             if agent:
                 await agent.aclose()
+            if saver:
+                await saver.close()
             task["reported_status"] = status
             await offload(atomic_json, directory / "task.json", task)
             try:
-                await client.request(f"tasks/{task_id}/status", {"status": status})
+                async with asyncio.timeout(5):
+                    await flush_checkpoints(client, task_id, directory)
+                    await self.flush_events(task, directory)
+                    await client.request(f"tasks/{task_id}/status", {"status": status})
             except Exception:
-                status = "unknown"
-                error = error or "公司连接中断，任务结果待核对"
+                task["sync_state"] = "pending"
+            else:
+                task["sync_state"] = "synced"
             task["status"] = status
             await offload(atomic_json, directory / "task.json", task)
             self.work.pop(thread, None)
@@ -723,14 +798,20 @@ class EnterpriseRuntime:
                     "event": "done",
                     "thread_id": thread,
                     "status": status,
+                    "sync_state": task["sync_state"],
                     "error": error,
                     "artifacts": artifacts,
                 }
             )
+            if task["sync_state"] == "pending":
+                self.sync_work[task_id] = asyncio.create_task(self.retry_sync(task, directory))
 
     async def close(self) -> None:
         for work in self.work.values():
             work.cancel()
         await asyncio.gather(*list(self.work.values()), return_exceptions=True)
+        for work in self.sync_work.values():
+            work.cancel()
+        await asyncio.gather(*list(self.sync_work.values()), return_exceptions=True)
         if self.client:
             await self.client.close()

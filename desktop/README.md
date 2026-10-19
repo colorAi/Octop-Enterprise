@@ -109,6 +109,9 @@ execution; contacts and employee messaging are independent. Browser clients keep
 the existing device-tool flow. Existing server-executed histories remain readable
 and are rejected for local continuation; start a new expert conversation.
 The local runtime excludes autonomous expert teams and external connectors.
+The worker reads the company checkpoint once per graph namespace, persists graph state in account-scoped `tasks/<task-id>/graph.sqlite`, and records ordered writes in a durable checkpoint outbox. It uploads checkpoints in bounded, idempotent batches when a turn settles. Completed execution and receipt synchronization have separate states; failed delivery retries without invoking tools. Restart reconciliation uploads saved writes before final history/status and never restarts the graph. New workers require the server's `checkpoint_batches` capability; rebuild the server and employee runtime together.
+
+Model streams use a ten-minute read-idle budget. Only transient model failures before the first returned chunk are retried, at most three times; partial streams and policy failures are not retried. Ordinary company API requests retain their two-minute timeout, and image generation retains its fifteen-minute budget. Commands default to fifteen minutes with a one-hour per-call ceiling; bounded, throttled stdout/stderr previews carry the tool-call identity through native IPC. This does not add detached background jobs.
 Compatible clients import uploaded expert attachments and forwarded company
 attachments into the local task folder before starting a turn. Arbitrary external
 attachment URLs are not accepted. Mid-task steering currently supports text only.

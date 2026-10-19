@@ -1,10 +1,10 @@
 {
   "fixed": {
-    "file_version": "1.0.0"
+    "file_version": "1.0.1.0"
   },
   "info": {
     "0000": {
-      "ProductVersion": "1.0.0",
+      "ProductVersion": "1.0.1b1",
       "CompanyName": "Octop Enterprise contributors",
       "FileDescription": "Octop Enterprise desktop",
       "LegalCopyright": "Copyright © 2026",

@@ -9,8 +9,14 @@ from collections.abc import AsyncIterator
 from importlib.metadata import version
 from typing import Any
 
+import httpx
 from langchain_core.messages import message_to_dict, messages_from_dict
 
+from octop.infra.agents.providers.reasoning import (
+    reasoning_capability,
+    reasoning_request_parameters,
+)
+from octop.infra.agents.settings.runtime_limits import agent_model_settings, agent_runtime_values
 from octop.infra.company_runtime import PROTOCOL_VERSION
 from octop.infra.db.repos.company_runtime import CompanyRuntimeRepo, RuntimeConflict, encode
 from octop.infra.db.repos.thread_messages import ThreadMessageInput
@@ -21,6 +27,26 @@ from octop.infra.utils.asyncio import offload
 
 def denied(reason: str, status: int = 409) -> OctopError:
     return OctopError(ErrorCode.FORBIDDEN, reason, status=status, details={"reason": reason})
+
+
+def model_failure(exc: Exception) -> dict[str, Any]:
+    """Expose a stable failure category without provider payloads or credentials."""
+    if isinstance(exc, OctopError):
+        return {"error": exc.details.get("reason", "company_model_failed"), "retryable": False}
+    status = getattr(exc, "status_code", None)
+    if isinstance(exc, TimeoutError | httpx.TimeoutException) or "Timeout" in type(exc).__name__:
+        return {"error": "company_model_timeout", "retryable": True}
+    if isinstance(exc, httpx.TransportError) or type(exc).__name__ in {
+        "APIConnectionError",
+        "ConnectError",
+    }:
+        return {"error": "company_model_connection_lost", "retryable": True}
+    if isinstance(status, int):
+        return {
+            "error": f"company_model_http_{status}",
+            "retryable": status in {408, 429} or status >= 500,
+        }
+    return {"error": "company_model_failed", "retryable": False}
 
 
 class CompanyRuntimeService:
@@ -86,6 +112,7 @@ class CompanyRuntimeService:
             "default_model": default_model,
             "harness_version": version("octop-harness"),
             "protocol_version": PROTOCOL_VERSION,
+            "runtime_settings": agent_runtime_values(json.loads(row.config_json or "{}")),
         }
         snapshot["version"] = hashlib.sha256(encode(snapshot).encode()).hexdigest()
         return snapshot
@@ -193,8 +220,31 @@ class CompanyRuntimeService:
             self.owner,
         )
         model = agent.model_factory.get_chat_model(ref)
+        provider_name, _, model_id = ref.partition("/")
+        provider = await offload(self.services.provider_repo.get_by_name, provider_name)
+        if provider is not None:
+            entry: dict[str, Any] = next(
+                (item for item in provider.get_models() if item.get("id") == model_id), {}
+            )
+            requested = json.loads(task["request_json"])
+            overrides = reasoning_request_parameters(
+                reasoning_capability(entry, base_url=provider.base_url),
+                mode=requested.get("reasoning_mode"),
+                effort=requested.get("reasoning_effort"),
+            )
+            updates = dict(overrides.get("model_fields", {}))
+            if overrides.get("extra_body") and hasattr(model, "extra_body"):
+                updates["extra_body"] = {
+                    **(getattr(model, "extra_body", None) or {}),
+                    **overrides["extra_body"],
+                }
+            if updates:
+                model = model.model_copy(update=updates)
         if body.get("tools"):
             model = model.bind_tools(body["tools"])
+        settings = agent_model_settings(snapshot.get("runtime_settings", {}))
+        if settings:
+            model = model.bind(**settings)
         usage: dict[str, Any] = {}
         try:
             async for chunk in model.astream(messages_from_dict(body["messages"])):
@@ -212,6 +262,26 @@ class CompanyRuntimeService:
                 input_tokens=int(usage.get("input_tokens", 0)),
                 output_tokens=int(usage.get("output_tokens", 0)),
             )
+
+    async def checkpoints(self, task_id: str, operations: list[dict[str, Any]]) -> dict[str, int]:
+        task = await self.task(task_id)
+        if task["status"] not in {"running", "cancel_requested", "unknown"}:
+            raise denied("task_already_finished")
+        for operation in operations:
+            if not operation["checkpoint_id"]:
+                raise denied("checkpoint_id_required", 422)
+            if operation["action"] == "put" and operation["payload"] is None:
+                raise denied("checkpoint_payload_required", 422)
+            if any(
+                set(write) != {"idx", "value"} or type(write["idx"]) is not int
+                for write in operation["writes"]
+            ):
+                raise denied("invalid_checkpoint_writes", 422)
+        try:
+            await offload(self.repo.checkpoint_batch, task_id, task["thread_id"], operations)
+        except RuntimeConflict as exc:
+            raise denied(str(exc)) from exc
+        return {"saved": len(operations)}
 
     async def memory(self, task_id: str, action: str, body: dict[str, Any]) -> Any:
         from octop_memory import MemoryService

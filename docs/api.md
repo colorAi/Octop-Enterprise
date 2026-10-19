@@ -60,6 +60,17 @@ Other routes are JWT-gated by `api/middleware/jwt_auth.py`; the setup lockdown m
 (`api/middleware/setup_lockdown.py`) additionally blocks non-setup
 routes until the wizard finishes.
 
+`GET /api/company-runtime/capabilities` advertises `checkpoint_batches` for the
+desktop worker. `POST /api/company-runtime/tasks/{task_id}/checkpoint-batch`
+accepts 1–64 ordered `put`/`writes` operations and commits them atomically for
+the owning device and latest task. Repeating an acknowledged batch is safe;
+conflicting checkpoint identities roll back the batch. Running, cancellation-requested
+and unknown tasks may receive pending writes; finished tasks reject new writes.
+The existing individual checkpoint endpoints remain available to older clients.
+Task creation also accepts `reasoning_mode`, `reasoning_effort` and
+`conversation_mode`; model and tool policy are still enforced by the server
+and local engine rather than supplied as arbitrary provider parameters.
+
 Password login may require a vendor captcha token. `GET /api/auth/captcha`
 returns `{provider: "slider"}` by default (dashboard slider only; no server
 check). When a strong provider is active (`turnstile`, `hcaptcha`,

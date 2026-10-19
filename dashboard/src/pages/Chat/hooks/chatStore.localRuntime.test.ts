@@ -28,6 +28,72 @@ afterEach(() => {
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
+
+it("routes live process output by tool call and replaces the preview with the final result", async () => {
+  const pending = store.sendTurn(
+    "local-thread",
+    "run commands",
+    "expert",
+    "key",
+  );
+  listener?.({
+    event: "chunk",
+    thread_id: "local-thread",
+    data: {
+      type: "tool_call_chunk",
+      id: "exec1",
+      index: 0,
+      name: "execute",
+      args: "{}",
+    },
+  });
+  listener?.({
+    event: "chunk",
+    thread_id: "local-thread",
+    data: {
+      type: "tool_call_chunk",
+      id: "exec2",
+      index: 1,
+      name: "execute",
+      args: "{}",
+    },
+  });
+  listener?.({
+    event: "process_output",
+    thread_id: "local-thread",
+    tool_call_id: "exec1",
+    stream: "stdout",
+    content: "working\n",
+  });
+  const during = store.getSnapshot("local-thread").messages;
+  expect(
+    during.find((item) => item.toolData?.callId === "exec1")?.toolData?.output,
+  ).toBe("working\n");
+  expect(
+    during.find((item) => item.toolData?.callId === "exec2")?.toolData?.output,
+  ).toBeUndefined();
+  listener?.({
+    event: "chunk",
+    thread_id: "local-thread",
+    data: {
+      type: "tool_result",
+      messages: [{ tool_call_id: "exec1", content: "final output" }],
+    },
+  });
+  expect(
+    store
+      .getSnapshot("local-thread")
+      .messages.find((item) => item.toolData?.callId === "exec1")?.toolData
+      ?.output,
+  ).toBe("final output");
+  listener?.({
+    event: "done",
+    thread_id: "local-thread",
+    status: "completed",
+    sync_state: "pending",
+  });
+  await pending;
+});
 it("passes imported local images with their original hash and size to the native task", async () => {
   const file = {
     path: "C:\\work\\inbound\\photo.png",

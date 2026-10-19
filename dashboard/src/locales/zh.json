@@ -70,6 +70,7 @@
     "workspaceError_session_changed": "登录账号已变化，请重新连接本机工具。",
     "runtimeTaskMissing": "此任务已从服务器移除。本地成果仍保留，可确认结束提示。",
     "runtimeTaskUnknown": "上次任务中断，结果待核对，不会自动重新执行。",
+    "runtimeSyncPending": "本机执行结果已保存，正在等待同步到公司服务器；不会重新执行已完成操作。",
     "runtimeReconcileAction": "已检查成果，结束中断任务",
     "runtimeReconcileUnsupported": "请更新企业客户端后再结束此任务。",
     "runtimeReconcileFailed": "任务结束失败，请重试。"

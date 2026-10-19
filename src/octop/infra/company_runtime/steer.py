@@ -84,6 +84,8 @@ class CompanySteering:
         thread: str,
         message: HumanMessage,
         persist: Callable[[HumanMessage], Awaitable[None]],
+        *,
+        options: dict[str, Any] | None = None,
     ) -> AsyncIterator[dict[str, Any]]:
         """Continue at completed tool batches, or after a text-only answer.
 
@@ -95,7 +97,9 @@ class CompanySteering:
         while True:
             saw_tool_result = False
             preempted = False
-            async for chunk in agent.stream({"messages": [current], "thread_id": thread}):
+            async for chunk in agent.stream(
+                {**(options or {}), "messages": [current], "thread_id": thread}
+            ):
                 kind = str(chunk.get("type") or "")
                 if kind == "error":
                     raise RuntimeError(

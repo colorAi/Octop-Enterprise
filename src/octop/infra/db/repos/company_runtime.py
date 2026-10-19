@@ -392,6 +392,52 @@ class CompanyRuntimeRepo:
                 (thread, namespace, checkpoint_id, encode(payload)),
             )
 
+    def checkpoint_batch(self, task_id: str, thread: str, operations: list[dict[str, Any]]) -> None:
+        """Commit a device's ordered outbox atomically while its task owns the thread."""
+        with self.db.transaction() as conn:
+            conn.execute(
+                "UPDATE company_runtime_tasks SET updated_at=updated_at WHERE task_id=?", (task_id,)
+            )
+            latest = conn.execute(
+                "SELECT task_id,status FROM company_runtime_tasks WHERE thread_id=? ORDER BY id DESC LIMIT 1",
+                (thread,),
+            ).fetchone()
+            if (
+                not latest
+                or latest["task_id"] != task_id
+                or latest["status"] not in {"running", "cancel_requested", "unknown"}
+            ):
+                raise RuntimeConflict("task_already_finished")
+            for item in operations:
+                namespace, checkpoint_id = item["namespace"], item["checkpoint_id"]
+                if item["action"] == "put":
+                    payload = encode(item["payload"])
+                    old = conn.execute(
+                        "SELECT payload FROM company_runtime_checkpoints WHERE thread_id=? AND namespace=? AND checkpoint_id=?",
+                        (thread, namespace, checkpoint_id),
+                    ).fetchone()
+                    if old:
+                        if old["payload"] != payload:
+                            raise RuntimeConflict("checkpoint_identity_conflict")
+                    else:
+                        conn.execute(
+                            "INSERT INTO company_runtime_checkpoints VALUES(?,?,?,?)",
+                            (thread, namespace, checkpoint_id, payload),
+                        )
+                else:
+                    for write in item["writes"]:
+                        conn.execute(
+                            "INSERT INTO company_runtime_writes VALUES(?,?,?,?,?,?) ON CONFLICT(thread_id,namespace,checkpoint_id,task_key,idx) DO UPDATE SET payload=excluded.payload",
+                            (
+                                thread,
+                                namespace,
+                                checkpoint_id,
+                                item["task_key"],
+                                write["idx"],
+                                encode(write["value"]),
+                            ),
+                        )
+
     def put_writes(
         self,
         thread: str,

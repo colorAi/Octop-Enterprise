@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import codecs
 import contextlib
 import hashlib
 import json
@@ -15,6 +16,7 @@ import signal
 import subprocess
 import time
 from collections.abc import Callable
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +25,8 @@ from langchain.agents.middleware import AgentMiddleware
 from octop_harness.backends.local_shell import HarnessLocalShellBackend
 
 from octop.infra.utils.asyncio import offload
+
+_TOOL_CALL_ID: ContextVar[str] = ContextVar("company_tool_call_id", default="")
 
 
 def local_attachment_metadata(project: Path, files: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -184,6 +188,7 @@ class ReceiptMiddleware(AgentMiddleware):
             await offload(
                 self.journal.save, key, request_hash=digest, status="running", tool=call["name"]
             )
+            token = _TOOL_CALL_ID.set(key)
             try:
                 result = await handler(request)
             except BaseException:
@@ -191,6 +196,8 @@ class ReceiptMiddleware(AgentMiddleware):
                     self.journal.save, key, request_hash=digest, status="unknown", tool=call["name"]
                 )
                 raise
+            finally:
+                _TOOL_CALL_ID.reset(token)
             await offload(
                 self.journal.save,
                 key,
@@ -207,7 +214,11 @@ class ProjectBackend(HarnessLocalShellBackend):
         self, project: Path, state: Path, emit: Callable[..., None], *, tool_path: str
     ) -> None:
         super().__init__(
-            root_dir=project, workspace_dir=project, virtual_mode=True, inherit_env=False
+            root_dir=project,
+            workspace_dir=project,
+            virtual_mode=True,
+            inherit_env=False,
+            timeout=900,
         )
         self.project, self.state, self.emit = project, state, emit
         self.tool_path = tool_path
@@ -297,6 +308,25 @@ class ProjectBackend(HarnessLocalShellBackend):
         async def drain(name: str, stream: Any) -> None:
             nonlocal truncated
             tail = b""
+            decoder = codecs.getincrementaldecoder("utf-8")("replace")
+            preview = ""
+            emitted_at = 0.0
+
+            def emit_preview() -> None:
+                nonlocal preview, emitted_at
+                if preview:
+                    self.emit(
+                        {
+                            "event": "process_output",
+                            "pid": process.pid,
+                            "stream": name,
+                            "tool_call_id": _TOOL_CALL_ID.get(),
+                            "content": preview,
+                        }
+                    )
+                    preview = ""
+                    emitted_at = time.monotonic()
+
             with (process_dir / (name + ".log")).open("wb") as out:
                 logged = 0
                 while chunk := await stream.read(16384):
@@ -309,7 +339,12 @@ class ProjectBackend(HarnessLocalShellBackend):
                         tail = tail[-131072:]
                         truncated = True
                     tails[name] = tail
+                    preview = (preview + decoder.decode(chunk))[-16384:]
+                    if time.monotonic() - emitted_at >= 0.15:
+                        emit_preview()
                 tails[name] = tail
+                preview = (preview + decoder.decode(b"", final=True))[-16384:]
+                emit_preview()
 
         status = "completed"
 

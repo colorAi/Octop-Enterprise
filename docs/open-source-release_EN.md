@@ -2,7 +2,7 @@
 
 [中文](open-source-release.md)
 
-This document is for maintainers and describes source export, verification and release requirements for [Octop Enterprise](https://github.com/colorAi/Octop-Enterprise). The current source version is `1.0.0`; the main project and own communication module use MIT.
+This document is for maintainers and describes source export, verification and release requirements for [Octop Enterprise](https://github.com/colorAi/Octop-Enterprise). The current source version is `1.0.1b1`; the main project and own communication module use MIT.
 
 This repository provides source code; server images and Windows/macOS enterprise clients are generated according to the corresponding build documents. Release material is distributed through [this repository's Releases](https://github.com/colorAi/Octop-Enterprise/releases); binary installers require separate target-platform verification and records of signing and notarization status.
 

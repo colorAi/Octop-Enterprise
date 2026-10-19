@@ -11,11 +11,11 @@
         <key>CFBundleIdentifier</key>
         <string>io.github.colorai.octop.enterprise</string>
         <key>CFBundleVersion</key>
-        <string>1.0.0</string>
+        <string>1.0.1b1</string>
         <key>CFBundleGetInfoString</key>
         <string>Octop Enterprise desktop shell</string>
         <key>CFBundleShortVersionString</key>
-        <string>1.0.0</string>
+        <string>1.0.1b1</string>
         <key>CFBundleIconFile</key>
         <string>icons</string>
         <key>LSMinimumSystemVersion</key>

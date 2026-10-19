@@ -16,6 +16,7 @@ export default function LocalWorkspaceSettings() {
       thread_id: string;
       status?: string;
       recovery_state?: string;
+      sync_state?: "pending" | "synced";
     }[];
     error?: string;
   } | null>(null);
@@ -142,6 +143,9 @@ export default function LocalWorkspaceSettings() {
               </Typography.Paragraph>
             </details>
           )}
+          {runtime?.active_tasks?.some(
+            (task) => task.sync_state === "pending",
+          ) && <Alert type="info" message={t("devices.runtimeSyncPending")} />}
           {runtime?.active_tasks
             ?.filter((task) => task.status === "unknown")
             .map((task) => (

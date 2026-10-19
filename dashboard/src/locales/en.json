@@ -70,6 +70,7 @@
     "workspaceError_session_changed": "The signed-in account changed. Reconnect local tools.",
     "runtimeTaskMissing": "This task was removed from the server. Local files are preserved; you can acknowledge this notice.",
     "runtimeTaskUnknown": "The previous task was interrupted. Review its output; it will not run again automatically.",
+    "runtimeSyncPending": "Local results are saved and waiting to sync with the company server. Completed operations will not run again.",
     "runtimeReconcileAction": "Reviewed output — close interrupted task",
     "runtimeReconcileUnsupported": "Update the company client to close this task.",
     "runtimeReconcileFailed": "Could not close the task. Please retry."

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import ssl
 from collections.abc import AsyncIterator, Sequence
@@ -21,6 +22,12 @@ class CompanyServiceError(RuntimeError):
     def __init__(self, reason: str, status: int) -> None:
         super().__init__(reason)
         self.status = status
+
+
+class CompanyModelError(RuntimeError):
+    def __init__(self, reason: str, *, retryable: bool = False) -> None:
+        super().__init__(reason)
+        self.retryable = retryable
 
 
 class CompanyClient:
@@ -55,9 +62,16 @@ class CompanyClient:
 
     async def request(self, path: str, body: dict[str, Any] | None = None) -> Any:
         timeout = httpx.Timeout(900, connect=10) if path.endswith("/images") else self.http.timeout
-        response = await self.http.request(
-            "GET" if body is None else "POST", path, json=body, timeout=timeout
-        )
+        for attempt in range(3):
+            try:
+                response = await self.http.request(
+                    "GET" if body is None else "POST", path, json=body, timeout=timeout
+                )
+                break
+            except httpx.TransportError:
+                if body is not None or attempt == 2:
+                    raise
+                await asyncio.sleep(0.25 * (attempt + 1))
         if response.is_error:
             reason = f"company_service_{response.status_code}"
             try:
@@ -97,21 +111,42 @@ class CompanyChatModel(BaseChatModel):
             "messages": messages_to_dict(messages),
             "tools": kwargs.get("tools", []),
         }
-        async with self.client.http.stream(
-            "POST", f"tasks/{self.task_id}/model", json=body
-        ) as response:
-            response.raise_for_status()
-            async for line in response.aiter_lines():
-                if not line:
-                    continue
-                import json
+        received = False
+        try:
+            async with self.client.http.stream(
+                "POST",
+                f"tasks/{self.task_id}/model",
+                json=body,
+                timeout=httpx.Timeout(600, connect=10),
+            ) as response:
+                response.raise_for_status()
+                async for line in response.aiter_lines():
+                    if not line:
+                        continue
+                    import json
 
-                value = json.loads(line)
-                if "error" in value:
-                    raise RuntimeError(value["error"])
-                yield ChatGenerationChunk(
-                    message=cast(BaseMessageChunk, messages_from_dict([value])[0])
-                )
+                    value = json.loads(line)
+                    if "error" in value:
+                        raise CompanyModelError(
+                            value["error"], retryable=bool(value.get("retryable")) and not received
+                        )
+                    received = True
+                    yield ChatGenerationChunk(
+                        message=cast(BaseMessageChunk, messages_from_dict([value])[0])
+                    )
+        except httpx.HTTPStatusError as exc:
+            status = exc.response.status_code
+            raise CompanyModelError(
+                f"company_model_http_{status}",
+                retryable=not received and (status in {408, 429} or status >= 500),
+            ) from exc
+        except httpx.TransportError as exc:
+            raise CompanyModelError(
+                "company_model_timeout"
+                if isinstance(exc, httpx.TimeoutException)
+                else "company_model_connection_lost",
+                retryable=not received,
+            ) from exc
 
     async def _agenerate(
         self, messages: Any, stop: Any = None, run_manager: Any = None, **kwargs: Any
@@ -120,7 +155,7 @@ class CompanyChatModel(BaseChatModel):
         async for chunk in self._astream(messages, stop, run_manager, **kwargs):
             combined = chunk if combined is None else combined + chunk
         if combined is None:
-            raise RuntimeError("company_model_empty_response")
+            raise CompanyModelError("company_model_empty_response", retryable=True)
         from langchain_core.messages import message_chunk_to_message
 
         return ChatResult(

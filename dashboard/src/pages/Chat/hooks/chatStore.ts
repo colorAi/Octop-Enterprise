@@ -8,6 +8,7 @@ import {
   requireDesktopRuntime,
   runLocalTurn,
   type LocalArtifact,
+  type RuntimeEvent,
 } from "@/api/desktopRuntime";
 import type { DeviceSelection } from "@/api/modules/devices";
 /**
@@ -2483,6 +2484,31 @@ function appendErrorBubble(
 const reportedUnknownLocalTasks = new Set<string>();
 const localRuntimeAttachments = new Map<string, () => void>();
 
+function applyLocalProcessOutput(
+  state: SessionStreamState,
+  event: RuntimeEvent,
+): void {
+  if (event.event !== "process_output" || !event.tool_call_id || !event.content)
+    return;
+  state.messages = state.messages.map((item) => {
+    if (
+      !item.toolData ||
+      item.toolData.callId !== event.tool_call_id ||
+      item.status !== "streaming"
+    )
+      return item;
+    const content =
+      event.stream === "stderr" ? `[stderr] ${event.content}` : event.content;
+    return {
+      ...item,
+      toolData: {
+        ...item.toolData,
+        output: `${item.toolData.output ?? ""}${content}`.slice(-32768),
+      },
+    };
+  });
+}
+
 async function attachLocalRuntime(
   sessionId: string,
   threadId: string,
@@ -2537,6 +2563,10 @@ async function attachLocalRuntime(
       return;
     }
     if (event.thread_id !== threadId) return;
+    if (event.event === "process_output") {
+      applyLocalProcessOutput(state, event);
+      markActive();
+    }
     if (event.event === "chunk" && event.data) {
       handleHarnessChunk(state, event.data, sessionId);
       markActive();
@@ -3353,6 +3383,10 @@ export async function sendTurn(
           if (state.abortController !== controller) return;
           markStarted();
           touchStreamActivity(sessionId);
+          if (event.event === "process_output") {
+            applyLocalProcessOutput(state, event);
+            notify(state);
+          }
           if (event.event === "steer" && event.frame) {
             applySteerProtocolFrame(state, event.frame, sessionId);
             notify(state);

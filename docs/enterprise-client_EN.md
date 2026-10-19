@@ -21,7 +21,11 @@ On the **Local working folder** page, select **Check tools** to check the local 
 
 ## Files, models and history
 
-Project files are stored in the authorized folder on this computer. The company server stores accounts, expert definitions, long-term memory, formal conversations and recovery records; the local computer keeps the necessary cache and operation receipts.
+Project files are stored in the authorized folder on this computer. The company server stores accounts, expert definitions, long-term memory, formal conversations and recovery records. The local computer stores execution checkpoints, operation receipts and pending synchronization records outside the project folder.
+
+A temporary synchronization failure does not change completed local work into an execution failure. **Local working folder** reports pending synchronization; the client retries when the connection returns, including reconciliation after signing in again. A conversation must finish its previous synchronization before starting another turn. Uploading receipts never repeats completed tool operations.
+
+Local commands have a default fifteen-minute execution timeout, with a per-command ceiling of one hour. Command output is visible while running. A model request times out after ten minutes without stream data. Transient timeouts, rate limits and connection failures before the first returned model chunk are retried up to three times; streams that have already started returning data are not automatically resent. Each turn applies the selected reasoning effort and Ask, Plan or Craft mode; Plan may write only plan files.
 
 Model inference runs on company-configured services, and task execution requires a connection to the company server and model services. File names, excerpts needed to complete a task and tool results may be sent to those services; the whole project is not synchronized automatically. Images and files uploaded or forwarded through chat go to the company server; clients that support attachment import copy the selected attachments into the current local task folder before processing. The terminal and Python use the current OS account's permissions; choosing a folder does not restrict what other processes can access.
 

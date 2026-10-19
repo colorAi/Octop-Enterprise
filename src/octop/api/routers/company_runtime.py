@@ -14,7 +14,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from octop.api.deps import get_server
 from octop.infra.company_runtime import PROTOCOL_VERSION
-from octop.infra.company_runtime.service import CompanyRuntimeService, denied
+from octop.infra.company_runtime.service import CompanyRuntimeService, denied, model_failure
 from octop.infra.db.repos.company_runtime import RuntimeConflict
 from octop.infra.utils.asyncio import offload
 
@@ -30,7 +30,14 @@ class Capabilities(Document):
     protocol_version: int = PROTOCOL_VERSION
     checkpoint_format: str = "langgraph-jsonplus-v1"
     execution: str = "desktop"
-    features: list[str] = ["model_stream", "remote_checkpoints", "memory", "knowledge", "events"]
+    features: list[str] = [
+        "model_stream",
+        "remote_checkpoints",
+        "checkpoint_batches",
+        "memory",
+        "knowledge",
+        "events",
+    ]
 
 
 async def service(request: Request, server: Any = Depends(get_server)) -> CompanyRuntimeService:
@@ -68,6 +75,9 @@ class StartTask(Document):
     text: str = Field(min_length=1, max_length=1000000)
     edit_message_id: str | None = Field(default=None, max_length=256)
     model: str | None = None
+    reasoning_mode: Literal["auto", "enabled", "disabled"] | None = None
+    reasoning_effort: str | None = Field(default=None, max_length=64)
+    conversation_mode: Literal["ask", "plan", "craft"] | None = None
     knowledge_base_ids: list[str] = Field(default_factory=list, max_length=100)
     installation_token: str = Field(min_length=32, max_length=256)
     recovery_token: str = Field(min_length=32, max_length=256)
@@ -161,6 +171,26 @@ class CheckpointRequest(Document):
     writes: list[dict[str, Any]] = Field(default_factory=list, max_length=1000)
 
 
+class CheckpointOperation(CheckpointRequest):
+    action: Literal["put", "writes"]
+
+
+class CheckpointBatch(Document):
+    operations: list[CheckpointOperation] = Field(min_length=1, max_length=64)
+
+
+@router.post(
+    "/tasks/{task_id}/checkpoint-batch",
+    response_model=dict[str, int],
+    summary="Synchronize durable desktop checkpoints without running tools",
+    description="Accepts ordered, idempotent graph writes from the owning device. Recovery may deliver writes for an unknown task; finished tasks reject new writes.",
+)
+async def checkpoint_batch(
+    task_id: str, body: CheckpointBatch, svc: CompanyRuntimeService = Depends(service)
+) -> Any:
+    return await svc.checkpoints(task_id, [item.model_dump() for item in body.operations])
+
+
 @router.post(
     "/tasks/{task_id}/checkpoint/{action}",
     response_model=dict[str, Any] | None,
@@ -215,12 +245,7 @@ async def model(
             async for chunk in svc.model(task_id, body.model_dump()):
                 yield chunk
         except Exception as exc:
-            reason = (
-                exc.details.get("reason", "company_model_failed")
-                if hasattr(exc, "details")
-                else "company_model_failed"
-            )
-            yield json.dumps({"error": reason}) + "\n"
+            yield json.dumps(model_failure(exc)) + "\n"
 
     return StreamingResponse(
         stream(), media_type="application/x-ndjson", headers={"Cache-Control": "no-store"}

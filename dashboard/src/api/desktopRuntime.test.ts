@@ -89,3 +89,20 @@ it("creates task identities on intranet HTTP without crypto.randomUUID", () => {
   );
   expect(createRuntimeTaskId()).not.toBe(createRuntimeTaskId());
 });
+
+it("keeps completed local work successful while its company receipt is pending", async () => {
+  const onEvent = vi.fn();
+  const pending = runLocalTurn(params, onEvent, new AbortController().signal);
+  listener?.({
+    event: "done",
+    thread_id: "thread",
+    task_id: "task",
+    status: "completed",
+    sync_state: "pending",
+  });
+  await expect(pending).resolves.toBeUndefined();
+  expect(bridge.start).toHaveBeenCalledOnce();
+  expect(onEvent).toHaveBeenCalledWith(
+    expect.objectContaining({ sync_state: "pending" }),
+  );
+});
