@@ -43,7 +43,9 @@ from octop.infra.company_runtime.local import (
     image_reference_inputs,
     local_attachment_metadata,
 )
+from octop.infra.company_runtime.model_context import company_model_profile
 from octop.infra.company_runtime.steer import CompanySteering
+from octop.infra.company_runtime.ui_stream import project_ui_chunk
 from octop.infra.gateway.process.message_keys import INBOUND_ATTACHMENTS_KEY
 from octop.infra.utils.asyncio import offload
 
@@ -51,8 +53,20 @@ _IDENTIFIER = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 
 
 class CompanyModelFactory(ChatModelFactory):
-    def __init__(self, client: CompanyClient, task_id: str, models: list[str]) -> None:
+    def __init__(
+        self,
+        client: CompanyClient,
+        task_id: str,
+        models: list[str],
+        *,
+        model_profiles: dict[str, Any] | None = None,
+        runtime_settings: dict[str, Any] | None = None,
+    ) -> None:
         providers: dict[str, ProviderConfig] = {}
+        self.profiles = {
+            ref: company_model_profile((model_profiles or {}).get(ref, {}), runtime_settings or {})
+            for ref in models
+        }
         for ref in models:
             provider, _, model = ref.partition("/")
             providers.setdefault(
@@ -60,14 +74,28 @@ class CompanyModelFactory(ChatModelFactory):
                 ProviderConfig(
                     id=provider, base_url="http://company.invalid", api_key="company-proxy-only"
                 ),
-            ).models.append(ModelConfig(id=model))
+            ).models.append(
+                ModelConfig(
+                    id=model,
+                    max_input_tokens=self.profiles[ref]["max_input_tokens"],
+                    context_window=self.profiles[ref].get("context_window", 0),
+                    max_output_tokens=self.profiles[ref].get("max_output_tokens", 0),
+                )
+            )
         super().__init__(list(providers.values()))
         self.client, self.task_id = client, task_id
 
     def get_chat_model(self, model_ref: str, *, max_retries: int | None = None) -> Any:
         if model_ref not in self.list_refs():
             raise ValueError("model_not_available")
-        return CompanyChatModel(client=self.client, task_id=self.task_id, model_ref=model_ref)
+        instance = CompanyChatModel(
+            client=self.client,
+            task_id=self.task_id,
+            model_ref=model_ref,
+        )
+        # Match harness profile injection, including its context_window extension.
+        object.__setattr__(instance, "profile", self.profiles[model_ref].copy())
+        return instance
 
 
 def cache_expert(root: Path, snapshot: dict[str, Any]) -> Path:
@@ -259,23 +287,38 @@ class EnterpriseRuntime:
         inbound = await offload(
             local_attachment_metadata, self.workspace / thread, params.get("local_attachments", [])
         )
-        acquired = await self.client.request("tasks", request)
-        if acquired["status"] != "running":
-            raise RuntimeError("task_already_finished")
-        request["inbound_attachments"] = inbound
         task = {
             "task_id": params["task_id"],
             "thread_id": thread,
             "agent_id": params["agent_id"],
-            "status": "running",
+            # Persist ownership before acquiring a server lease: the response may
+            # be lost after the server has committed the task.
+            "status": "unknown",
             "recovery_token": recovery,
             "started_at_ns": time.time_ns(),
             "seq": 0,
             "project_path": str(self.workspace / thread),
         }
-        self.tasks[thread] = task
         task_dir = self.state / "tasks" / task["task_id"]
+        if await offload((task_dir / "task.json").exists):
+            raise RuntimeError("task_identity_conflict")
         await offload(atomic_json, task_dir / "task.json", task)
+        self.tasks[thread] = task
+        try:
+            acquired = await self.client.request("tasks", request)
+        except CompanyServiceError as exc:
+            if 400 <= exc.status < 500 and exc.status not in {408, 429}:
+                # A definite rejection created no lease for this request.
+                task.update(status="failed", reported_status="failed", sync_state="synced")
+                await offload(atomic_json, task_dir / "task.json", task)
+            raise
+        if acquired["status"] != "running":
+            task.update(status=acquired["status"], sync_state="synced")
+            await offload(atomic_json, task_dir / "task.json", task)
+            raise RuntimeError("task_already_finished")
+        task["status"] = "running"
+        await offload(atomic_json, task_dir / "task.json", task)
+        request["inbound_attachments"] = inbound
         self.work[thread] = asyncio.create_task(self.run(task, request, acquired, task_dir))
         self.steering.begin(thread)
         return {"task_id": task["task_id"]}
@@ -374,6 +417,10 @@ class EnterpriseRuntime:
         work = self.work.get(thread)
         if not work:
             return {"status": "not_running"}
+        if "reported_status" in self.tasks[thread]:
+            # Execution has ended. Let cleanup and the bounded final sync finish;
+            # cancelling here would skip the done event and leave the thread busy.
+            return {"status": self.tasks[thread]["reported_status"]}
         self.tasks[thread]["status"] = "cancel_requested"
         self.steering.cancel(thread)
         work.cancel()
@@ -404,6 +451,7 @@ class EnterpriseRuntime:
         agent = None
         watcher = None
         status, error, artifacts = "completed", "", []
+        sent_files: dict[str, dict[str, Any]] = {}
         try:
             if project.is_symlink() or not project.resolve().is_relative_to(self.workspace):
                 raise RuntimeError("project_path_invalid")
@@ -535,9 +583,34 @@ class EnterpriseRuntime:
 
             company_generate_image.handle_tool_error = True
 
+            @tool
+            async def send_local_file(file_path: str) -> str:
+                """Display an existing local image or deliver a project file in this reply.
+
+                Call this whenever the user asks to see, receive or resend an existing
+                file. A filename or Markdown local path alone does not display it.
+                Accepts project-relative, virtual or native absolute project paths.
+                Images appear inline; other files appear as local file cards.
+                """
+                try:
+                    item = await offload(backend.artifact_metadata, file_path)
+                except (OSError, ValueError) as exc:
+                    raise ToolException(str(exc)) from exc
+                item["explicitly_sent"] = True
+                sent_files[item["path"]] = item
+                return json.dumps({**item, "location": "desktop"}, ensure_ascii=False)
+
+            send_local_file.handle_tool_error = True
+
             instructions = (
                 snapshot["instructions"]
                 + f"\nEnterprise execution: project={project}; selected source folder={self.workspace}; Python={sys.executable}. Shell commands run with the current employee OS permissions. Preserve source files. Never overwrite or delete without user authorization. Do not upload raw media for local processing. This project has no personal memory store. Use memory_search/memory_get/remember for ALL personal or durable memory. Never initialize SOUL.md, USER.md, MEMORY.md, AGENTS.md or a memory database locally. Company expert skills are cached at {cache}. Only this task's granted company tools are available. Team delegation and external connectors are unavailable."
+            )
+            instructions += (
+                "\nWhen the user asks to display, send or resend an existing local image "
+                "or file, call send_local_file with its project path. Do not merely return "
+                "a filename or file:// link. This delivers unchanged files in the current "
+                "reply without regenerating or modifying them."
             )
 
             @tool
@@ -591,7 +664,13 @@ class EnterpriseRuntime:
             for item in snapshot["skills"]:
                 if item["path"].endswith("/SKILL.md"):
                     instructions += f"- {PurePosixPath(item['path']).parent.name}: {item.get('description', '')}\n"
-            factory = CompanyModelFactory(client, task_id, snapshot["models"])
+            factory = CompanyModelFactory(
+                client,
+                task_id,
+                snapshot["models"],
+                model_profiles=snapshot.get("model_profiles"),
+                runtime_settings=snapshot.get("runtime_settings"),
+            )
             config = HarnessAgentConfig(
                 name=snapshot["name"],
                 workspace_dir=project,
@@ -638,6 +717,7 @@ class EnterpriseRuntime:
                     remember,
                     search_knowledge,
                     company_generate_image,
+                    send_local_file,
                     load_company_skill,
                 ],
                 middleware=[
@@ -712,22 +792,35 @@ class EnterpriseRuntime:
                 apply_agent_runtime_to_stream_request,
             )
 
+            # The factory has already capped each model's input budget and reserved
+            # output tokens. A raw stream override would discard that safe limit.
+            stream_settings = dict(snapshot.get("runtime_settings") or {})
+            stream_settings.pop("max_input_length", None)
             stream_options = apply_agent_runtime_to_stream_request(
-                {"conversation_mode": request["conversation_mode"]}
-                if request.get("conversation_mode")
-                else {},
-                snapshot.get("runtime_settings", {}),
+                {
+                    "conversation_mode": request.get("conversation_mode") or "craft",
+                    "configurable": {"conversation_mode_extra_read_tools": ["send_local_file"]},
+                },
+                stream_settings,
             )
             async for chunk in self.steering.stream(
                 agent, thread, message, persist_steer, options=stream_options
             ):
-                # Harness native protocol state snapshots contain serializable message dicts.
-                self.emit({"event": "chunk", "thread_id": thread, "data": chunk})
+                ui_chunk = project_ui_chunk(chunk)
+                if ui_chunk is not None:
+                    self.emit({"event": "chunk", "thread_id": thread, "data": ui_chunk})
             messages = await agent.aget_history(thread)
             await self.event(
                 task, directory, {"kind": "messages", "messages": messages_to_dict(messages)}
             )
-            artifacts = await offload(artifact_index, project, previous=before)
+            artifacts_by_path = dict(sent_files)
+            for item in await offload(artifact_index, project, previous=before):
+                # Keep explicit delivery intent, using the latest bytes if edited.
+                artifacts_by_path[item["path"]] = {
+                    **artifacts_by_path.get(item["path"], {}),
+                    **item,
+                }
+            artifacts = list(artifacts_by_path.values())
             current_messages = []
             for item in reversed(messages):
                 if item.id == message.id:
@@ -755,6 +848,10 @@ class EnterpriseRuntime:
             if "unknown" in error or isinstance(exc, httpx.TransportError):
                 status = "unknown"
         finally:
+            task["reported_status"] = status
+            # Stop the ownership watcher before any await in finalization.
+            if watcher:
+                watcher.cancel()
             if agent and status != "completed":
                 # Failed/cancelled turns still have useful checkpointed messages.
                 # Do not postpone them until a later successful turn's receipt.
@@ -769,9 +866,21 @@ class EnterpriseRuntime:
                             "messages": messages_to_dict(await agent.aget_history(thread)),
                         },
                     )
+                    if sent_files:
+                        artifacts = list(sent_files.values())
+                        await self.event(
+                            task,
+                            directory,
+                            {
+                                "kind": "artifacts",
+                                "location": "desktop",
+                                "scope": "turn",
+                                "user_message_id": task_id + "_user",
+                                "files": artifacts,
+                            },
+                        )
             self.steering.end(thread, failed=status in {"failed", "unknown"})
             if watcher:
-                watcher.cancel()
                 await asyncio.gather(watcher, return_exceptions=True)
             if backend:
                 await backend.shutdown()
@@ -779,7 +888,6 @@ class EnterpriseRuntime:
                 await agent.aclose()
             if saver:
                 await saver.close()
-            task["reported_status"] = status
             await offload(atomic_json, directory / "task.json", task)
             try:
                 async with asyncio.timeout(5):
@@ -807,8 +915,8 @@ class EnterpriseRuntime:
                 self.sync_work[task_id] = asyncio.create_task(self.retry_sync(task, directory))
 
     async def close(self) -> None:
-        for work in self.work.values():
-            work.cancel()
+        for thread in list(self.work):
+            await self.cancel({"thread_id": thread})
         await asyncio.gather(*list(self.work.values()), return_exceptions=True)
         for work in self.sync_work.values():
             work.cancel()

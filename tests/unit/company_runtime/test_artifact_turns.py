@@ -1,8 +1,9 @@
 import hashlib
+import os
 
 import pytest
 
-from octop.infra.company_runtime.local import artifact_index
+from octop.infra.company_runtime.local import ProjectBackend, artifact_index
 
 from .test_runtime import acquire, install_agent
 
@@ -13,6 +14,34 @@ def artifact(path, data):
 
 def message(kind, ident):
     return {"type": kind, "data": {"id": ident, "content": ""}}
+
+
+def test_explicit_delivery_accepts_project_paths_but_rejects_escape_and_directories(tmp_path):
+    project = tmp_path / "project"
+    project.mkdir()
+    image = project / "图片.png"
+    image.write_bytes(b"image")
+    outside = tmp_path / "private.png"
+    outside.write_bytes(b"private")
+    backend = ProjectBackend(project, tmp_path / "state", lambda event: None, tool_path="")
+    expected = artifact(str(image), "image")
+    for path in [image.name, "/" + image.name, str(image)]:
+        assert backend.artifact_metadata(path) == expected
+    for path in ["../private.png", str(outside), ".", "missing.png"]:
+        with pytest.raises(ValueError):
+            backend.artifact_metadata(path)
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX symlink semantics")
+def test_explicit_delivery_cannot_follow_a_link_outside_the_project(tmp_path):
+    project = tmp_path / "project"
+    project.mkdir()
+    outside = tmp_path / "private.png"
+    outside.write_bytes(b"private")
+    (project / "linked.png").symlink_to(outside)
+    backend = ProjectBackend(project, tmp_path / "state", lambda event: None, tool_path="")
+    with pytest.raises(ValueError):
+        backend.artifact_metadata("linked.png")
 
 
 def test_artifact_delta_excludes_unchanged_preexisting_and_preserves_overwrite(tmp_path):

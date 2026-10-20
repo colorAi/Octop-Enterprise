@@ -33,11 +33,13 @@ export function TodoListView({
   isStreaming = false,
   className,
   variant = "inline",
+  showHeader = true,
 }: {
   items: readonly TodoListItem[];
   isStreaming?: boolean;
   className?: string;
   variant?: "inline" | "panel";
+  showHeader?: boolean;
 }) {
   const { t } = useTranslation();
   if (items.length === 0) return null;
@@ -54,18 +56,20 @@ export function TodoListView({
         .filter(Boolean)
         .join(" ")}
     >
-      <div className={styles.todoListHeader}>
-        <div className={styles.todoListTitle}>
-          {t("chatUsage.todoListTitle", "Task progress")}
+      {showHeader ? (
+        <div className={styles.todoListHeader}>
+          <div className={styles.todoListTitle}>
+            {t("chatUsage.todoListTitle", "Task progress")}
+          </div>
+          <div className={styles.todoListSummary}>
+            {t("chatUsage.todoListSummary", {
+              completed,
+              total: items.length,
+              defaultValue: "{{completed}}/{{total}} done",
+            })}
+          </div>
         </div>
-        <div className={styles.todoListSummary}>
-          {t("chatUsage.todoListSummary", {
-            completed,
-            total: items.length,
-            defaultValue: "{{completed}}/{{total}} done",
-          })}
-        </div>
-      </div>
+      ) : null}
       <ul className={styles.todoListItems}>
         {items.map((item) => (
           <li key={item.id} className={styles.todoListItem}>

@@ -21,6 +21,7 @@ from octop.infra.agents.providers.media_openai import register_openai_media_prov
 from octop.infra.company_runtime.runtime import EnterpriseRuntime
 from tests.unit.agents.test_media_openai import multipart_fields
 
+from .test_resilience import runtime_for
 from .test_runtime import install_agent
 
 
@@ -49,6 +50,173 @@ class ImageModel:
                     }
                 ],
             )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["craft", "ask", "plan"])
+async def test_existing_image_can_be_sent_again_without_modifying_it(company, tmp_path, mode):
+    server, client, _, _ = company
+    install_agent(server)
+    runtime, events = runtime_for(client, tmp_path)
+    project = runtime.workspace / "thread1"
+    project.mkdir()
+    original = project / "已有图片.png"
+    Image.new("RGB", (12, 8), "blue").save(original)
+    data, modified = original.read_bytes(), original.stat().st_mtime_ns
+    unrelated = project / "另一张.png"
+    Image.new("RGB", (12, 8), "red").save(unrelated)
+
+    class SendModel(ImageModel):
+        async def astream(self, messages):
+            users = [i for i, m in enumerate(messages) if isinstance(m, HumanMessage)]
+            turn = len(users)
+            if turn == 3 or any(isinstance(m, ToolMessage) for m in messages[users[-1] + 1 :]):
+                yield AIMessageChunk(
+                    content="已发送。" if turn < 3 else "你好。", id=f"sent-{turn}"
+                )
+                return
+            yield AIMessageChunk(
+                content="",
+                id=f"send-{turn}",
+                tool_call_chunks=[
+                    {
+                        "name": "send_local_file",
+                        "args": json.dumps(
+                            {"file_path": original.name if turn == 1 else str(original)}
+                        ),
+                        "id": f"send-image-{turn}",
+                        "index": 0,
+                    }
+                ],
+            )
+
+    server.app_runtime.agent_registry.get_agent("expert").model_factory.get_chat_model = (
+        lambda ref: SendModel()
+    )
+    receipt = {
+        "path": str(original),
+        "size": len(data),
+        "sha256": hashlib.sha256(data).hexdigest(),
+        "explicitly_sent": True,
+    }
+    try:
+        for turn in range(1, 4):
+            await runtime.start(
+                {
+                    "task_id": f"send-task{turn}",
+                    "thread_id": "thread1",
+                    "agent_id": "expert",
+                    "text": "把这张图直接发给我" if turn < 3 else "你好",
+                    "conversation_mode": mode,
+                }
+            )
+            await asyncio.wait_for(runtime.work["thread1"], 15)
+            assert events[-1]["status"] == "completed", events[-1]
+            assert events[-1]["artifacts"] == ([receipt] if turn < 3 else [])
+        assert original.read_bytes() == data
+        assert original.stat().st_mtime_ns == modified
+        turns = server.services.company_runtime_repo.artifact_turns("thread1")
+        assert [t["files"] for t in turns] == [[receipt], [receipt]]
+        assert [t["user_message_id"] for t in turns] == ["send-task1_user", "send-task2_user"]
+        assert [t["message_id"] for t in turns] == ["sent-1", "sent-2"]
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_missing_file_is_a_tool_error_without_a_false_delivery_receipt(company, tmp_path):
+    server, client, _, _ = company
+    install_agent(server)
+    runtime, events = runtime_for(client, tmp_path)
+
+    class MissingFileModel(ImageModel):
+        async def astream(self, messages):
+            results = [m for m in messages if isinstance(m, ToolMessage)]
+            if results:
+                assert results[-1].status == "error"
+                assert "local_file_not_found" in results[-1].content
+                yield AIMessageChunk(content="找不到这张图片。", id="missing-answer")
+                return
+            yield AIMessageChunk(
+                content="",
+                id="missing-call",
+                tool_call_chunks=[
+                    {
+                        "name": "send_local_file",
+                        "args": json.dumps({"file_path": "missing.png"}),
+                        "id": "missing-image",
+                        "index": 0,
+                    }
+                ],
+            )
+
+    server.app_runtime.agent_registry.get_agent("expert").model_factory.get_chat_model = (
+        lambda ref: MissingFileModel()
+    )
+    try:
+        await runtime.start(
+            {
+                "task_id": "send-task",
+                "thread_id": "thread1",
+                "agent_id": "expert",
+                "text": "发送图片",
+            }
+        )
+        await asyncio.wait_for(runtime.work["thread1"], 15)
+        assert events[-1]["status"] == "completed", events[-1]
+        assert events[-1]["artifacts"] == []
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_cancel_after_sending_keeps_the_image_receipt(company, tmp_path):
+    server, client, _, _ = company
+    install_agent(server)
+    runtime, events = runtime_for(client, tmp_path)
+    project = runtime.workspace / "thread1"
+    project.mkdir()
+    Image.new("RGB", (12, 8), "blue").save(project / "image.png")
+    sent = asyncio.Event()
+
+    class SendThenWaitModel(ImageModel):
+        async def astream(self, messages):
+            if any(isinstance(m, ToolMessage) for m in messages):
+                sent.set()
+                await asyncio.Event().wait()
+                return
+            yield AIMessageChunk(
+                content="",
+                id="send-call",
+                tool_call_chunks=[
+                    {
+                        "name": "send_local_file",
+                        "args": json.dumps({"file_path": "image.png"}),
+                        "id": "send-image",
+                        "index": 0,
+                    }
+                ],
+            )
+
+    server.app_runtime.agent_registry.get_agent("expert").model_factory.get_chat_model = (
+        lambda ref: SendThenWaitModel()
+    )
+    try:
+        await runtime.start(
+            {"task_id": "send-task", "thread_id": "thread1", "agent_id": "expert", "text": "发图"}
+        )
+        worker = runtime.work["thread1"]
+        await asyncio.wait_for(sent.wait(), 10)
+        await runtime.cancel({"thread_id": "thread1"})
+        await asyncio.wait_for(worker, 10)
+        done = events[-1]
+        assert done["status"] == "cancelled", done
+        assert len(done["artifacts"]) == 1
+        assert done["artifacts"][0]["explicitly_sent"]
+        assert server.services.company_runtime_repo.artifacts("thread1") == done["artifacts"]
+        assert "thread1" not in runtime.work
+    finally:
+        await runtime.close()
 
 
 @pytest.mark.asyncio

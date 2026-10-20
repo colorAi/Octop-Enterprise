@@ -25,6 +25,7 @@ import { getAuthToken } from "../../../api/request";
 import { octopThreadsApi } from "../../../api/modules/octopThreads";
 import { isPendingThread } from "./useSessions";
 import type { TokenUsage } from "../../../api/types";
+import { contextUsageFromState } from "../utils/contextUsage";
 import { buildDashboardChatWsUrl } from "../../../api/modules/wsChat";
 import { rewritePeerSpeakerId } from "../../../utils/remoteExpert";
 import { generateId } from "../../../utils/messageParser";
@@ -537,7 +538,20 @@ function getOrCreate(sessionId: string): SessionStreamState {
   return state;
 }
 
+const dirtyStreamSnapshots = new WeakSet<SessionStreamState>();
+const pendingStreamNotifications = new WeakMap<
+  SessionStreamState,
+  () => void
+>();
+
+function cancelStreamNotification(state: SessionStreamState): void {
+  pendingStreamNotifications.get(state)?.();
+  pendingStreamNotifications.delete(state);
+}
+
 function notify(state: SessionStreamState) {
+  cancelStreamNotification(state);
+  dirtyStreamSnapshots.delete(state);
   // Rebuild the snapshot reference so useSyncExternalStore sees the change.
   state._snapshot = buildSnapshot(state);
   for (const fn of state.listeners) {
@@ -546,6 +560,19 @@ function notify(state: SessionStreamState) {
     } catch {
       /* ignore */
     }
+  }
+}
+
+/** Apply every delta, but publish cumulative streaming state once per frame. */
+function notifyStream(state: SessionStreamState): void {
+  dirtyStreamSnapshots.add(state);
+  if (pendingStreamNotifications.has(state) || !state.listeners.size) return;
+  if (typeof requestAnimationFrame === "function") {
+    const frame = requestAnimationFrame(() => notify(state));
+    pendingStreamNotifications.set(state, () => cancelAnimationFrame(frame));
+  } else {
+    const timer = setTimeout(() => notify(state), 16);
+    pendingStreamNotifications.set(state, () => clearTimeout(timer));
   }
 }
 
@@ -699,8 +726,10 @@ function armStreamWatchdog(sessionId: string): void {
 export function subscribe(sessionId: string, listener: () => void): () => void {
   const state = getOrCreate(sessionId);
   state.listeners.add(listener);
+  if (dirtyStreamSnapshots.has(state)) notifyStream(state);
   return () => {
     state.listeners.delete(listener);
+    if (!state.listeners.size) cancelStreamNotification(state);
   };
 }
 
@@ -708,6 +737,8 @@ export function subscribe(sessionId: string, listener: () => void): () => void {
 export function getSnapshot(sessionId: string): SessionSnapshot {
   const state = sessionStates.get(sessionId);
   if (!state) return EMPTY_SNAPSHOT;
+  if (dirtyStreamSnapshots.delete(state))
+    state._snapshot = buildSnapshot(state);
   return state._snapshot;
 }
 
@@ -1077,6 +1108,8 @@ export function removeSession(sessionId: string) {
   localRuntimeAttachments.get(sessionId)?.();
   const state = sessionStates.get(sessionId);
   if (state) {
+    cancelStreamNotification(state);
+    dirtyStreamSnapshots.delete(state);
     state.abortController?.abort();
     sessionStates.delete(sessionId);
   }
@@ -1170,27 +1203,16 @@ export function debugDump() {
 function updateContextUsageFromChunk(
   state: SessionStreamState,
   chunk: { data: unknown },
-): void {
+): boolean {
   const data = chunk.data;
-  if (!data || typeof data !== "object" || Array.isArray(data)) return;
-  const messages = (data as { messages?: unknown[] }).messages;
-  if (!Array.isArray(messages) || messages.length === 0) return;
-
-  const last = messages[messages.length - 1] as Record<string, unknown>;
-  const usageMeta = last.usage_metadata;
-  if (!usageMeta || typeof usageMeta !== "object" || Array.isArray(usageMeta))
-    return;
-
-  const meta = usageMeta as Record<string, unknown>;
-  const input =
-    typeof meta.input_tokens === "number"
-      ? meta.input_tokens
-      : typeof meta.prompt_tokens === "number"
-      ? meta.prompt_tokens
-      : null;
-  if (input === null || input <= 0) return;
-
-  state.contextUsage = { input_tokens: input };
+  if (!data || typeof data !== "object" || Array.isArray(data)) return false;
+  const usage = contextUsageFromState(
+    (data as { messages?: unknown[] }).messages,
+  );
+  if (!usage || JSON.stringify(usage) === JSON.stringify(state.contextUsage))
+    return false;
+  state.contextUsage = usage;
+  return true;
 }
 
 function usageCount(value: unknown): number {
@@ -1503,13 +1525,23 @@ function handleHarnessChunk(
     }
     case "state_update":
     case "state_snapshot":
-      updateContextUsageFromChunk(state, chunk);
+      if (!updateContextUsageFromChunk(state, chunk)) return;
       break;
     case "custom":
       // Debug-only — phase 15 will add a debug toggle that surfaces these.
-      break;
+      return;
   }
-  notify(state);
+  if (
+    [
+      "token",
+      "reasoning",
+      "tool_call_chunk",
+      "state_update",
+      "state_snapshot",
+    ].includes(chunk.type)
+  )
+    notifyStream(state);
+  else notify(state);
 }
 
 /** Apply one live harness frame (used by WS and unit tests). */
@@ -2541,12 +2573,13 @@ async function attachLocalRuntime(
     }
   };
   const markActive = () => {
+    const changed = !observing || !state.isStreaming;
     observing = true;
     localStreams.add(sessionId);
     state.abortController = controller;
     state.isStreaming = true;
     touchStreamActivity(sessionId);
-    notify(state);
+    if (changed) notify(state);
   };
   const cancel = () => {
     void bridge.cancel({ thread_id: threadId }).catch(() => {});
@@ -2565,6 +2598,7 @@ async function attachLocalRuntime(
     if (event.thread_id !== threadId) return;
     if (event.event === "process_output") {
       applyLocalProcessOutput(state, event);
+      notifyStream(state);
       markActive();
     }
     if (event.event === "chunk" && event.data) {
@@ -3385,7 +3419,7 @@ export async function sendTurn(
           touchStreamActivity(sessionId);
           if (event.event === "process_output") {
             applyLocalProcessOutput(state, event);
-            notify(state);
+            notifyStream(state);
           }
           if (event.event === "steer" && event.frame) {
             applySteerProtocolFrame(state, event.frame, sessionId);
@@ -3395,8 +3429,10 @@ export async function sendTurn(
             handleHarnessChunk(state, event.data, sessionId);
             // The harness may finish before company history/artifacts are
             // acknowledged. Only the native lifecycle event unlocks the turn.
-            state.isStreaming = true;
-            notify(state);
+            if (!state.isStreaming) {
+              state.isStreaming = true;
+              notifyStream(state);
+            }
           }
           if (event.event === "done" && event.artifacts?.length) {
             const previous = localArtifactHistory.get(state) ?? [];

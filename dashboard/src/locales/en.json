@@ -1562,6 +1562,7 @@
       "breakdownTitle": "Context Usage",
       "breakdownPercent": "{{percent}}% Full",
       "breakdownHint": "Shows current context-window occupancy, not this turn’s billed total.",
+      "breakdownUnavailableHint": "Context categories are unavailable; the total still includes tools and other request content.",
       "estimateHint": "The provider did not return usage; figures below are estimates.",
       "segments": {
         "system_prompt": "System prompt",
@@ -1570,7 +1571,8 @@
         "skills": "Skills",
         "mcp": "MCP",
         "subagent_definitions": "Subagent definitions",
-        "conversation": "Conversation"
+        "conversation": "Conversation",
+        "unclassified": "Unclassified usage"
       }
     },
     "polish": {
@@ -1907,6 +1909,7 @@
     "mediaOutput": "Media output",
     "todoListTitle": "Task progress",
     "todoListSummary": "{{completed}}/{{total}} done",
+    "todoCurrentStep": "Current: {{step}}",
     "todoStatus": {
       "pending": "Pending",
       "in_progress": "In progress",

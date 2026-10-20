@@ -44,6 +44,134 @@ async def run_turn(runtime, **options):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("action", ["cancel", "close"])
+async def test_final_sync_cannot_be_cancelled_out_of_cleanup(
+    company, tmp_path, monkeypatch, action
+):
+    server, client, _, _ = company
+    install_agent(server)
+    runtime, events = runtime_for(client, tmp_path)
+    entered_sync = asyncio.Event()
+    send = client.http.send
+
+    async def hold_checkpoint(request, *args, **kwargs):
+        if request.url.path.endswith("/checkpoint-batch"):
+            entered_sync.set()
+            await asyncio.Event().wait()
+        return await send(request, *args, **kwargs)
+
+    monkeypatch.setattr(client.http, "send", hold_checkpoint)
+    try:
+        await runtime.start(
+            {
+                "task_id": "task1",
+                "thread_id": "thread1",
+                "agent_id": "expert",
+                "text": "Create report",
+            }
+        )
+        worker = runtime.work["thread1"]
+        await asyncio.wait_for(entered_sync.wait(), 10)
+        assert (runtime.workspace / "thread1/report.txt").is_file()
+        if action == "close":
+            await asyncio.wait_for(runtime.close(), 10)
+        else:
+            for _ in range(2):
+                assert await runtime.cancel({"thread_id": "thread1"}) == {"status": "completed"}
+        await asyncio.wait_for(worker, 10)
+        assert "thread1" not in runtime.work
+        done = [event for event in events if event.get("event") == "done"]
+        assert len(done) == 1
+        assert done[0]["status"] == "completed"
+        assert done[0]["sync_state"] == "pending"
+        assert runtime.tasks["thread1"]["status"] == "completed"
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_lost_start_response_survives_restart_and_releases_server_lease(
+    company, tmp_path, monkeypatch
+):
+    server, client, _, _ = company
+    install_agent(server)
+    runtime, _ = runtime_for(client, tmp_path)
+    send = client.http.send
+    dropped = False
+
+    async def drop_after_commit(request, *args, **kwargs):
+        nonlocal dropped
+        response = await send(request, *args, **kwargs)
+        if request.url.path == "/api/company-runtime/tasks" and not dropped:
+            dropped = True
+            assert response.status_code == 200
+            raise httpx.ReadError("accepted task response lost", request=request)
+        return response
+
+    monkeypatch.setattr(client.http, "send", drop_after_commit)
+    restored = EnterpriseRuntime(lambda event: None)
+    try:
+        with pytest.raises(httpx.ReadError):
+            await runtime.start(
+                {
+                    "task_id": "task1",
+                    "thread_id": "thread1",
+                    "agent_id": "expert",
+                    "text": "Create report",
+                }
+            )
+        assert server.services.company_runtime_repo.task("task1")["status"] == "running"
+        saved = json.loads((runtime.state / "tasks/task1/task.json").read_text())
+        assert saved["status"] == "unknown" and saved["recovery_token"]
+        assert not runtime.work
+        restored.client, restored.state, restored.workspace = (
+            client,
+            runtime.state,
+            runtime.workspace,
+        )
+        restored.installation_token = runtime.installation_token
+        restored.authorized, restored.tools = True, runtime.tools
+        await restored.restore_tasks()
+        assert restored.tasks["thread1"]["status"] == "unknown"
+        assert await restored.reconcile(
+            {"thread_id": "thread1", "task_id": "task1", "resolution": "cancelled"}
+        ) == {"status": "cancelled"}
+        assert server.services.company_runtime_repo.task("task1")["status"] == "cancelled"
+        assert not (runtime.workspace / "thread1/report.txt").exists()
+        await run_turn(restored, task_id="task2")
+        assert restored.tasks["thread1"]["status"] == "completed"
+    finally:
+        runtime.client = None
+        await runtime.close()
+        await restored.close()
+
+
+@pytest.mark.asyncio
+async def test_rejected_acquisition_does_not_leave_an_unknown_task(company, tmp_path):
+    from octop.infra.company_runtime.client import CompanyServiceError
+
+    server, client, _, _ = company
+    install_agent(server)
+    runtime, events = runtime_for(client, tmp_path)
+    try:
+        with pytest.raises(CompanyServiceError):
+            await runtime.start(
+                {
+                    "task_id": "rejected",
+                    "thread_id": "thread1",
+                    "agent_id": "missing",
+                    "text": "Hello",
+                }
+            )
+        assert runtime.tasks["thread1"]["status"] == "failed"
+        assert runtime.tasks["thread1"]["sync_state"] == "synced"
+        await run_turn(runtime)
+        assert events[-1]["status"] == "completed", events[-1]
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
 async def test_graph_nodes_use_local_checkpoints_and_one_batch(company, tmp_path, monkeypatch):
     server, client, _, _ = company
     install_agent(server)

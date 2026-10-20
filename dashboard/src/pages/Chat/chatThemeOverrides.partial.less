@@ -687,16 +687,6 @@
   }
 }
 
-.runUsageBar {
-  position: relative;
-  z-index: 1;
-  max-width: 960px;
-  width: calc(100% - 2 * var(--chat-column-pad-x, 32px));
-  margin: 8px auto;
-  font-size: 12px;
-  box-sizing: border-box;
-}
-
 .inputWrapper {
   max-width: 960px;
   min-width: 280px;
@@ -792,10 +782,6 @@
     display: none;
   }
 
-  .runUsageBar {
-    width: calc(100% - 24px);
-  }
-
   .aiDisclaimer {
     width: calc(100% - 24px);
   }
@@ -819,7 +805,6 @@
   /* Minimum font size uplift: 10px → 12px on mobile */
   .msgTime,
   .msgUsage,
-  .runUsageBar,
   .aiDisclaimer,
   .shortcutCmd,
   .slashMenuCmd,

@@ -926,3 +926,26 @@ it("does not reattach an older off-page image from a cumulative native result", 
       .map((m) => m.localArtifacts),
   ).toEqual([[fresh]]);
 });
+
+it("displays an explicitly resent image even when its hash is already in history", async () => {
+  const file = { path: "/work/old.png", size: 1, sha256: "a".repeat(64) };
+  store.rememberLocalArtifactHistory("local-thread", [file]);
+  store.appendUserMessage("local-thread", {
+    id: "optimistic",
+    role: "user",
+    content: "把图直接发给我",
+    timestamp: 1,
+  });
+  const pending = store.sendTurn("local-thread", "把图直接发给我", "expert", "key");
+  const sent = { ...file, explicitly_sent: true };
+  listener?.({
+    event: "done",
+    thread_id: "local-thread",
+    status: "completed",
+    artifacts: [sent],
+  });
+  await pending;
+  expect(
+    store.getSnapshot("local-thread").messages.at(-1)?.localArtifacts,
+  ).toEqual([sent]);
+});

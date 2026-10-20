@@ -2,20 +2,19 @@
 /* ---------- Chat input ---------- */
 .runUsageBar {
   max-width: var(--chat-column-max, 960px);
-  width: calc(100% - 2 * var(--chat-column-pad-x, 32px));
-  margin: 0 auto 6px;
-  padding: 0 2px;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 10px;
-  color: var(--fn-text-quaternary);
+  width: 100%;
+  margin: 0 auto 4px;
+  padding: 0 12px;
+  box-sizing: border-box;
+  font-size: 11px;
+  line-height: 16px;
+  text-align: center;
+  text-wrap: balance;
+  word-break: keep-all;
+  font-variant-numeric: tabular-nums;
+  color: var(--fn-text-tertiary);
   user-select: none;
   flex-shrink: 0;
-
-  @media (max-width: 767px) {
-    width: calc(100% - 24px);
-  }
 }
 
 .askQuestionDock {
@@ -28,6 +27,22 @@
   @media (max-width: 767px) {
     padding: 0 var(--chat-column-pad-x-narrow, 12px) 6px;
   }
+}
+
+.todoProgressDock {
+  flex-shrink: 0;
+  padding-inline: var(--chat-column-pad-x, 32px);
+  background: var(--fn-bg-elevated, #fff);
+
+  @container chat-main (max-width: 560px) {
+    padding-inline: var(--chat-column-pad-x-narrow, 12px);
+  }
+}
+
+.todoProgressDockInner {
+  width: 100%;
+  max-width: var(--chat-column-max, 960px);
+  margin: 0 auto;
 }
 
 .askQuestionDockInner,
@@ -603,6 +618,18 @@
 }
 
 /* ---------- Queued messages: composer header strip ---------- */
+.queuedMessagesDock {
+  width: 100%;
+  max-width: var(--chat-column-max, 960px);
+  margin: 0 auto;
+
+  .queuedMessages {
+    margin: 0 0 8px;
+    border: 1px solid var(--fn-border-secondary);
+    border-radius: 12px;
+  }
+}
+
 .queuedMessages {
   display: flex;
   flex-direction: column;

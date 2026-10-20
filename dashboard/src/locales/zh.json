@@ -1562,6 +1562,7 @@
       "breakdownTitle": "上下文使用",
       "breakdownPercent": "已用 {{percent}}%",
       "breakdownHint": "显示当前上下文窗口占用，不是本轮计费合计。",
+      "breakdownUnavailableHint": "暂未取得分类明细；总量仍包含工具等请求上下文。",
       "estimateHint": "供应商未回传用量，以下为估算。",
       "segments": {
         "system_prompt": "系统提示词",
@@ -1570,7 +1571,8 @@
         "skills": "技能",
         "mcp": "MCP",
         "subagent_definitions": "子智能体定义",
-        "conversation": "对话"
+        "conversation": "对话",
+        "unclassified": "未分类用量"
       }
     },
     "polish": {
@@ -1907,6 +1909,7 @@
     "mediaOutput": "媒体输出",
     "todoListTitle": "任务进度",
     "todoListSummary": "已完成 {{completed}}/{{total}}",
+    "todoCurrentStep": "当前：{{step}}",
     "todoStatus": {
       "pending": "待处理",
       "in_progress": "进行中",

@@ -1,3 +1,4 @@
+import type { ContextUsageBreakdown } from "../../../api/modules/octopThreads";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
@@ -113,6 +114,7 @@ interface ChatInputActionsRowProps {
   threadId?: string | null;
   contextUsedTokens?: number | null;
   contextMaxTokens?: number;
+  contextBreakdown?: ContextUsageBreakdown | null;
   availableModels?: ResolvedModel[];
   selectedModel?: string | null;
   defaultModel?: string | null;
@@ -175,6 +177,7 @@ export default function ChatInputActionsRow({
   threadId,
   contextUsedTokens = null,
   contextMaxTokens = 128_000,
+  contextBreakdown = null,
   availableModels,
   selectedModel,
   onModelChange,
@@ -978,6 +981,7 @@ export default function ChatInputActionsRow({
         <ContextWindowRing
           usedTokens={contextUsedTokens}
           maxTokens={contextMaxTokens}
+          liveBreakdown={contextBreakdown}
           agentId={agentId}
           threadId={threadId}
           selectedConnectors={selectedConnectors}

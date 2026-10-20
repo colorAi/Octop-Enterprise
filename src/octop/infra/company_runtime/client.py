@@ -10,12 +10,15 @@ from typing import Any, cast
 from urllib.parse import urlsplit
 
 import httpx
+from langchain_core.exceptions import ContextOverflowError
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import BaseMessageChunk, messages_from_dict, messages_to_dict
 from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResult
 from langchain_core.utils.function_calling import convert_to_openai_tool
 from langgraph.checkpoint.base import WRITES_IDX_MAP, BaseCheckpointSaver, CheckpointTuple
 from pydantic import ConfigDict, Field
+
+from octop.infra.company_runtime.model_context import calibrated_prompt_tokens
 
 
 class CompanyServiceError(RuntimeError):
@@ -106,12 +109,21 @@ class CompanyChatModel(BaseChatModel):
     async def _astream(
         self, messages: Any, stop: Any = None, run_manager: Any = None, **kwargs: Any
     ) -> AsyncIterator[ChatGenerationChunk]:
+        limit = (self.profile or {}).get("max_input_tokens", 128_000)
+        calibrated = calibrated_prompt_tokens(messages, kwargs.get("tools", []))
+        if calibrated is not None and calibrated >= int(limit * 0.85):
+            # The outer compaction middleware archives/summarizes and performs
+            # one smaller retry. No provider request or tool has run here.
+            raise ContextOverflowError("company_model_context_pressure")
         body = {
             "model": self.model_ref,
             "messages": messages_to_dict(messages),
             "tools": kwargs.get("tools", []),
         }
         received = False
+        generated = False
+        finish_reason = None
+        input_tokens = 0
         try:
             async with self.client.http.stream(
                 "POST",
@@ -127,13 +139,30 @@ class CompanyChatModel(BaseChatModel):
 
                     value = json.loads(line)
                     if "error" in value:
+                        if value["error"] == "company_model_context_overflow" and not received:
+                            raise ContextOverflowError("company_model_context_overflow")
                         raise CompanyModelError(
                             value["error"], retryable=bool(value.get("retryable")) and not received
                         )
                     received = True
-                    yield ChatGenerationChunk(
-                        message=cast(BaseMessageChunk, messages_from_dict([value])[0])
+                    message = cast(BaseMessageChunk, messages_from_dict([value])[0])
+                    generated = (
+                        generated
+                        or bool(message.content)
+                        or bool(getattr(message, "tool_call_chunks", None))
                     )
+                    finish_reason = message.response_metadata.get("finish_reason") or finish_reason
+                    input_tokens = (getattr(message, "usage_metadata", None) or {}).get(
+                        "input_tokens", input_tokens
+                    )
+                    yield ChatGenerationChunk(message=message)
+            if finish_reason in {"length", "max_tokens"}:
+                if not generated and input_tokens >= int(limit * 0.85):
+                    # Reasoning-only output may exhaust the remaining context
+                    # without an HTTP error. Do not accept it as task completion.
+                    raise ContextOverflowError("company_model_context_exhausted")
+                # Partial text/tool arguments cannot safely be replayed silently.
+                raise CompanyModelError("company_model_output_truncated")
         except httpx.HTTPStatusError as exc:
             status = exc.response.status_code
             raise CompanyModelError(

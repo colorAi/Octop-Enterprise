@@ -96,7 +96,7 @@ import {
 import ChatSidebarPanel from "./components/ChatSidebarPanel";
 import ChatTitleBar from "./components/ChatTitleBar";
 import TeamChatBadge from "./components/TeamChatBadge";
-import ChatComposerChrome from "./components/ChatComposerChrome";
+import ComposerTodoProgress from "./components/ComposerTodoProgress";
 import AskQuestionCard from "./components/AskQuestionCard";
 import {
   findAutoResumableApproval,
@@ -606,15 +606,16 @@ function ChatPageInner() {
     composerSession?.hitlPolicy,
   );
 
-  const { contextMaxTokens, contextUsedTokens } = useChatContextWindow(
-    messages,
-    contextUsage,
-    selectedModel,
-    availableModels,
-    activeAgent?.default_model,
-    activeModelRef,
-    activeAgent,
-  );
+  const { contextMaxTokens, contextUsedTokens, contextBreakdown } =
+    useChatContextWindow(
+      messages,
+      contextUsage,
+      selectedModel,
+      availableModels,
+      activeAgent?.default_model,
+      activeModelRef,
+      activeAgent,
+    );
 
   const sessionUsage = useMemo(() => {
     const acc: TokenUsage = {};
@@ -1772,7 +1773,6 @@ function ChatPageInner() {
                 </div>
               )}
 
-            <ChatComposerChrome sessionUsageLabel={sessionUsageLabel} />
             {pendingAsk ? (
               <div className={styles.askQuestionDock}>
                 <div className={styles.askQuestionDockInner}>
@@ -1850,6 +1850,16 @@ function ChatPageInner() {
                 action={<Button onClick={handleNewChat}>新建本机会话</Button>}
               />
             )}
+            <div className={styles.todoProgressDock}>
+              <div className={styles.todoProgressDockInner}>
+                <ComposerTodoProgress
+                  key={`${resolvedAgentId}:${activeThreadId}`}
+                  messages={messages}
+                  isStreaming={isStreaming || membersStillTalking}
+                  hostAgentId={resolvedAgentId}
+                />
+              </div>
+            </div>
             <ChatInput
               ref={chatInputRef}
               onSend={wrappedHandleSend}
@@ -1912,6 +1922,8 @@ function ChatPageInner() {
               defaultModel={activeAgent?.default_model ?? null}
               contextUsedTokens={contextUsedTokens}
               contextMaxTokens={contextMaxTokens}
+              contextBreakdown={contextBreakdown}
+              sessionUsageLabel={sessionUsageLabel}
             />
           </div>
 

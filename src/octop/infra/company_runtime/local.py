@@ -143,6 +143,7 @@ class ReceiptMiddleware(AgentMiddleware):
             "remember",
             "search_knowledge",
             "company_generate_image",
+            "send_local_file",
             "load_company_skill",
         }
     )
@@ -232,6 +233,16 @@ class ProjectBackend(HarnessLocalShellBackend):
         if native.is_absolute() and native.is_relative_to(self.project):
             key = native.relative_to(self.project).as_posix()
         return super()._resolve_path(key)
+
+    def artifact_metadata(self, file_path: str) -> dict[str, Any]:
+        """Describe an existing project file for the native preview/reveal bridge."""
+        target = self._resolve_path(file_path)
+        if not target.is_file():
+            raise ValueError("local_file_not_found")
+        with target.open("rb") as stream:
+            digest = hashlib.file_digest(stream, "sha256").hexdigest()
+            size = os.fstat(stream.fileno()).st_size
+        return {"path": str(target), "size": size, "sha256": digest}
 
     def execute(self, command: str, *, timeout: int | None = None) -> ExecuteResponse:
         raise RuntimeError("Synchronous execution is disabled; use asynchronous runtime")

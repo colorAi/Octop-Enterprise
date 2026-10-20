@@ -62,7 +62,8 @@ def _from_stream_input_tokens(input_tokens: int, *, max_tokens: int) -> ContextB
     cap = max_tokens if max_tokens > 0 else 128_000
     used = min(max(0, input_tokens), cap)
     segments = dict.fromkeys(SEGMENT_KEYS, 0)
-    segments["conversation"] = used
+    # The ledger knows the total, not its composition. Tool schemas and system
+    # prompts are included in input usage too; do not label all of it dialogue.
     return ContextBreakdownResult(max_tokens=cap, used_tokens=used, segments=segments)
 
 

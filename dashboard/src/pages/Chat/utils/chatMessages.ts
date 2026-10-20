@@ -1,5 +1,6 @@
 import type { TokenUsage } from "../../../api/types";
 import { generateId } from "../../../utils/messageParser";
+import { formatTokenCount } from "../../../utils/formatTokenCount";
 import type {
   ChatAttachment,
   ChatMessage,
@@ -134,7 +135,7 @@ export function formatRunUsage(
 
   const parts: string[] = [];
   if (typeof usage.input_tokens === "number") {
-    parts.push(`${usage.input_tokens} ${labels.input}`);
+    parts.push(`${formatTokenCount(usage.input_tokens)} ${labels.input}`);
   }
   if (
     typeof usage.cache_read_tokens === "number" &&
@@ -146,13 +147,17 @@ export function formatRunUsage(
             (usage.cache_read_tokens / usage.input_tokens) * 100,
           )}%)`
         : "";
-    parts.push(`${usage.cache_read_tokens} ${labels.cacheHit}${percent}`);
+    parts.push(
+      `${formatTokenCount(usage.cache_read_tokens)} ${
+        labels.cacheHit
+      }${percent}`,
+    );
   }
   if (typeof usage.output_tokens === "number") {
-    parts.push(`${usage.output_tokens} ${labels.output}`);
+    parts.push(`${formatTokenCount(usage.output_tokens)} ${labels.output}`);
   }
   if (typeof usage.total_tokens === "number") {
-    parts.push(`${usage.total_tokens} ${labels.total}`);
+    parts.push(`${formatTokenCount(usage.total_tokens)} ${labels.total}`);
   }
   return parts.length > 0 ? parts.join(" / ") : null;
 }

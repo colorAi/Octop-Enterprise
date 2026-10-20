@@ -63,8 +63,8 @@ function normalizeTodo(raw: unknown, index: number): TodoListItem | null {
   return { id, content, status: normalizeStatus(row.status) };
 }
 
-function parseTodoPayload(raw: unknown): TodoListItem[] {
-  if (!raw) return [];
+function parseTodoPayload(raw: unknown): TodoListItem[] | null {
+  if (!raw) return null;
   if (Array.isArray(raw)) {
     return raw
       .map((item, index) => normalizeTodo(item, index))
@@ -79,7 +79,7 @@ function parseTodoPayload(raw: unknown): TodoListItem[] {
         .filter((item): item is TodoListItem => item !== null);
     }
   }
-  return [];
+  return null;
 }
 
 function parseJsonLoose(raw: string | undefined): unknown {
@@ -123,14 +123,24 @@ export function parseWriteTodosToolData(
   outputRaw: string | undefined,
   allowPartial = false,
 ): TodoListItem[] {
+  return readWriteTodosSnapshot(argumentsRaw, outputRaw, allowPartial) ?? [];
+}
+
+/** An empty snapshot clears a plan; null means no usable update yet. */
+export function readWriteTodosSnapshot(
+  argumentsRaw: string | undefined,
+  outputRaw: string | undefined,
+  allowPartial = false,
+): TodoListItem[] | null {
   const fromOutput = parseTodoPayload(parseJsonLoose(outputRaw));
-  if (fromOutput.length > 0) return fromOutput;
+  if (fromOutput !== null) return fromOutput;
   const fromArgs = parseTodoPayload(parseJsonLoose(argumentsRaw));
-  if (fromArgs.length > 0) return fromArgs;
+  if (fromArgs !== null) return fromArgs;
   if (allowPartial && argumentsRaw?.trim()) {
-    return parsePartialTodoPayload(argumentsRaw);
+    const partial = parsePartialTodoPayload(argumentsRaw);
+    if (partial.length > 0) return partial;
   }
-  return [];
+  return null;
 }
 
 /** Merge all `write_todos` calls in a turn; later updates win for the same id. */

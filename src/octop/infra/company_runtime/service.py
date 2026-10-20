@@ -10,6 +10,7 @@ from importlib.metadata import version
 from typing import Any
 
 import httpx
+from langchain_core.exceptions import ContextOverflowError
 from langchain_core.messages import message_to_dict, messages_from_dict
 
 from octop.infra.agents.providers.reasoning import (
@@ -18,6 +19,7 @@ from octop.infra.agents.providers.reasoning import (
 )
 from octop.infra.agents.settings.runtime_limits import agent_model_settings, agent_runtime_values
 from octop.infra.company_runtime import PROTOCOL_VERSION
+from octop.infra.company_runtime.model_context import model_token_limits
 from octop.infra.db.repos.company_runtime import CompanyRuntimeRepo, RuntimeConflict, encode
 from octop.infra.db.repos.thread_messages import ThreadMessageInput
 from octop.infra.errors import ErrorCode, OctopError
@@ -33,7 +35,29 @@ def model_failure(exc: Exception) -> dict[str, Any]:
     """Expose a stable failure category without provider payloads or credentials."""
     if isinstance(exc, OctopError):
         return {"error": exc.details.get("reason", "company_model_failed"), "retryable": False}
-    status = getattr(exc, "status_code", None)
+    status = (
+        exc.response.status_code
+        if isinstance(exc, httpx.HTTPStatusError)
+        else getattr(exc, "status_code", None)
+    )
+    if isinstance(exc, ContextOverflowError) or (
+        status in {400, 413, 422}
+        and any(
+            marker in str(exc).lower()
+            for marker in (
+                "context_length_exceeded",
+                "contextwindowexceedederror",
+                "maximum context length",
+                "exceeds the context window",
+                "exceeds the available context size",
+                "context window exceeded",
+                "context limit exceeded",
+                "input tokens exceed the configured limit",
+                "prompt is too long",
+            )
+        )
+    ):
+        return {"error": "company_model_context_overflow", "retryable": False}
     if isinstance(exc, TimeoutError | httpx.TimeoutException) or "Timeout" in type(exc).__name__:
         return {"error": "company_model_timeout", "retryable": True}
     if isinstance(exc, httpx.TransportError) or type(exc).__name__ in {
@@ -109,6 +133,12 @@ class CompanyRuntimeService:
             "instructions": "\n".join(instructions),
             "skills": skills,
             "models": models,
+            "model_profiles": {
+                ref: model_token_limits(
+                    getattr(agent.model_factory.get_chat_model(ref), "profile", None)
+                )
+                for ref in models
+            },
             "default_model": default_model,
             "harness_version": version("octop-harness"),
             "protocol_version": PROTOCOL_VERSION,

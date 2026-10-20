@@ -8,10 +8,12 @@ import {
 } from "../../../api/modules/octopThreads";
 import { isPendingThread } from "../hooks/useSessions";
 import { contextUsedPercent } from "../hooks/useChatContextWindow";
+import { formatTokenCount } from "../../../utils/formatTokenCount";
 import styles from "../index.module.less";
 
 const DEFAULT_MAX = 128_000;
 const BREAKDOWN_CACHE_TTL_MS = 30_000;
+const EMPTY_CONNECTORS: string[] = [];
 
 const SEGMENT_COLORS: Record<ContextUsageSegmentKey, string> = {
   system_prompt: "#9ca3af",
@@ -21,13 +23,8 @@ const SEGMENT_COLORS: Record<ContextUsageSegmentKey, string> = {
   mcp: "#e879f9",
   subagent_definitions: "#3b82f6",
   conversation: "#22d3ee",
+  unclassified: "#9ca3af",
 };
-
-function formatTokenK(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-  if (n >= 1_000) return `${Math.round(n / 1_000)}k`;
-  return String(n);
-}
 
 interface ContextWindowRingProps {
   usedTokens: number | null;
@@ -36,6 +33,7 @@ interface ContextWindowRingProps {
   threadId?: string | null;
   selectedConnectors?: string[];
   isMobile?: boolean;
+  liveBreakdown?: ContextUsageBreakdown | null;
 }
 
 export default function ContextWindowRing({
@@ -43,8 +41,9 @@ export default function ContextWindowRing({
   maxTokens,
   agentId,
   threadId,
-  selectedConnectors = [],
+  selectedConnectors = EMPTY_CONNECTORS,
   isMobile = false,
+  liveBreakdown = null,
 }: ContextWindowRingProps) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
@@ -74,20 +73,27 @@ export default function ContextWindowRing({
       ].join("|"),
     [agentId, threadId, max, selectedConnectors],
   );
+  const requestKeyRef = useRef(cacheKey);
+  requestKeyRef.current = cacheKey;
+  const requestSequenceRef = useRef(0);
 
   const loadBreakdown = useCallback(
     async (opts?: { silent?: boolean; force?: boolean }) => {
       if (!agentId || !threadId || isPendingThread(threadId)) return;
       const cached = cacheRef.current;
+      const hint = hintUsedRef.current;
       if (
         !opts?.force &&
         cached &&
         cached.key === cacheKey &&
+        (hint <= 0 ||
+          cached.data.used_tokens === Math.min(hint, cached.data.max_tokens)) &&
         Date.now() - cached.at < BREAKDOWN_CACHE_TTL_MS
       ) {
         setBreakdown(cached.data);
         return;
       }
+      const sequence = ++requestSequenceRef.current;
       if (!opts?.silent) setLoading(true);
       try {
         // Prefer a pure harness snapshot. Pass stream hint only as a fallback
@@ -95,13 +101,20 @@ export default function ContextWindowRing({
         const haveSegments =
           cached?.key === cacheKey &&
           (cached.data.segments?.length ?? 0) > 0 &&
-          cached.data.used_tokens > 0;
-        const hint = hintUsedRef.current;
+          cached.data.used_tokens > 0 &&
+          (hint <= 0 ||
+            cached.data.used_tokens === Math.min(hint, cached.data.max_tokens));
         const data = await octopThreadsApi.contextUsage(agentId, threadId, {
           maxTokens: max,
           inputTokens: !haveSegments && hint > 0 ? hint : undefined,
           mcpServers: selectedConnectors,
         });
+        if (
+          requestSequenceRef.current !== sequence ||
+          requestKeyRef.current !== cacheKey ||
+          hintUsedRef.current !== hint
+        )
+          return;
         if (data.used_tokens > 0) {
           cacheRef.current = { key: cacheKey, at: Date.now(), data };
           setBreakdown(data);
@@ -111,9 +124,21 @@ export default function ContextWindowRing({
           setBreakdown(null);
         }
       } catch {
-        if (!opts?.silent) setBreakdown(null);
+        if (
+          !opts?.silent &&
+          requestSequenceRef.current === sequence &&
+          requestKeyRef.current === cacheKey &&
+          hintUsedRef.current === hint
+        )
+          setBreakdown(null);
       } finally {
-        if (!opts?.silent) setLoading(false);
+        if (
+          !opts?.silent &&
+          requestSequenceRef.current === sequence &&
+          requestKeyRef.current === cacheKey &&
+          hintUsedRef.current === hint
+        )
+          setLoading(false);
       }
     },
     [agentId, threadId, max, selectedConnectors, cacheKey],
@@ -126,20 +151,35 @@ export default function ContextWindowRing({
     cacheRef.current = null;
   }, [cacheKey]);
 
+  useEffect(() => {
+    if (open && !liveBreakdown) void loadBreakdown();
+  }, [open, liveBreakdown, usedTokens, loadBreakdown]);
+
+  const matchingBreakdown =
+    cacheRef.current?.key === cacheKey &&
+    (hintUsed <= 0 ||
+      breakdown?.used_tokens ===
+        Math.min(hintUsed, breakdown?.max_tokens || max))
+      ? breakdown
+      : null;
+  const activeBreakdown = liveBreakdown ?? matchingBreakdown;
+
   const ringUsed = useMemo(() => {
     if (hintUsed > 0) return Math.min(hintUsed, max);
-    if (breakdown && breakdown.used_tokens > 0) {
+    if (activeBreakdown && activeBreakdown.used_tokens > 0) {
       const breakdownMax =
-        breakdown.max_tokens > 0 ? breakdown.max_tokens : max;
-      return Math.min(breakdown.used_tokens, breakdownMax);
+        activeBreakdown.max_tokens > 0 ? activeBreakdown.max_tokens : max;
+      return Math.min(activeBreakdown.used_tokens, breakdownMax);
     }
     // Until prefetch returns, show last-call hint (capped so a stale
     // turn-sum cannot flash a full ring).
     return 0;
-  }, [breakdown, hintUsed, max]);
+  }, [activeBreakdown, hintUsed, max]);
 
   const ringMax =
-    breakdown && breakdown.max_tokens > 0 ? breakdown.max_tokens : max;
+    activeBreakdown && activeBreakdown.max_tokens > 0
+      ? activeBreakdown.max_tokens
+      : max;
 
   const { usedPct, strokeColor, dashOffset, circumference } = useMemo(() => {
     const usedRatio = ringMax > 0 ? Math.min(ringUsed / ringMax, 1) : 0;
@@ -161,19 +201,16 @@ export default function ContextWindowRing({
   }, [ringUsed, ringMax]);
 
   const tooltip = t("chat.contextWindow.tooltip", {
-    used: formatTokenK(ringUsed),
-    max: formatTokenK(ringMax),
+    used: formatTokenCount(ringUsed),
+    max: formatTokenCount(ringMax),
     percent: usedPct,
   });
 
   const handleOpenChange = (next: boolean) => {
     setOpen(next);
-    if (next) {
-      void loadBreakdown();
-    }
   };
 
-  const display = breakdown ?? {
+  const display = activeBreakdown ?? {
     max_tokens: ringMax,
     used_tokens: ringUsed,
     segments: [] as ContextUsageBreakdown["segments"],
@@ -186,7 +223,7 @@ export default function ContextWindowRing({
       ? display.segments
       : displayUsed > 0
       ? ([
-          { key: "conversation", tokens: displayUsed },
+          { key: "unclassified", tokens: displayUsed },
         ] as ContextUsageBreakdown["segments"])
       : display.segments;
   const segmentTotal = segments.reduce((sum, item) => sum + item.tokens, 0);
@@ -200,9 +237,13 @@ export default function ContextWindowRing({
         {t("chat.contextWindow.breakdownPercent", { percent: displayPct })}
       </div>
       <div className={styles.contextUsageHint}>
-        {t("chat.contextWindow.breakdownHint")}
+        {t(
+          segments.some((item) => item.key === "unclassified")
+            ? "chat.contextWindow.breakdownUnavailableHint"
+            : "chat.contextWindow.breakdownHint",
+        )}
       </div>
-      {loading ? (
+      {loading && !liveBreakdown ? (
         <div className={styles.contextUsageLoading}>
           <Spin size="small" />
         </div>
@@ -251,7 +292,7 @@ export default function ContextWindowRing({
                   {t(`chat.contextWindow.segments.${segment.key}`)}
                 </span>
                 <span className={styles.contextUsageLegendValue}>
-                  ~{formatTokenK(segment.tokens)}
+                  ~{formatTokenCount(segment.tokens)}
                 </span>
               </li>
             ))}

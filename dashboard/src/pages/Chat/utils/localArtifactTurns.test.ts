@@ -99,4 +99,17 @@ describe("per-turn local artifacts", () => {
     const result = placeLocalArtifactTurns(messages.slice(0, 2), [turns[0]]);
     expect(changedLocalArtifacts(result, [one, two])).toEqual([two]);
   });
+  it("shows an explicitly resent image again without moving its earlier receipt", () => {
+    const first = placeLocalArtifactTurns(messages, [turns[0]]);
+    const resent = { ...one, explicitly_sent: true };
+    const files = changedLocalArtifacts(first, [resent], [one]);
+    expect(files).toEqual([resent]);
+    const result = placeLocalArtifactTurns(first, [{ ...turns[1], files }]);
+    expect(
+      result.filter((m) => m.localArtifacts).map((m) => m.localArtifacts),
+    ).toEqual([[one], [resent]]);
+    expect(
+      placeLocalArtifactTurns(messages, [turns[0], { ...turns[1], files }]),
+    ).toEqual(result);
+  });
 });

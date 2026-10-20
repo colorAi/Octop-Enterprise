@@ -132,7 +132,8 @@ export type ContextUsageSegmentKey =
   | "skills"
   | "mcp"
   | "subagent_definitions"
-  | "conversation";
+  | "conversation"
+  | "unclassified";
 
 export interface ContextUsageSegment {
   key: ContextUsageSegmentKey;

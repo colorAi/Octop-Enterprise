@@ -4,6 +4,7 @@ export interface LocalArtifact {
   path: string;
   size: number;
   sha256: string;
+  explicitly_sent?: boolean;
 }
 export interface LocalArtifactTurn {
   task_id: string;

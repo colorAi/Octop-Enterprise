@@ -1,3 +1,4 @@
+import type { ContextUsageBreakdown } from "../../../api/modules/octopThreads";
 import {
   useState,
   useRef,
@@ -28,6 +29,7 @@ import type { AgentSubagentSummary } from "../../../api/modules/subagents";
 import MentionPickerMenu from "./MentionPickerMenu";
 import ChatInputPreviewBar from "./ChatInputPreviewBar";
 import ChatInputActionsRow from "./ChatInputActionsRow";
+import ChatComposerChrome from "./ChatComposerChrome";
 import ChatQueuedMessages from "./ChatQueuedMessages";
 import { useVoiceInput } from "../../../hooks/useVoiceInput";
 import { useChatAttachments } from "../hooks/useChatAttachments";
@@ -139,6 +141,8 @@ interface ChatInputProps {
   defaultModel?: string | null;
   contextUsedTokens?: number | null;
   contextMaxTokens?: number;
+  contextBreakdown?: ContextUsageBreakdown | null;
+  sessionUsageLabel?: string | null;
 }
 
 const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
@@ -194,6 +198,8 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
       defaultModel,
       contextUsedTokens = null,
       contextMaxTokens = 128_000,
+      contextBreakdown = null,
+      sessionUsageLabel = null,
     },
     ref,
   ) {
@@ -851,15 +857,18 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
         onDragOver={handleDragOver}
         onDrop={handleDrop}
       >
-        <div className={styles.inputWrapper}>
-          {onRemoveQueued && onReclaimQueued && (
+        {onRemoveQueued && onReclaimQueued && (
+          <div className={styles.queuedMessagesDock}>
             <ChatQueuedMessages
               items={queuedItems}
               onRemove={onRemoveQueued}
               onReclaim={handleReclaimQueued}
               onSteer={onSteerQueued}
             />
-          )}
+          </div>
+        )}
+        <ChatComposerChrome sessionUsageLabel={sessionUsageLabel} />
+        <div className={styles.inputWrapper}>
           <ChatInputPreviewBar
             attachments={attachments}
             uploading={uploading}
@@ -995,6 +1004,7 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
             threadId={threadId}
             contextUsedTokens={contextUsedTokens}
             contextMaxTokens={contextMaxTokens}
+            contextBreakdown={contextBreakdown}
             availableModels={availableModels}
             selectedModel={selectedModel}
             onModelChange={onModelChange}

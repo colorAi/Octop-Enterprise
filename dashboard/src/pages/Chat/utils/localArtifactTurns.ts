@@ -12,7 +12,9 @@ export function changedLocalArtifacts(
     for (const file of message.localArtifacts ?? [])
       previous.set(file.path, file.sha256);
   for (const file of historicalFiles) previous.set(file.path, file.sha256);
-  return files.filter((file) => previous.get(file.path) !== file.sha256);
+  return files.filter(
+    (file) => file.explicitly_sent || previous.get(file.path) !== file.sha256,
+  );
 }
 
 /** Place receipts beside their own turn, never at the end of an unrelated page. */
