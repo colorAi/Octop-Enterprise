@@ -2,7 +2,7 @@
 
 [English](open-source-release_EN.md)
 
-本文面向维护者，说明 [Octop Enterprise](https://github.com/colorAi/Octop-Enterprise) 的源码导出、校验和发行要求。当前源码版本为 `1.0.1b1`，主项目及自有通信模块采用 MIT。
+本文面向维护者，说明 [Octop Enterprise](https://github.com/colorAi/Octop-Enterprise) 的源码导出、校验和发行要求。当前源码版本为 `1.0.1b2`，主项目及自有通信模块采用 MIT。
 
 本仓库提供源码，服务端镜像与 Windows/macOS 企业客户端按对应构建文档生成。发行材料通过[本仓库 Releases](https://github.com/colorAi/Octop-Enterprise/releases)分发；二进制安装包需单独完成目标平台验证，并记录签名与公证状态。
 

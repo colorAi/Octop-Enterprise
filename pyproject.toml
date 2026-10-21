@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "octop"
-version = "1.0.1b1"
+version = "1.0.1b2"
 description = "Octop Enterprise: self-hosted enterprise AI collaboration with local task execution"
 readme = "README.md"
 license = { text = "MIT" }

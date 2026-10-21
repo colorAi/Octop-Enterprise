@@ -11,7 +11,7 @@ info:
   description: "Octop Enterprise desktop shell"
   copyright: "(c) 2026, Octop Enterprise contributors"
   comments: "Wails v3 + green portable"
-  version: "1.0.1b1"
+  version: "1.0.1b2"
 
 dev_mode:
   root_path: .
