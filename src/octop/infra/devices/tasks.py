@@ -30,6 +30,7 @@ class DeviceTask:
     session_key: str
     selection: DeviceSelection
     expires_at: int
+    request_id: str | None = None
 
     def valid_grant(self, conn: Connection) -> bool:
         return (

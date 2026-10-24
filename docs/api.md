@@ -71,6 +71,14 @@ Task creation also accepts `reasoning_mode`, `reasoning_effort` and
 `conversation_mode`; model and tool policy are still enforced by the server
 and local engine rather than supplied as arbitrary provider parameters.
 
+For an assigned expert, the task's `expert` object also includes
+`resource_manifest_sha256`. It identifies the immutable bundle whose definition
+and approved assets were verified together. It does not grant access by itself:
+`GET /api/company-runtime/tasks/{task_id}/skills/{digest}` still checks the device,
+active task and current resource authorization. Missing, corrupt or symlinked
+assets return `409` with reason `skill_checksum_mismatch`. Older clients may
+ignore the additional manifest field.
+
 Password login may require a vendor captcha token. `GET /api/auth/captcha`
 returns `{provider: "slider"}` by default (dashboard slider only; no server
 check). When a strong provider is active (`turnstile`, `hcaptcha`,
@@ -146,7 +154,8 @@ remain valid. Active communication sockets recheck revocation every second.
 
 | Method | Path | Auth | Notes |
 |--------|------|------|-------|
-| `GET`    | `/users` | admin | `[{id, username, role, display_name, email, enabled, ...}]` |
+| `GET`    | `/users` | `users` | Legacy array of accounts, including disabled accounts |
+| `GET`    | `/users/page` | `users` | `{items, total, page, page_size}`; `page` ≥ 1, `page_size` 1–100 (default 25), `search` ≤ 200 characters; items include owned `agent_count` without loading experts |
 | `POST`   | `/users` | admin | body `{username, password, role, display_name?, email?, permissions?, workspace_root_dir?, token_quota?}` → `201` |
 | `GET`    | `/users/{id}` | admin | full user row |
 | `PATCH`  | `/users/{id}` | admin | body subset of `{role, display_name, email, enabled, locale}` |
@@ -154,11 +163,34 @@ remain valid. Active communication sockets recheck revocation every second.
 | `POST`   | `/users/{id}/unlock-login` | admin | `204` (clears the lockout) |
 | `DELETE` | `/users/{id}` | admin | `204` |
 
+### Employee resource management
+
+These endpoints require an actual administrator; a delegated `users` or
+`departments` menu permission does not grant resource assignment rights.
+
+| Method | Path | Notes |
+|--------|------|-------|
+| `GET` | `/admin/expert-assignments/directory` | Saved employee selections, source, expert names and department pools; no workspace scan. Batch memberships are for display only; `membership_status` is `current`, `changed`, `pending` or `unavailable`. |
+| `GET` | `/admin/expert-assignments/catalog` | Separate expert/skill catalog with `source` revision; discard a catalog from a different source revision. |
+| `GET` | `/admin/expert-assignments/users/{id}` | Reconcile one employee against current organization authority before opening an editor; unknown moves can revoke old selections. |
+| `GET` | `/admin/expert-assignments` | Compatible combined overview; new clients should use the separate reads above. |
+| `GET` | `/users/{id}/models` | Assigned `model_refs`, current `revision` and available chat model `items`; no credentials. |
+| `PUT` | `/users/{id}/models` | Replace assignments with `{model_refs, expected_revision}`; an empty list revokes all. Stale saves return 409. |
+
+The user editor may also include `model_access: {model_refs, expected_revision}`
+in `PATCH /users/{id}`. This field requires an actual administrator.
+
+All these reads use `Cache-Control: no-store`. Saves and execution independently
+recheck current authority. Management and resource I/O have bounded queues;
+capacity exhaustion returns 503 with `details.reason=read_capacity_exceeded` and
+`details.retryable=true`. See [employee resource assignment](expert-assignments.md)
+for write endpoints and revision checks.
+
 ## Agents
 
 | Method | Path | Auth | Notes |
 |--------|------|------|-------|
-| `GET`    | `/agents` | user | `[{id, agent_id, name, persona_mbti, state, unread_count, ...}]` |
+| `GET`    | `/agents` | user | `[{id, agent_id, name, persona_mbti, state, unread_count, ...}]`; `scope=all` and its optional `owner_user_id` filter require `users` permission. List initialization status is a lifecycle projection, not a workspace probe |
 | `POST`   | `/agents` | user | body `{name, persona_mbti?, default_model?, system_prompt?, description?, icon?, template_name?, config?}` → `201` |
 | `GET`    | `/agents/{id}` | owner | full agent row |
 | `PATCH`  | `/agents/{id}` | owner | body subset of create body |
@@ -333,14 +365,12 @@ the server derives one from `prompt`.
 
 | Method | Path | Auth | Notes |
 |--------|------|------|-------|
-| `GET`    | `/providers` | user | providers visible to the user (own + shared) |
-| `POST`   | `/providers` | user | body `{name, kind, base_url?, api_key?, model?, ...}` → `201` |
-| `PATCH`  | `/providers/{id}` | owner | body subset → updated row |
-| `DELETE` | `/providers/{id}` | owner | `204` (refuses if any agent references it) |
-| `POST`   | `/providers/{id}/test` | user | `{ok, latency_ms?, error?}` (one-token ping with 10 s timeout) |
-| `POST`   | `/admin/providers` | admin | same body as user POST; row has `user_id = NULL` |
-| `PATCH`  | `/admin/providers/{id}` | admin | as user PATCH but works on shared rows |
-| `DELETE` | `/admin/providers/{id}` | admin | `204` |
+| `GET`    | `/providers` | `providers` | Credential-bearing provider records; employees without model management permission receive 403 |
+| `GET`    | `/admin/providers` | `providers` | Same credential boundary as `/providers` |
+| `POST`   | `/admin/providers` | `providers` | body `{name, kind, base_url?, api_key?, models?, ...}` → `201` |
+| `PATCH`  | `/admin/providers/{id}` | `providers` | Explicit fields only; omitting `api_key` preserves it |
+| `DELETE` | `/admin/providers/{id}` | `providers` | `204`; local runtime providers are protected |
+| `POST`   | `/admin/providers/{id}/test` | `providers` | Test a configured model |
 
 Provider responses include `stream_usage`. Set it with
 `PATCH /admin/providers/{id}` to control `stream_options.include_usage` without
@@ -352,10 +382,14 @@ cumulative-usage compatibility handling also applies to enterprise local models.
 
 | Method | Path | Auth | Notes |
 |--------|------|------|-------|
-| `GET` | `/models/presets` | user | provider templates from `octop-harness` |
-| `GET` | `/models` | user | resolved models across enabled providers |
-| `GET` | `/models/active` | user | `{provider_name, model}` |
-| `PUT` | `/models/active` | admin | body `{provider_name, model}` |
+| `GET` | `/providers/presets` | user | provider templates from `octop-harness` |
+| `GET` | `/providers/resolved` | user | Available model metadata filtered by employee assignments; administrators see all. No provider credentials. |
+| `GET` | `/providers/active-model` | user | `{provider_name, model}` within the employee's assignments; empty strings when none are available. |
+| `PUT` | `/providers/active-model` | `providers` | body `{provider_name, model}` |
+
+Employees with no assignments cannot call chat models. Explicit choices and
+automatic or vision fallback stay within their assigned models. Grants are
+rechecked before each model call, including company desktop model proxy calls.
 
 ### Media generation models
 
@@ -374,12 +408,12 @@ reloads running agents so the image and video tools receive the new configuratio
 | Method | Path | Auth | Notes |
 |--------|------|------|-------|
 | `GET`  | `/voice/presets` | user | voice provider presets |
-| `GET`  | `/voice/providers` | user | user's voice providers |
+| `GET`  | `/voice/providers` | `voice` | Credential-bearing voice provider records; employees without voice management permission receive 403 |
 | `GET`  | `/voice/active` | user | active TTS / STT configuration |
-| `PUT`  | `/voice/active` | user | update active voice configuration |
+| `PUT`  | `/voice/active` | `voice` | update active voice configuration |
 | `POST` | `/voice/stt` | user | body `{audio, format?, language?}` → `{text, segments?}` |
 | `POST` | `/voice/tts` | user | body `{text, voice?, format?}` → audio bytes |
-| `GET`/`POST`/`PATCH`/`DELETE` | `/admin/voice/providers` | admin | admin voice provider CRUD |
+| `GET`/`POST`/`PATCH`/`DELETE` | `/admin/voice/providers` | `voice` | Voice provider management; PATCH/DELETE use `/{id}` |
 
 ## MBTI & personas
 

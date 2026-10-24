@@ -70,6 +70,8 @@ async def validate_chat_skills(
     """
     if names is None:
         return None
+    if not names:
+        return []
     assert server.app_runtime is not None
     allowed: set[str] = set()
     for summary in await server.app_runtime.agent_registry.list_skill_summaries(agent_id):

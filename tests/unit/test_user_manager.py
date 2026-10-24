@@ -45,6 +45,22 @@ async def test_create_user_writes_db(manager: UserManager):
     assert manager.get("alice") is not None
 
 
+async def test_authorization_refreshes_changes_from_another_manager(manager: UserManager):
+    user = await manager.create(
+        username="shared", password="TestPass12", role=Role.USER, permissions=["providers"]
+    )
+    second = UserManager(manager._services)
+    await second.boot()
+    assert second.get_by_id(user.id).permissions == ["providers"]
+    await manager.set_permissions("shared", [])
+    assert second.get_by_id(user.id).permissions == []
+    await manager.set_role("shared", Role.ADMIN)
+    assert second.get("shared").is_admin
+    await manager.disable("shared")
+    assert second.get_by_id(user.id) is None
+    assert second.get("shared") is None
+
+
 async def test_duplicate_username_rejected(manager: UserManager):
     await manager.create(username="a", password="TestPass12", role=Role.USER)
     with pytest.raises(OctopError) as ei:

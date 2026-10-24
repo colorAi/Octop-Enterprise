@@ -8,10 +8,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from octop.api.deps import get_server, require_permission
+from octop.i18n import tr
 from octop.infra.agents.providers.onnx_catalog import list_onnx_catalog_models
 from octop.infra.agents.providers.onnx_service import (
     DOWNLOAD_MANAGER,
@@ -24,6 +25,8 @@ from octop.infra.agents.providers.onnx_service import (
     save_config,
     status_payload,
 )
+from octop.infra.utils.locale import resolve_request_locale
+from octop.infra.utils.runtime_packages import PackageInstallError
 
 router = APIRouter(prefix="/onnx-models", tags=["onnx"])
 
@@ -73,7 +76,9 @@ def _http_from_value_error(exc: ValueError) -> HTTPException:
     return HTTPException(status_code=400, detail=str(exc))
 
 
-def _http_from_runtime(exc: RuntimeError) -> HTTPException:
+def _http_from_runtime(exc: RuntimeError, *, locale: str = "en") -> HTTPException:
+    if isinstance(exc, PackageInstallError):
+        return HTTPException(status_code=503, detail=tr(f"runtime_packages.{exc.reason}", locale))
     detail = str(exc)
     code = 503 if "local-embedding" in detail or "fastembed" in detail else 409
     return HTTPException(status_code=code, detail=detail)
@@ -121,6 +126,7 @@ async def get_status(
 @router.put("/config", summary="Enable/disable local ONNX service and select model")
 async def put_config(
     body: OnnxServiceConfigBody,
+    request: Request,
     server: Any = Depends(get_server),
     _: Any = Depends(require_permission("onnx_models")),
 ) -> dict[str, Any]:
@@ -136,7 +142,9 @@ async def put_config(
                 await ensure_local_embedding_deps_async(allow_install=True) == "installed"
             )
         except RuntimeError as exc:
-            raise HTTPException(status_code=503, detail=str(exc)) from exc
+            error = _http_from_runtime(exc, locale=resolve_request_locale(request))
+            error.status_code = 503
+            raise error from exc
         # Without a download to fall back on, enabling a model that has no
         # weights on disk would persist enabled=True and report ready=False
         # forever — surface it instead of storing a service that cannot run.
@@ -152,7 +160,7 @@ async def put_config(
             await DOWNLOAD_MANAGER.start_download(config.model)
             download_started = True
         except RuntimeError as exc:
-            raise _http_from_runtime(exc) from exc
+            raise _http_from_runtime(exc, locale=resolve_request_locale(request)) from exc
         except ValueError as exc:
             raise _http_from_value_error(exc) from exc
     payload = status_payload(_settings_get(server), DOWNLOAD_MANAGER.state)
@@ -168,10 +176,11 @@ async def put_config(
 )
 async def post_test(
     body: OnnxTestRequest,
+    request: Request,
     _: Any = Depends(require_permission("onnx_models")),
 ) -> OnnxTestResponse:
     """Run a tiny local embedding to verify the model loads and works (admin only)."""
-    result = await probe_local_model(body.model)
+    result = await probe_local_model(body.model, locale=resolve_request_locale(request))
     return OnnxTestResponse(
         ok=bool(result.get("ok")),
         latency_ms=result.get("latency_ms"),
@@ -183,12 +192,13 @@ async def post_test(
 @router.post("/download", summary="Download a local ONNX embedding model")
 async def post_download(
     body: OnnxDownloadRequest,
+    request: Request,
     _: Any = Depends(require_permission("onnx_models")),
 ) -> dict[str, Any]:
     try:
         state = await DOWNLOAD_MANAGER.start_download(body.model.strip())
     except RuntimeError as exc:
-        raise _http_from_runtime(exc) from exc
+        raise _http_from_runtime(exc, locale=resolve_request_locale(request)) from exc
     except ValueError as exc:
         raise _http_from_value_error(exc) from exc
     return state.to_dict()

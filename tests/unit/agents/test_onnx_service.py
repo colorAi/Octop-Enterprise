@@ -102,6 +102,51 @@ def test_catalog_includes_finnie_presets() -> None:
     assert set(ONNX_PRESET_MODEL_IDS) <= recommended
 
 
+@pytest.mark.asyncio
+async def test_sequential_downloads_finish_without_loading_models(monkeypatch) -> None:
+    from octop.infra.agents.providers import onnx_service as mod
+
+    models = (
+        "BAAI/bge-small-zh-v1.5",
+        "jinaai/jina-embeddings-v2-base-zh",
+        "intfloat/multilingual-e5-large",
+    )
+    downloaded: list[str] = []
+    resident = (models[0], str(mod.embedding_models_dir()), object())
+    monkeypatch.setattr(mod, "_embedding_instance", resident)
+    monkeypatch.setattr(mod, "local_embedding_deps_available", lambda: True)
+    monkeypatch.setattr(mod, "is_model_downloaded", lambda name: name in downloaded)
+    monkeypatch.setattr(mod, "mark_model_downloaded", downloaded.append)
+
+    def download(model_name, cache_dir, *, on_progress):
+        assert model_name not in downloaded
+        on_progress(100, 100, "Downloading")
+        return "cos"
+
+    def load(model_name):
+        raise AssertionError("Downloading must not construct an inference session")
+
+    monkeypatch.setattr(mod, "download_model_raced", download)
+    monkeypatch.setattr(mod, "_build_text_embedding", load)
+    manager = OnnxDownloadManager()
+    for model in models:
+        await manager.start_download(model)
+        assert manager._task is not None
+        await manager._task
+        assert manager.state.status == OnnxDownloadStatus.DONE
+        assert manager.state.progress == 1.0
+        assert manager.state.model_name == model
+        assert manager.state.error is None
+        assert mod._embedding_instance is resident
+    assert downloaded == list(models)
+
+    # Retrying an already downloaded model also avoids both transfer and loading.
+    state = await manager.start_download(models[-1])
+    assert state.status == OnnxDownloadStatus.DONE
+    assert state.task_id == ""
+    assert downloaded == list(models)
+
+
 def test_catalog_models_have_approximate_sizes() -> None:
     for model_id in (
         *ONNX_PRESET_MODEL_IDS,
@@ -190,7 +235,9 @@ def test_ensure_deps_installs_when_allow_install_true(monkeypatch) -> None:
     def available() -> bool:
         return state["ok"]
 
-    def fake_install(*_args, **_kwargs) -> str:
+    def fake_install(spec, **_kwargs) -> str:
+        assert spec.extra_fallback is None  # Never install the upstream Octop distribution.
+        assert set(spec.packages) == {"fastembed>=0.4", "huggingface_hub>=0.20"}
         state["ok"] = True
         return "installed"
 

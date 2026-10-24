@@ -12,6 +12,7 @@ from octop_harness.slash import SlashCommand, SlashSink, thread_message_count
 
 from octop.i18n.domains.agents import agent_error_message
 from octop.i18n.domains.slash import localized_rows, tr
+from octop.infra.errors import ErrorCode, OctopError
 from octop.infra.gateway.slash.ctx import SlashCtx, ensure_thread_id, lang_of
 from octop.infra.gateway.slash.formatting import (
     format_duration,
@@ -97,8 +98,20 @@ async def cmd_compact(
         override = None
     model_ref = ctx.model_ref or override or ctx.agent_manager.resolve_fallback_model_ref()
     try:
+        if ctx.user_id is not None:
+            from octop.infra.users.model_access import ModelAccess
+            from octop.infra.utils.asyncio import offload
+
+            access = ModelAccess(ctx.agent_manager._repos)
+            if ctx.model_ref:
+                await offload(access.require, ctx.user_id, ctx.model_ref)
+            if not await offload(access.is_admin, ctx.user_id):
+                model_ref = await offload(access.resolve, ctx.user_id, model_ref)
         result = await compact(tid, model=model_ref)
-    except Exception:
+    except Exception as exc:
+        if isinstance(exc, OctopError) and exc.code == ErrorCode.MODEL_NOT_ASSIGNED:
+            await sink.text(exc.localized_message(lang))
+            return
         logger.exception(
             "compact: acompact_conversation failed thread=%s model=%s",
             tid,

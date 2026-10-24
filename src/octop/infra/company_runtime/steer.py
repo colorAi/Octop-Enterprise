@@ -8,6 +8,7 @@ from typing import Any
 
 from langchain_core.messages import HumanMessage
 
+from octop.infra.company_runtime.approvals import CompanyApprovals
 from octop.infra.gateway.steer import (
     DiscardBundle,
     DrainBundle,
@@ -20,6 +21,7 @@ class CompanySteering:
     def __init__(self, emit: Callable[[dict[str, Any]], None]) -> None:
         self.coordinator = SteerCoordinator()
         self.emit = emit
+        self.approvals = CompanyApprovals()
 
     def frame(self, thread: str, **frame: Any) -> None:
         self.emit({"event": "steer", "thread_id": thread, "frame": frame})
@@ -73,6 +75,7 @@ class CompanySteering:
         self.coordinator.set_phase(thread, "cancelling")
 
     def end(self, thread: str, *, failed: bool) -> None:
+        self.approvals.end(thread)
         discarded = self.coordinator.end_turn(thread, failed=failed)
         if discarded:
             self.frame(thread, type="steer.discarded", **asdict(discarded))
@@ -106,9 +109,9 @@ class CompanySteering:
                         str(chunk.get("message") or chunk.get("content") or "Local model failed")
                     )
                 if kind == "hitl_required":
-                    raise RuntimeError(
-                        "本机任务需要当前客户端尚不支持的工具审批，请停止后调整工具授权"
-                    )
+                    # Tool approvals use CompanyToolGuard's per-call native
+                    # futures. An unrelated graph interrupt must fail closed.
+                    raise RuntimeError("unsupported_local_interrupt")
                 if preempted or kind == "done":
                     continue
                 if (

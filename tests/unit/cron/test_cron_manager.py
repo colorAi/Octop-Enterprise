@@ -118,6 +118,29 @@ async def test_boot_starts_scheduler(tmp_path: Path) -> None:
     mgr._scheduler.start.assert_called_once()
 
 
+async def test_paused_boot_defers_mail_and_cron_until_shared_admission_is_ready(tmp_path):
+    services = _make_services(tmp_path)
+    try:
+        aid, uid = _make_agent(services)
+        services.cron_repo.create(
+            cron_id="job",
+            agent_id=aid,
+            user_id=uid,
+            trigger="interval:60",
+            prompt="hello",
+            session_key="session",
+        )
+        mgr = _make_manager(services)
+        with patch.object(mgr, "_schedule") as schedule:
+            await mgr.boot(paused=True)
+            schedule.assert_not_called()
+            mgr.resume()
+            schedule.assert_called_once()
+            mgr._scheduler.resume.assert_called_once()
+    finally:
+        services.db.close()
+
+
 @pytest.mark.asyncio
 async def test_boot_schedules_enabled_jobs(tmp_path: Path) -> None:
     """boot() calls scheduler.add_job() for every enabled cron row."""

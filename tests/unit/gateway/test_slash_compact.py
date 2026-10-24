@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
@@ -27,6 +28,27 @@ from octop.infra.utils.paths import PathLayout
 def _agent_manager(tmp_path: Path, db: SqlitePool) -> AgentManager:
     services = build_shared_services(db=db, paths=PathLayout(tmp_path), config=OctopConfig())
     manager = AgentManager(repos=services.repos, paths=services.paths)
+    for provider, model in [("Tencent Cloud HAI", "MiniMax-M2.7"), ("DeepSeek", "deepseek-chat")]:
+        services.provider_repo.create(
+            name=provider,
+            kind="openai",
+            api_key="test",
+            base_url="http://provider.invalid/v1",
+            models_json=json.dumps([{"id": model}]),
+        )
+    services.user_policy_repo.set(
+        1,
+        "model_access",
+        json.dumps(
+            {
+                "model_refs": [
+                    "Tencent Cloud HAI/MiniMax-M2.7",
+                    "DeepSeek/deepseek-chat",
+                ],
+                "revision": "fixture",
+            }
+        ),
+    )
     harness_mgr = MagicMock()
     harness_mgr.get_thread_model.return_value = None
     manager._harness_manager = harness_mgr
@@ -56,6 +78,23 @@ def ctx(tmp_path: Path) -> SlashCtx:
 @pytest.fixture
 def dispatcher():
     return build_default_dispatcher()
+
+
+@pytest.mark.asyncio
+async def test_cmd_compact_denies_employee_with_no_models(ctx, dispatcher):
+    await ctx.thread_registry.get_or_create_by_key(
+        session_key=ctx.session_key,
+        agent_id=ctx.agent_id,
+        user_id=ctx.user_id,
+        channel_type=ctx.channel_type,
+    )
+    ctx.agent_manager._repos.user_policy_repo.set(ctx.user_id, "model_access", None)
+    harness = MagicMock(acompact_conversation=AsyncMock())
+    ctx.agent_manager.get_agent = MagicMock(return_value=harness)
+    sink = BufferSink()
+    await cmd_compact(dispatcher, SlashCommand("compact", ""), ctx, sink)
+    harness.acompact_conversation.assert_not_awaited()
+    assert "管理员" in "\n".join(sink.lines)
 
 
 @pytest.mark.asyncio

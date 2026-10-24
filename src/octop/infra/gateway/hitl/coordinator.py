@@ -31,6 +31,7 @@ if TYPE_CHECKING:
     from octop.infra.gateway.slash.ctx import SlashCtx
 
 _log = logging.getLogger(__name__)
+PersistedResume = Callable[[str, list[dict[str, Any]], str | None], AsyncIterator[MessageEvent]]
 
 
 @dataclass
@@ -409,6 +410,7 @@ class HitlChannelCoordinator:
         projection_state: Any | None = None,
         outcome: HitlAnswerOutcome | None = None,
         member_hitl: Callable[[str, list[dict[str, Any]]], bool] | None = None,
+        persisted_resume: PersistedResume | None = None,
     ) -> AsyncIterator[MessageEvent]:
         """Collect one IM answer and resume only after the final question."""
         from octop.infra.gateway.process.stream_project import (
@@ -440,6 +442,17 @@ class HitlChannelCoordinator:
                 yield MessageEvent.text(tr("hitl.approved_ack", lang))
             else:
                 yield MessageEvent.error_event(tr("hitl.expired", lang))
+            return
+        if persisted_resume is not None:
+            try:
+                async for event in persisted_resume(record.thread_id, decisions, record.pending_id):
+                    yield event
+            except Exception as exc:
+                yield MessageEvent.error_event(tr("hitl.resume_failed", lang, error=str(exc)))
+                return
+            self._store.mark_resolved(record.pending_id, "approved")
+            if outcome is not None:
+                outcome.completed_turn = True
             return
         hitl_ctx = HitlStreamContext(
             thread_id=record.thread_id,
@@ -484,6 +497,7 @@ class HitlChannelCoordinator:
         history_factory: Any | None = None,
         history_finalize: Any | None = None,
         member_hitl: Callable[[str, list[dict[str, Any]]], bool] | None = None,
+        persisted_resume: PersistedResume | None = None,
     ) -> AsyncIterator[MessageEvent]:
         lang = normalize_locale(locale)
         if cmd.name == "pending":
@@ -524,6 +538,20 @@ class HitlChannelCoordinator:
                 else:
                     yield MessageEvent.error_event(tr("hitl.expired", lang))
                 return
+        if persisted_resume is not None:
+            try:
+                async for event in persisted_resume(
+                    thread_id, decisions, record.pending_id if record else None
+                ):
+                    yield event
+            except Exception as exc:
+                yield MessageEvent.error_event(tr("hitl.resume_failed", lang, error=str(exc)))
+                return
+            if record is not None:
+                self._store.mark_resolved(record.pending_id, "approved" if approve else "rejected")
+            if outcome is not None:
+                outcome.completed_turn = True
+            return
         hitl_ctx = HitlStreamContext(
             thread_id=thread_id,
             agent_id=ctx.agent_id,

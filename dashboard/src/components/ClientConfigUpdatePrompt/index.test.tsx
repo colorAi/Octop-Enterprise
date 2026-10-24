@@ -20,6 +20,7 @@ import {
 
 const state = vi.hoisted(() => ({
   status: vi.fn(),
+  apply: vi.fn(),
   reload: vi.fn(),
   info: vi.fn(),
   error: vi.fn(),
@@ -35,7 +36,7 @@ vi.mock("react-i18next", () => ({
   useTranslation: () => ({ t: (key: string) => key }),
 }));
 vi.mock("../../api/modules/clientConfig", () => ({
-  clientConfigApi: { status: state.status },
+  clientConfigApi: { status: state.status, apply: state.apply },
 }));
 vi.mock("../../api/desktopRuntime", () => ({
   isCompanyDesktop: () => state.desktop,
@@ -118,12 +119,67 @@ async function mount() {
 }
 
 describe("company configuration updates", () => {
+  it("shows content updates missed while offline on the first status check", async () => {
+    state.status.mockResolvedValue({
+      ...status("source-content-v2"),
+      resource_update_pending: true,
+    });
+    await mount();
+    expect(screen.getByRole("status")).toBeTruthy();
+    expect(state.apply).not.toHaveBeenCalled();
+    await act(async () =>
+      fireEvent.click(screen.getByText("clientConfig.apply")),
+    );
+    expect(state.apply).toHaveBeenCalledOnce();
+    expect(state.reload).toHaveBeenCalledOnce();
+  });
+
+  it("retains the notice when the server reports work started during the refresh", async () => {
+    await mount();
+    state.status.mockResolvedValue(status("new-content"));
+    await check();
+    state.apply.mockRejectedValue(
+      new Error(
+        JSON.stringify({
+          error: { details: { reason: "client_config_busy" } },
+        }),
+      ),
+    );
+    await act(async () =>
+      fireEvent.click(screen.getByText("clientConfig.apply")),
+    );
+    expect(state.reload).not.toHaveBeenCalled();
+    expect(state.info).toHaveBeenCalledWith("clientConfig.busy");
+    expect(screen.getByRole("status")).toBeTruthy();
+  });
+
+  it("does not reload after leaving while resource synchronization is pending", async () => {
+    const view = render(<Harness />);
+    await act(async () => {});
+    state.status.mockResolvedValue(status("new-content"));
+    await check();
+    let complete!: (value: ClientConfigStatus) => void;
+    state.apply.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          complete = resolve;
+        }),
+    );
+    await act(async () =>
+      fireEvent.click(screen.getByText("clientConfig.apply")),
+    );
+    view.unmount();
+    await act(async () => complete(status("new-content")));
+    expect(state.reload).not.toHaveBeenCalled();
+  });
+
   beforeEach(() => {
-    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     vi.clearAllMocks();
     state.chatBusy = false;
     state.desktop = false;
     state.status.mockReset().mockResolvedValue(status("first"));
+    state.apply.mockReset().mockResolvedValue(status("new"));
   });
   afterEach(() => {
     cleanup();
@@ -193,9 +249,47 @@ describe("company configuration updates", () => {
     fireEvent.click(screen.getByText("clientConfig.later"));
     state.status.mockResolvedValue(status("poll-change"));
     await act(async () => {
-      vi.advanceTimersByTime(30_000);
+      vi.advanceTimersByTime(35_000);
     });
     expect(screen.getByRole("status")).toBeTruthy();
+  });
+
+  it("coalesces notifications during a slow check and performs one trailing check", async () => {
+    let resolve!: (value: ClientConfigStatus) => void;
+    state.status.mockImplementationOnce(
+      () =>
+        new Promise((done) => {
+          resolve = done;
+        }),
+    );
+    await mount();
+    await check();
+    await check();
+    await act(async () => window.dispatchEvent(new Event("focus")));
+    expect(state.status).toHaveBeenCalledTimes(1);
+    state.status.mockResolvedValue(status("after-notification"));
+    await act(async () => resolve(status("before-notification")));
+    expect(state.status).toHaveBeenCalledTimes(2);
+    expect(screen.getByRole("status")).toBeTruthy();
+  });
+
+  it("jitters polling and keeps the immediate check when returning from offline", async () => {
+    vi.spyOn(Math, "random").mockReturnValue(0.8);
+    try {
+      await mount();
+      await act(async () => {
+        vi.advanceTimersByTime(30_000);
+      });
+      expect(state.status).toHaveBeenCalledTimes(1);
+      await act(async () => {
+        vi.advanceTimersByTime(3_000);
+      });
+      expect(state.status).toHaveBeenCalledTimes(2);
+      await check();
+      expect(state.status).toHaveBeenCalledTimes(3);
+    } finally {
+      vi.mocked(Math.random).mockRestore();
+    }
   });
 
   it("retains a usable session and pending notice when the server is unreachable", async () => {

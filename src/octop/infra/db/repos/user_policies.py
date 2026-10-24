@@ -81,6 +81,42 @@ class UserPolicyRepo:
     def set(self, user_id: int, name: str, value: str | None) -> None:
         self.merge(user_id, {name: value})
 
+    def compare_and_set(
+        self,
+        user_id: int,
+        name: str,
+        *,
+        expected: str | None,
+        value: str,
+        actor: str,
+        action: str,
+    ) -> bool:
+        """Replace an active policy and audit it only if its stored value still matches."""
+        ts = now_ts()
+        with self._db.transaction() as conn:
+            # Serialize both first assignment and later updates on both dialects.
+            changed = conn.execute("UPDATE users SET created_at=created_at WHERE id=?", (user_id,))
+            if not changed.rowcount:
+                return False
+            row = conn.execute(
+                "SELECT enabled,value FROM user_policies WHERE user_id=? AND name=?",
+                (user_id, name),
+            ).fetchone()
+            current = row["value"] if row is not None and row["enabled"] else None
+            if current != expected:
+                return False
+            conn.execute(
+                "INSERT INTO user_policies(policy_id,user_id,name,enabled,value,created_at,updated_at) "
+                "VALUES(?,?,?,1,?,?,?) ON CONFLICT(user_id,name) DO UPDATE SET "
+                "enabled=1,value=excluded.value,updated_at=excluded.updated_at",
+                (new_ulid(), user_id, name, value, ts, ts),
+            )
+            conn.execute(
+                "INSERT INTO audit_log(ts,actor,action,target,payload) VALUES(?,?,?,?,?)",
+                (ts, actor, action, str(user_id), value),
+            )
+        return True
+
     def merge(self, user_id: int, updates: Mapping[str, str | None]) -> None:
         if not updates:
             return

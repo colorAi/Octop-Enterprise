@@ -319,7 +319,12 @@ function ActiveAgentCard({
         <div className={styles.agentCardInfo}>
           <div className={styles.agentCardNameRow}>
             <div className={styles.agentNameCluster}>
-              <div className={styles.agentCardName}>{agent.name}</div>
+              <div className={styles.agentCardName}>
+                {agent.name}
+                {agent.history_only
+                  ? ` · ${t("expertAccess.historyOnly")}`
+                  : ""}
+              </div>
               <TeamChatBadge agent={agent} />
               <SharedExpertHint agent={agent} />
               <RemoteExpertHint agent={agent} />
@@ -328,6 +333,7 @@ function ActiveAgentCard({
             <button
               type="button"
               className={styles.agentNewChatBtn}
+              disabled={agent.history_only}
               aria-label={t("chatWelcome.newChat")}
               title={t("chatWelcome.newChat")}
               onClick={(e) => {
@@ -460,7 +466,12 @@ function InactiveAgentRow({
         <div className={styles.agentRowInfo}>
           <div className={styles.agentRowNameRow}>
             <div className={styles.agentNameCluster}>
-              <div className={styles.agentRowName}>{agent.name}</div>
+              <div className={styles.agentRowName}>
+                {agent.name}
+                {agent.history_only
+                  ? ` · ${t("expertAccess.historyOnly")}`
+                  : ""}
+              </div>
               <TeamChatBadge agent={agent} />
               <SharedExpertHint agent={agent} />
               <RemoteExpertHint agent={agent} />
@@ -470,6 +481,7 @@ function InactiveAgentRow({
               <button
                 type="button"
                 className={styles.agentNewChatBtn}
+                disabled={agent.history_only}
                 aria-label={t("chatWelcome.newChat")}
                 title={t("chatWelcome.newChat")}
                 onClick={(e) => {

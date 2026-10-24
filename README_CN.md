@@ -10,7 +10,7 @@
 <p><strong>AI 在员工电脑上工作，账号、模型与权限留在企业手里。</strong></p>
 
 <p>
-  <a href="https://github.com/colorAi/Octop-Enterprise/releases"><img alt="Version 1.0.0" src="https://img.shields.io/badge/version-1.0.0-F5453A?style=flat-square"></a>
+  <a href="https://github.com/colorAi/Octop-Enterprise/releases"><img alt="Version 1.0.1b2" src="https://img.shields.io/badge/version-1.0.1b2-F5453A?style=flat-square"></a>
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-17996B?style=flat-square"></a>
   <a href="docker/enterprise/README.md"><img alt="Self-hosted" src="https://img.shields.io/badge/self--hosted-121417?style=flat-square"></a>
   <a href="docker/enterprise/README.md"><img alt="Server: Linux + Docker" src="https://img.shields.io/badge/server-Linux%20%2B%20Docker-3B5BDB?style=flat-square"></a>
@@ -22,7 +22,7 @@
   <a href="docs/enterprise-client.md">客户端使用</a> ·
   <a href="docs/user-guide.md">员工上手</a> ·
   <a href="CONTRIBUTING.md">参与开发</a> ·
-  <a href="README.md">English</a>
+  <a href="README_EN.md">English</a>
 </p>
 
 <sub>基于 <a href="https://github.com/TencentCloud/Octop">TencentCloud/Octop</a> 二次开发 · 由 <a href="https://github.com/colorAi/Octop-Enterprise">Octop Enterprise 维护者</a> 独立维护 · 非腾讯官方版本</sub>
@@ -65,7 +65,7 @@
 
 ## 快速开始
 
-当前版本：**1.0.0**。本仓库提供服务端与 Windows/macOS 企业客户端的源码，均从本仓库构建。
+当前版本：**1.0.1b2**。服务端从本仓库源码构建，Windows/macOS 员工客户端可从 [Releases](https://github.com/colorAi/Octop-Enterprise/releases) 下载匹配的安装包。
 
 | 管理员：部署与配置                                                                                                                                                                    | 员工：登录与工作                                                                                                                              |
 | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | :-------------------------------------------------------------------------------------------------------------------------------------------- |

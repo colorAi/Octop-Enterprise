@@ -25,8 +25,11 @@ import {
  */
 
 export interface OctopAgent {
+  managed?: boolean;
+  can_edit?: boolean;
   isolated?: boolean;
   requires_private_instance?: boolean;
+  history_only?: boolean;
   /** Surrogate integer primary key from the database. */
   id: number;
   /** Public agent id used in API paths and ``X-Octop-Agent-Id``. */
@@ -170,6 +173,10 @@ export function agentsSnapshotEqual(
         a.kind === b.kind &&
         a.bridge === b.bridge &&
         a.is_owner === b.is_owner &&
+        a.managed === b.managed &&
+        a.can_edit === b.can_edit &&
+        a.requires_private_instance === b.requires_private_instance &&
+        a.history_only === b.history_only &&
         a.bridge_connection_id === b.bridge_connection_id &&
         a.bridge_connection_name === b.bridge_connection_name &&
         a.bridge_disconnected === b.bridge_disconnected &&

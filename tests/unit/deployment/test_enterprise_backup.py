@@ -16,8 +16,9 @@ _module = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_module)
 
 
+@pytest.mark.parametrize("roles", [False, True])
 @pytest.mark.parametrize("fail", ["none", "dump", "manifest"])
-def test_backup_resumes_services_and_marks_failures(tmp_path, monkeypatch, fail):
+def test_backup_resumes_services_and_marks_failures(tmp_path, monkeypatch, fail, roles):
     data = tmp_path / "data"
     for name in ("app", "media", "secrets"):
         (data / name).mkdir(parents=True)
@@ -28,7 +29,7 @@ def test_backup_resumes_services_and_marks_failures(tmp_path, monkeypatch, fail)
     calls = []
     config = {
         "services": {
-            "octop": {
+            "worker" if roles else "octop": {
                 "image": "fixture:source",
                 "volumes": [{"source": str(data / "app"), "target": "/data/.octop"}],
             }
@@ -36,9 +37,15 @@ def test_backup_resumes_services_and_marks_failures(tmp_path, monkeypatch, fail)
     }
 
     def read(args, **kwargs):
+        if args[:2] == ["docker", "ps"]:
+            return "bind-mounted-sandbox\n"
         if "config" in args:
             return json.dumps(config).encode()
-        return "octop\ncommunication\n"
+        if "nodes" in args:
+            return json.dumps(
+                [{"node_id": "worker", "incarnation": "boot", "role": "worker", "state": "ready"}]
+            ).encode()
+        return "edge\nweb1\nweb2\nworker\ncommunication\n" if roles else "octop\ncommunication\n"
 
     def run(args, **kwargs):
         calls.append(args)
@@ -60,10 +67,17 @@ def test_backup_resumes_services_and_marks_failures(tmp_path, monkeypatch, fail)
         monkeypatch.setattr(Path, "write_text", fail_manifest)
     if fail != "none":
         with pytest.raises((subprocess.CalledProcessError, OSError)):
-            _module.backup(env, output, [], True)
+            _module.backup(env, output, [], True, roles=roles)
     else:
-        _module.backup(env, output, [], True)
-    assert calls[-1][-3:] == ["start", "octop", "communication"]
+        _module.backup(env, output, [], True, roles=roles)
+    if roles:
+        assert not any("start" in call for call in calls)
+        assert ["docker", "stop", "bind-mounted-sandbox"] in calls
+        proof = next(i for i, call in enumerate(calls) if "confirm-stop" in call)
+        dump = next(i for i, call in enumerate(calls) if "pg_dump" in call)
+        assert proof < dump
+    else:
+        assert calls[-1][-3:] == ["start", "octop", "communication"]
     if fail == "manifest":
         return
     manifest = json.loads((output / "manifest.json").read_text())
@@ -74,7 +88,7 @@ def test_backup_resumes_services_and_marks_failures(tmp_path, monkeypatch, fail)
             "octop_im.dump",
             "files.tar.gz",
             "deployment.env",
-        }
+        } | ({"resource-profile.env"} if roles else set())
 
 
 def test_backup_refuses_unknown_volume_inventory(tmp_path):

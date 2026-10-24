@@ -1,6 +1,6 @@
 version: "3"
 
-# Shell UI embeds the shared React login bundle as well as HTML assets.
+# Shell UI embeds the login bundle and the complete employee dashboard.
 
 tasks:
   go:mod:tidy:
@@ -11,17 +11,39 @@ tasks:
       - go mod tidy
 
   install:frontend:deps:
-    summary: Installs login dependencies and builds the embedded-assets development server
+    summary: Installs frontend dependencies when the dependency files change
+    # Share one dependency fingerprint through common and platform task includes.
+    label: frontend:dependencies
+    sources:
+      - ../../dashboard/package.json
+      - ../../dashboard/package-lock.json
+    generates:
+      - ../../dashboard/node_modules/.package-lock.json
     cmds:
       - npm ci --prefix ../../dashboard --no-audit --no-fund
-      - node ../login/build.mjs
+
+  build:devserver:
+    summary: Builds the embedded-assets development server when its source changes
+    sources:
+      - cmd/devserver/**/*.go
+      - go.mod
+      - go.sum
+    generates:
+      - .task/devserver.exe
+    cmds:
       - go build -o .task/devserver.exe ./cmd/devserver
 
   build:frontend:
-    summary: Builds and validates the shared embedded login assets
+    summary: Builds the embedded login assets and employee dashboard
     run: once
+    deps:
+      - task: install:frontend:deps
     cmds:
       - node ../login/build.mjs
+      - cmd: python ../build-dashboard.py
+        platforms: [windows]
+      - cmd: python3 ../build-dashboard.py
+        platforms: [linux, darwin]
 
   generate:bindings:
     summary: Bindings unused (Call.ByName)
@@ -70,8 +92,10 @@ tasks:
 
   dev:frontend:
     summary: Serves the embedded shell assets for Wails dev mode
+    # build/config.yml finishes install:frontend:deps before starting this task.
+    # Reinstalling here races the concurrent dashboard build against npm ci.
     deps:
-      - task: install:frontend:deps
+      - task: build:devserver
     cmds:
       - ./.task/devserver.exe
 

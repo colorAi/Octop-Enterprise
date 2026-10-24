@@ -11,11 +11,34 @@ export function getCanvasCoords(
   if (!canvas) return { x: 0, y: 0 };
   const rect = canvas.getBoundingClientRect();
   if (rect.width === 0 || rect.height === 0) return { x: 0, y: 0 };
-  const scaleX = canvas.width / rect.width;
-  const scaleY = canvas.height / rect.height;
+  let width = rect.width;
+  let height = rect.height;
+  let left = rect.left;
+  let top = rect.top;
+  if (getComputedStyle(canvas).objectFit === "contain") {
+    const scale = Math.min(width / canvas.width, height / canvas.height);
+    const imageWidth = canvas.width * scale;
+    const imageHeight = canvas.height * scale;
+    left += (width - imageWidth) / 2;
+    top += (height - imageHeight) / 2;
+    width = imageWidth;
+    height = imageHeight;
+  }
   return {
-    x: Math.round((e.clientX - rect.left) * scaleX),
-    y: Math.round((e.clientY - rect.top) * scaleY),
+    x: Math.max(
+      0,
+      Math.min(
+        canvas.width - 1,
+        Math.round(((e.clientX - left) * canvas.width) / width),
+      ),
+    ),
+    y: Math.max(
+      0,
+      Math.min(
+        canvas.height - 1,
+        Math.round(((e.clientY - top) * canvas.height) / height),
+      ),
+    ),
   };
 }
 

@@ -1,4 +1,5 @@
 import hashlib
+import json
 import time
 from types import SimpleNamespace
 
@@ -25,6 +26,9 @@ def company(tmp_path):
         paths=PathLayout(tmp_path), config=OctopConfig(company_runtime_enabled=True), db=db
     )
     owner = services.user_repo.create(username="employee", role="user")
+    services.user_policy_repo.set(
+        owner, "model_access", json.dumps({"model_refs": ["test/model"], "revision": "fixture"})
+    )
     services.agent_repo.create(agent_id="expert", user_id=owner, name="Test Expert")
     for thread in ("thread1", "thread2", "thread3"):
         services.thread_repo.insert(

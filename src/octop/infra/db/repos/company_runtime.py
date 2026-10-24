@@ -84,6 +84,9 @@ class CompanyRuntimeRepo:
     ) -> dict[str, Any]:
         now = int(time.time())
         with self.db.transaction() as conn:
+            # The server queue and desktop leases share admission ordering.
+            # Keep this lock before the thread lock, as in ExecutionRepo.submit.
+            conn.execute("UPDATE execution_control SET id=id WHERE id=1")
             # Serializes acquisition across processes and PostgreSQL workers too.
             conn.execute(
                 "UPDATE threads SET last_active=last_active WHERE thread_id=?", (thread_id,)
@@ -104,6 +107,10 @@ class CompanyRuntimeRepo:
                 ):
                     raise RuntimeConflict("task_identity_conflict")
                 return dict(existing)
+            if conn.execute(
+                "SELECT 1 FROM execution_sessions WHERE thread_id=?", (thread_id,)
+            ).fetchone():
+                raise RuntimeConflict("thread_already_running")
             binding = conn.execute(
                 "SELECT * FROM company_runtime_threads WHERE thread_id=?", (thread_id,)
             ).fetchone()
@@ -327,6 +334,27 @@ class CompanyRuntimeRepo:
             {"event_id": r["event_id"], "seq": r["seq"], "payload": json.loads(r["payload"])}
             for r in rows
         ]
+
+    def cancel_running(self, task_id: str) -> None:
+        """Policy cancellation never changes a task that already finished."""
+        with self.db.transaction() as conn:
+            conn.execute(
+                "UPDATE company_runtime_tasks SET status='cancel_requested',updated_at=? "
+                "WHERE task_id=? AND status='running'",
+                (int(time.time()), task_id),
+            )
+
+    def has_active_tasks(self, owner_user_id: int) -> bool:
+        with self.db.connect() as conn:
+            return (
+                conn.execute(
+                    "SELECT 1 FROM company_runtime_tasks t JOIN company_runtime_threads b "
+                    "ON b.thread_id=t.thread_id WHERE b.owner_user_id=? "
+                    "AND t.status IN ('running','cancel_requested') LIMIT 1",
+                    (owner_user_id,),
+                ).fetchone()
+                is not None
+            )
 
     def transition(self, task_id: str, status: str) -> None:
         if status not in {"completed", "failed", "cancelled", "unknown", "cancel_requested"}:

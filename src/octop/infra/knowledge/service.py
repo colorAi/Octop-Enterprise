@@ -1,6 +1,6 @@
 """Knowledge-base ownership checks and document upload orchestration.
 
-Visibility is owner or instance-wide ``shared``.
+Visibility is owner, instance-wide ``shared``, or an employee read grant.
 """
 
 from __future__ import annotations
@@ -324,7 +324,12 @@ class KnowledgeService:
         self, kb_id: str, *, actor_user_id: int, is_admin: bool = False
     ) -> KnowledgeBaseRow:
         base = self._require_base(kb_id)
-        if is_admin or base.owner_user_id == actor_user_id or base.shared:
+        if (
+            is_admin
+            or base.owner_user_id == actor_user_id
+            or base.shared
+            or self._repo.has_assignment(actor_user_id, kb_id)
+        ):
             return base
         raise PermissionError("knowledge base read access is required")
 

@@ -91,6 +91,17 @@ class DeviceRepo:
             ).fetchone()
         return dict(row) if row else None
 
+    def pairing_owner(self, digest: str, now: int) -> int | None:
+        """Route the initial device frame without consuming its one-use code."""
+        with self._db.connect() as conn:
+            row = conn.execute(
+                "SELECT p.owner_user_id FROM desktop_pairing_codes p JOIN users u ON u.id=p.owner_user_id "
+                "WHERE p.code_hash=? AND p.expires_at>? AND p.credential_expires_at>? AND u.disabled=0 "
+                "AND NOT EXISTS(SELECT 1 FROM communication_revoked_sessions s WHERE s.session_id=p.session_id AND s.expires_at>?)",
+                (digest, now, now, now),
+            ).fetchone()
+        return int(row[0]) if row else None
+
     def list_for_owner(self, owner: int) -> list[dict[str, Any]]:
         with self._db.connect() as conn:
             rows = conn.execute(

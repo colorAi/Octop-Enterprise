@@ -552,7 +552,12 @@ export default function MinimalAgentSessionNav({
                 onClick={() => openFolderAndSelect(agent.agent_id)}
               >
                 <span className={styles.agentNameCluster}>
-                  <span className={styles.minimalAgentName}>{agent.name}</span>
+                  <span className={styles.minimalAgentName}>
+                    {agent.name}
+                    {agent.history_only
+                      ? ` · ${t("expertAccess.historyOnly")}`
+                      : ""}
+                  </span>
                   <TeamChatBadge agent={agent} />
                   <SharedExpertHint agent={agent} />
                   <RemoteExpertHint agent={agent} />
@@ -562,6 +567,7 @@ export default function MinimalAgentSessionNav({
               <button
                 type="button"
                 className={styles.minimalAgentNewChatBtn}
+                disabled={agent.history_only}
                 aria-label={t("chatWelcome.newChat")}
                 title={t("chatWelcome.newChat")}
                 onClick={() => onNewChat(agent.agent_id)}

@@ -26,6 +26,8 @@ export interface VoiceProviderRow {
 export interface ActiveVoice {
   stt: string;
   tts: string;
+  stt_allowed?: boolean;
+  tts_allowed?: boolean;
 }
 
 export interface VoiceProviderInput {

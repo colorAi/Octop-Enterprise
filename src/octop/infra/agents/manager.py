@@ -25,7 +25,10 @@ from octop.i18n.domains.agents import (
     NO_MODELS_CONFIGURED,
     format_agent_start_error,
 )
-from octop.infra.agents.memory.backend import memory_backend_from_agent_config
+from octop.infra.agents.memory.backend import (
+    memory_backend_from_agent_config,
+    preserve_memory_layout,
+)
 from octop.infra.agents.memory.slim import MemorySlimCoordinator
 from octop.infra.agents.providers import ProviderStore, sync_providers_to_harness
 from octop.infra.agents.security import SecuritySettingsStore, ToolGuardRulesStore
@@ -448,6 +451,11 @@ class AgentManager:
 
         self._config = config or _OctopConfig()
         self.device_manager: Any = None
+        self.employee_resources: Any = None
+        self.execution: Any = None
+        self.runtime_shards: Any = None
+        self.runtime_last_used: dict[str, float] = {}
+        self._runtime_config_dirty: set[str] = set()
         self._expert_catalog = expert_catalog
         self._plugin_manager = plugin_manager
         self._cron_manager: CronManager | None = None
@@ -467,6 +475,7 @@ class AgentManager:
         self._lock = asyncio.Lock()
         self._shared_instance_lock = asyncio.Lock()
         self._isolated_backends: dict[str, Any] = {}
+        self._source_read_lock = asyncio.Lock()
         # Serialize start/reload per agent so parallel provider reloads cannot
         # double-register the same harness id ("already exists in the registry").
         self._agent_lifecycle_locks: dict[str, asyncio.Lock] = {}
@@ -480,7 +489,9 @@ class AgentManager:
         self._history_backfills: dict[str, asyncio.Event] = {}
         self._reload_dirty: set[str] = set()
         self._reload_worker_running: dict[str, bool] = {}
+        self._reload_tasks: dict[str, asyncio.Task[None]] = {}
         self._bootstrap_graph_refresh_pending: set[str] = set()
+        self._bootstrap_display: dict[str, bool] = {}
         # Chat user id used to resolve connectors when agent.user_id is NULL (shared agents).
         self._connector_user_override: dict[str, int] = {}
         self._langfuse = LangfuseSettingsStore(
@@ -560,7 +571,7 @@ class AgentManager:
     def teams(self) -> Any:
         return self._teams
 
-    async def boot(self) -> None:
+    async def boot(self, *, lazy: bool = False) -> None:
         self._tool_guard_rules.ensure_seeded()
         providers = self._providers.build_harness_configs()
         self._harness_manager = HarnessAgentManager(
@@ -580,7 +591,10 @@ class AgentManager:
             self._install_team_host_dispatch()
             self._harness_manager.set_security_policy(self._security.harness_policy())
 
-        rows = self._repos.agent_repo.list_all(include_disabled=False)
+        # Source publication reads workspaces without starting every source expert.
+        rows = [] if lazy else self._repos.agent_repo.list_all(include_disabled=False)
+        if self.runtime_shards is not None:
+            rows = [row for row in rows if self.runtime_shards.owns_user(row.user_id)]
         for row in rows:
             if row.last_state == "stopped":
                 continue
@@ -611,6 +625,10 @@ class AgentManager:
 
     async def shutdown(self) -> None:
         await self.memory_slim.close()
+        self._reload_dirty.clear()
+        for task in tuple(self._reload_tasks.values()):
+            task.cancel()
+        await asyncio.gather(*self._reload_tasks.values(), return_exceptions=True)
         async with self._lock:
             if self._harness_manager:
                 try:
@@ -625,9 +643,9 @@ class AgentManager:
         for key, backend in list(self._isolated_backends.items()):
             if agent_id is not None and json.loads(key)[0]["agent_id"] != agent_id:
                 continue
-            self._isolated_backends.pop(key, None)
             try:
                 backend.release()
+                self._isolated_backends.pop(key, None)
             except Exception:
                 logger.exception("failed to release isolated workspace handle")
 
@@ -680,10 +698,27 @@ class AgentManager:
         spec: AgentCreateSpec,
         *,
         defer_bootstrap: bool = False,
+        initialize_runtime: bool = True,
         workspace_initializer: Callable[[AgentRow, Any], Awaitable[None]] | None = None,
     ) -> AgentRow:
         """Create a new agent, persist to DB, and register with harness."""
+        resources = getattr(self, "employee_resources", None)
+        if (
+            resources is not None
+            and resources.publication is not None
+            and spec.user_id == await resources.publication._source()
+        ):
+            defer_bootstrap = False
         async with self._lock:
+            from octop.infra.users.expert_access import ExpertAccess
+
+            managed_creation = (
+                ExpertAccess(self._repos).assert_create(spec.user_id, spec.agent_id)
+                if spec.user_id is not None
+                else False
+            )
+            if not initialize_runtime and (not managed_creation or self.runtime_shards is None):
+                raise ValueError("lazy creation requires a managed worker instance")
             self._assert_agent_name_available(spec.user_id, spec.name)
             if spec.agent_id:
                 validate_custom_agent_id(spec.agent_id)
@@ -717,7 +752,7 @@ class AgentManager:
 
             if spec.user_id is not None:
                 kind = spec.kind if spec.kind in {"expert", "team"} else "expert"
-                if kind == "expert":
+                if kind == "expert" and not managed_creation:
                     assert_agent_quota_available(
                         self._repos.user_policy_repo,
                         self._repos.agent_repo,
@@ -792,6 +827,16 @@ class AgentManager:
             )
             row = self._repos.agent_repo.get(agent_id)
             assert row is not None
+            if not initialize_runtime:
+                # Assigned definitions and skills already exist in immutable
+                # publications. Browsing needs an identity, not a tool executor.
+                self._repos.agent_repo.set_state(agent_id, "running", error=None)
+                self._repos.audit_repo.write(
+                    actor=ACTOR_SYSTEM, action="agent.create", target=agent_id, payload=spec.name
+                )
+                row = self._repos.agent_repo.get(agent_id)
+                assert row is not None
+                return row
             if spec.is_shared:
                 self._repos.agent_repo.set_shared(agent_id, True)
                 row = self._repos.agent_repo.get(agent_id)
@@ -905,6 +950,9 @@ class AgentManager:
 
     async def update(self, agent_id: str, **kwargs: Any) -> AgentRow:
         """Update agent config in DB and reload harness agent in the background."""
+        from octop.infra.users.expert_access import ExpertAccess
+
+        ExpertAccess(self._repos).assert_manage(agent_id)
         runtime_updates = {
             key: kwargs.pop(key) for key in AGENT_RUNTIME_CONFIG_KEYS if key in kwargs
         }
@@ -964,6 +1012,9 @@ class AgentManager:
 
     async def set_shared(self, agent_id: str, shared: bool) -> AgentRow:
         """Persist whether other users may access this agent."""
+        from octop.infra.users.expert_access import ExpertAccess
+
+        ExpertAccess(self._repos).assert_manage(agent_id)
         existing = self._repos.agent_repo.get(agent_id)
         if existing is None:
             raise OctopError(ErrorCode.AGENT_NOT_FOUND, f"agent {agent_id!r} not found")
@@ -990,6 +1041,9 @@ class AgentManager:
 
     async def delete(self, agent_id: str) -> None:
         """Remove agent from DB, harness runtime, and workspace directory."""
+        from octop.infra.users.expert_access import ExpertAccess
+
+        ExpertAccess(self._repos).assert_manage(agent_id)
         row = self._repos.agent_repo.get(agent_id)
         if row is None:
             raise OctopError(ErrorCode.AGENT_NOT_FOUND, f"agent {agent_id!r} not found")
@@ -1014,6 +1068,7 @@ class AgentManager:
         except OSError:
             logger.exception("rmtree failed for %s; agent removed from DB anyway", workspace_dir)
         self._repos.agent_repo.delete(agent_id)
+        self._bootstrap_display.pop(agent_id, None)
         if self._proactive_scheduler is not None:
             self._proactive_scheduler.cancel(agent_id)
         self._repos.audit_repo.write(actor=ACTOR_SYSTEM, action="agent.delete", target=agent_id)
@@ -1025,6 +1080,15 @@ class AgentManager:
 
     async def start(self, agent_id: str) -> None:
         """Load agent into harness runtime (no-op config merge)."""
+        if self.runtime_shards is not None:
+            row = self.get_row(agent_id)
+            if row is not None:
+                async with self.runtime_shards.activity(row.user_id, agent_id):
+                    await self.runtime_shards.retry_sandbox(lambda: self._start_runtime(agent_id))
+                return
+        await self._start_runtime(agent_id)
+
+    async def _start_runtime(self, agent_id: str) -> None:
         async with self._lock:
             row = self._repos.agent_repo.get(agent_id)
             if row is None:
@@ -1068,6 +1132,37 @@ class AgentManager:
                 await asyncio.to_thread(self._quiesce_octop_memory, agent_id)
                 await self._harness_manager.aremove_agent(agent_id)  # type: ignore[union-attr]
                 self._repos.agent_repo.set_state(agent_id, "stopped", error=None)
+
+    async def evict_idle(self, agent_id: str, *, before: float) -> bool:
+        """Unload only quiescent runtimes; keep enabled/last_state and private volumes."""
+        async with self._lock, self._lifecycle_lock_for(agent_id):
+            if (
+                self.runtime_last_used.get(agent_id, float("inf")) > before
+                or self.is_agent_active(agent_id)
+                or self._invocation_waiters.get(agent_id, 0)
+                or agent_id in self._history_backfills
+                or agent_id in self._reload_tasks
+                or agent_id in self._reload_dirty
+                or await asyncio.to_thread(
+                    self._repos.execution_repo.agent_busy, agent_id, workspace_only=True
+                )
+            ):
+                return False
+            if not self.try_begin_history_backfill(agent_id):
+                return False
+            try:
+                await asyncio.to_thread(self._quiesce_octop_memory, agent_id)
+                if self._octop_harness_or_none(agent_id) is not None:
+                    await self._harness_manager.aremove_agent(agent_id)  # type: ignore[union-attr]
+                for key, backend in list(self._isolated_backends.items()):
+                    if json.loads(key)[0]["agent_id"] == agent_id:
+                        await asyncio.to_thread(backend.hibernate, idle=True)
+                        self._isolated_backends.pop(key, None)
+                self.runtime_last_used.pop(agent_id, None)
+                logger.info("Idle runtime reclaimed: %s", agent_id)
+                return True
+            finally:
+                self.end_history_backfill(agent_id)
 
     def _quiesce_octop_memory(self, agent_id: str) -> None:
         """Stop memory GC before the harness closes the SQLite backend.
@@ -1130,12 +1225,68 @@ class AgentManager:
         row = self.get_row(agent_id)
         if row is None:
             return None
+        self.runtime_last_used[agent_id] = time.monotonic()
         if self._harness_manager is not None:
             try:
                 return self._harness_manager.get_agent(agent_id).agent.workspace
             except KeyError:
                 pass
         return self._backend_workspace_for_row(row)
+
+    @asynccontextmanager
+    async def source_workspace(self, agent_id: str) -> AsyncIterator[Any]:
+        """Read one source workspace without retaining a harness or sandbox slot."""
+        from octop.infra.backend.isolation import create_isolated_backend, isolation_enabled
+
+        if not isolation_enabled():
+            yield self.get_agent(agent_id).workspace
+            return
+
+        def open_workspace() -> tuple[Any, Any]:
+            from octop_harness.backends.workspace import BackendWorkspace
+
+            from octop.infra.agents.workspace.dir import system_files_path_from_config
+            from octop.infra.backend.compat import adapt_backend_protocol
+
+            row = self.get_row(agent_id)
+            if row is None:
+                raise KeyError(agent_id)
+            if self.runtime_shards is not None:
+                self.runtime_shards.assert_user(row.user_id)
+            cfg = self._agent_config_dict(row)
+            directory = self.resolve_workspace_dir(agent_id)
+            spec = self._backend_spec_for_row(row, cfg=cfg, workspace_dir=directory)
+            backend = create_isolated_backend({**spec, "read_only_workspace": True})
+            try:
+                workspace = BackendWorkspace(
+                    adapt_backend_protocol(backend),
+                    directory,
+                    system_files_path=system_files_path_from_config(cfg),
+                )
+            except BaseException:
+                backend.hibernate()
+                raise
+            return backend, workspace
+
+        # Separate read-only containers cannot stop an active agent's container.
+        # Serial reads allow arbitrarily many source experts within one slot.
+        async with self._source_read_lock:
+            opening = asyncio.create_task(asyncio.to_thread(open_workspace))
+            try:
+                backend, workspace = await asyncio.shield(opening)
+            except asyncio.CancelledError:
+                backend, _ = await opening
+                await asyncio.to_thread(backend.hibernate)
+                raise
+            try:
+                yield workspace
+            finally:
+                closing = asyncio.create_task(asyncio.to_thread(backend.hibernate))
+                try:
+                    await asyncio.shield(closing)
+                except asyncio.CancelledError:
+                    await closing
+                    raise
 
     def list_agents(self, user_id: int) -> list[AgentRow]:
         return self._repos.agent_repo.list_by_user(user_id, include_disabled=False)
@@ -1234,9 +1385,20 @@ class AgentManager:
             self.persist_harness_config(agent_id, new_cfg)
         return out
 
+    def is_bootstrapped_for_display(self, agent_id: str) -> bool:
+        """Lifecycle projection only; never use this for authorization or execution."""
+        if self.runtime_shards is not None:
+            mapping = self._repos.expert_assignment_repo.instance(agent_id)
+            if mapping is not None and mapping["state"] == "ready":
+                return True
+        return self._bootstrap_display.get(agent_id, False)
+
     def is_bootstrapped(self, agent_id: str) -> bool:
         """Whether onboarding has completed for a running agent."""
         from octop.infra.agents.teams import is_team_agent  # noqa: PLC0415
+
+        if self.runtime_shards is not None and self._octop_harness_or_none(agent_id) is None:
+            return self.is_bootstrapped_for_display(agent_id)
 
         # Team hosts skip BOOTSTRAP.md; they are ready as soon as the row exists.
         if is_team_agent(self.get_row(agent_id)):
@@ -1283,12 +1445,58 @@ class AgentManager:
             AGENT_FAILED — agent exists but last start failed
             AGENT_NOT_RUNNING — agent exists but is not loaded in harness
         """
+        self.runtime_last_used[agent_id] = time.monotonic()
         if self._harness_manager is None:
             raise self._unavailable_error(agent_id)
         try:
             return self._harness_manager.get_agent(agent_id).agent
         except KeyError:
             raise self._unavailable_error(agent_id) from None
+
+    async def ensure_runtime(self, agent_id: str) -> HarnessAgent:
+        """Reload an enabled, idle-evicted runtime only on its owning worker."""
+        if self.runtime_shards is None:
+            return self.get_agent(agent_id)
+        row = self.get_row(agent_id)
+        if row is None:
+            raise self._unavailable_error(agent_id)
+        await asyncio.to_thread(self.runtime_shards.assert_user, row.user_id)
+        from octop.infra.users.expert_access import ExpertAccess
+
+        ExpertAccess(self._repos).assert_owner_execution(agent_id)
+        if self._octop_harness_or_none(agent_id) is None:
+            if not row.enabled or row.last_state != "running":
+                raise self._unavailable_error(agent_id)
+            await self.start(agent_id)
+        return self.get_agent(agent_id)
+
+    def company_model_factory(self) -> Any:
+        """Company model proxy shares providers, never an agent tool runtime."""
+        assert self._harness_manager is not None
+        sync_providers_to_harness(
+            self._harness_manager,
+            self._providers.build_harness_configs(),
+            shared_factory=self._harness_manager.shared_factory,
+        )
+        factory = self._harness_manager.shared_factory
+        if factory is None:
+            raise OctopError(ErrorCode.AGENT_NOT_RUNNING, NO_MODELS_CONFIGURED)
+        return factory
+
+    async def desktop_context_workspace(self, agent_id: str) -> Any:
+        """Read personal prompt files without starting a server tool executor."""
+        from octop.infra.backend.context_snapshot import isolated_context_workspace
+        from octop.infra.backend.isolation import isolation_enabled
+
+        row = self.get_row(agent_id)
+        if row is None:
+            raise self._unavailable_error(agent_id)
+        if self.runtime_shards is not None:
+            await asyncio.to_thread(self.runtime_shards.assert_user, row.user_id)
+        if isolation_enabled():
+            spec = self._backend_spec_for_row(row)
+            return await asyncio.to_thread(isolated_context_workspace, spec)
+        return self.workspace_for_agent(agent_id)
 
     def _unavailable_error(self, agent_id: str) -> OctopError:
         """Map a missing live harness handle to the right public error code."""
@@ -1370,6 +1578,7 @@ class AgentManager:
         self._active_invocations[agent_id] = self._active_invocations.get(agent_id, 0) + 1
 
     def _end_invocation(self, agent_id: str) -> None:
+        self.runtime_last_used[agent_id] = time.monotonic()
         active = self._active_invocations.get(agent_id, 1) - 1
         if active > 0:
             self._active_invocations[agent_id] = active
@@ -1380,12 +1589,22 @@ class AgentManager:
     async def _track_invocation(self, agent_id: str) -> AsyncIterator[None]:
         await self._begin_invocation(agent_id)
         try:
+            from octop.infra.users.expert_access import ExpertAccess
+
+            ExpertAccess(self._repos).assert_owner_execution(agent_id)
+            resources = getattr(self, "employee_resources", None)
+            if resources is not None:
+                await resources.prepare(agent_id, invocation=True)
             yield
         finally:
             self._end_invocation(agent_id)
 
     async def stream(self, agent_id: str, request: dict[str, Any]) -> AsyncIterator[Any]:
         """Stream harness chunks (Langfuse tracing handled inside octop-harness)."""
+        if self.execution is not None and self.execution.should_submit:
+            async for chunk in self.execution.manager_stream(agent_id, request):
+                yield chunk
+            return
         if self._harness_manager is None:
             raise self._unavailable_error(agent_id)
 
@@ -1424,6 +1643,11 @@ class AgentManager:
 
     async def call(self, agent_id: str, request: dict[str, Any]) -> dict[str, Any]:
         """Non-streaming harness invocation (one-shot agent call)."""
+        if self.execution is not None and self.execution.should_submit:
+            async for chunk in self.execution.manager_stream(agent_id, request, call=True):
+                if chunk.get("type") == "execution.result":
+                    return cast(dict[str, Any], chunk["result"])
+            raise RuntimeError("execution result unavailable; inspect the durable task")
         if self._harness_manager is None:
             raise self._unavailable_error(agent_id)
         async with self._track_invocation(agent_id):
@@ -2087,6 +2311,9 @@ class AgentManager:
 
     async def apply_persona_mbti(self, agent_id: str, code: str) -> AgentRow:
         """Persist MBTI persona on the agent row and reload harness runtime."""
+        from octop.infra.users.expert_access import ExpertAccess
+
+        ExpertAccess(self._repos).assert_manage(agent_id)
         norm = code.upper()
         row = self._repos.agent_repo.get(agent_id)
         if row is None:
@@ -2123,6 +2350,9 @@ class AgentManager:
 
     async def update_config_json(self, agent_id: str, config_json: str) -> AgentRow:
         """Patch ``config_json`` and reload the harness runtime in the background."""
+        from octop.infra.users.expert_access import ExpertAccess
+
+        ExpertAccess(self._repos).assert_manage(agent_id)
         parsed = self._preserve_internal_layout(
             agent_id, parse_config_json(config_json), pin_workspace_dir=True
         )
@@ -2138,12 +2368,46 @@ class AgentManager:
         self._schedule_reload(agent_id)
         return row
 
+    async def sync_managed_definition(
+        self, agent_id: str, fields: dict[str, Any], runtime_settings: dict[str, Any]
+    ) -> None:
+        """Apply an authorized source definition before starting an invocation.
+
+        Called only by EmployeeResources while its per-agent preparation lock is
+        held and no other invocation is active. Never copy source runtime config.
+        """
+        from octop.infra.users.managed_resources import DEFINITION_FIELDS
+
+        if self._repos.expert_assignment_repo.instance(agent_id) is None:
+            raise OctopError(ErrorCode.FORBIDDEN, "managed instance required")
+        values = {key: fields[key] for key in DEFINITION_FIELDS if key in fields}
+        # Keep a stable, unique display name if this employee already has another
+        # expert with the administrator's chosen name.
+        row = self._repos.agent_repo.get(agent_id)
+        assert row is not None and row.user_id is not None
+        if any(
+            r.agent_id != agent_id and r.name == values["name"]
+            for r in self.list_agents(row.user_id)
+        ):
+            values["name"] = f"{values['name']} ({agent_id[-6:]})"
+        cfg = merge_agent_runtime_values(self.get_config(agent_id), runtime_settings)
+        self._repos.agent_repo.update_config(
+            agent_id, **values, config_json=dumps_config(cfg), skill_package_ids="[]"
+        )
+        if self.runtime_shards is not None and self._octop_harness_or_none(agent_id) is None:
+            return
+        await self._reload_agent(agent_id)
+        self.get_agent(agent_id)  # Propagate an unsuccessful rebuild; never run stale config.
+
     async def persist_skills_disabled(self, agent_id: str, disabled: set[str]) -> None:
         """Persist ``skills_disabled`` and hot-sync the running agent (no rebuild).
 
         Unlike :meth:`update_config_json`, this does not schedule a harness reload.
         Skill enable/disable and marketplace install only need the filter set updated.
         """
+        from octop.infra.users.expert_access import ExpertAccess
+
+        ExpertAccess(self._repos).assert_manage(agent_id)
         cfg = self.get_config(agent_id)
         cfg["skills_disabled"] = sorted(disabled)
         self.persist_harness_config(agent_id, cfg)
@@ -2152,7 +2416,9 @@ class AgentManager:
     async def persist_tools_disabled(self, agent_id: str, disabled: set[str]) -> None:
         """Persist builtin ``tools_disabled`` and hot-sync the effective denylist."""
         from octop.infra.agents.settings.tool_catalog import normalize_tools_disabled
+        from octop.infra.users.expert_access import ExpertAccess
 
+        ExpertAccess(self._repos).assert_manage(agent_id)
         cfg = self.get_config(agent_id)
         cleaned = normalize_tools_disabled(sorted(disabled))
         cfg["tools_disabled"] = cleaned
@@ -2165,6 +2431,9 @@ class AgentManager:
         plugins: dict[str, Any],
     ) -> None:
         """Persist ``config.plugins`` and hot-sync tool denylist (no harness reload)."""
+        from octop.infra.users.expert_access import ExpertAccess
+
+        ExpertAccess(self._repos).assert_manage(agent_id)
         cfg = self.get_config(agent_id)
         cfg["plugins"] = plugins
         self.persist_harness_config(agent_id, cfg)
@@ -2265,6 +2534,9 @@ class AgentManager:
         Unlike :meth:`update_config_json`, this does not schedule a harness rebuild.
         Mounting packages only needs ``skills_dir`` updated so list/enable keep working.
         """
+        from octop.infra.users.expert_access import ExpertAccess
+
+        ExpertAccess(self._repos).assert_manage(agent_id)
         row = self._repos.agent_repo.get(agent_id)
         if row is None:
             raise OctopError(ErrorCode.AGENT_NOT_FOUND, f"agent {agent_id!r} not found")
@@ -2451,6 +2723,7 @@ class AgentManager:
         agent_id: str,
         *,
         locale: Locale | None = None,
+        workspace: Any = None,
     ) -> list[dict[str, Any]]:
         """Installed skills for *agent_id* (harness catalog + package ``kind`` labels).
 
@@ -2460,7 +2733,7 @@ class AgentManager:
         """
         from octop.infra.utils.frontmatter import parse_frontmatter
 
-        agent = self.get_agent(agent_id)
+        agent = await self.ensure_runtime(agent_id) if workspace is None else None
         cfg = self.get_config(agent_id)
         workspace_dir = self.resolve_workspace_dir(agent_id)
         repaired = repair_workspace_skill_manifests(workspace_dir)
@@ -2472,7 +2745,14 @@ class AgentManager:
             )
 
         try:
-            harness_rows = list(await agent.list_skill_summaries())
+            if agent is not None:
+                harness_rows = list(await agent.list_skill_summaries())
+            else:
+                from octop_harness.skills.catalog import list_skill_summaries
+
+                harness_rows = await list_skill_summaries(
+                    workspace, skills_disabled=skills_disabled_set(cfg)
+                )
         except (OSError, PermissionError, UnicodeDecodeError, UnicodeError) as exc:
             logger.warning(
                 "harness list_skill_summaries failed for agent %s; using workspace fallback: %s",
@@ -2525,7 +2805,7 @@ class AgentManager:
         from octop_harness.skills import catalog as harness_skill_catalog  # noqa: PLC0415
 
         if getattr(harness_skill_catalog, "SKILL_PRESENTATION_METADATA_VERSION", 0) < 1:
-            workspace = getattr(agent, "workspace", None)
+            workspace = workspace if workspace is not None else getattr(agent, "workspace", None)
             aread = getattr(workspace, "aread_text", None)
             if callable(aread):
                 for index, row in enumerate(harness_rows):
@@ -2573,7 +2853,7 @@ class AgentManager:
             if slug:
                 merged[slug] = dict(row)
 
-        workspace = getattr(agent, "workspace", None)
+        workspace = workspace if workspace is not None else getattr(agent, "workspace", None)
         for slug, package_row in package_by_slug.items():
             has_workspace = False
             if workspace is not None:
@@ -2603,7 +2883,7 @@ class AgentManager:
 
     async def list_subagent_summaries(self, agent_id: str) -> list[dict[str, Any]]:
         """Installed subagents for *agent_id* (delegates to octop-harness catalog)."""
-        agent = self.get_agent(agent_id)
+        agent = await self.ensure_runtime(agent_id)
         rows = [dict(row) for row in await agent.list_subagent_summaries()]
         await _fill_missing_subagent_colors(agent, rows)
         return rows
@@ -2713,6 +2993,14 @@ class AgentManager:
         self, row: AgentRow, *, init_workspace: bool = True
     ) -> HarnessAgent | None:
         assert self._harness_manager is not None, "_start_agent called before boot()"
+        if self.runtime_shards is not None:
+            await asyncio.to_thread(self.runtime_shards.assert_user, row.user_id)
+            sync_providers_to_harness(
+                self._harness_manager,
+                self._providers.build_harness_configs(),
+                shared_factory=self._harness_manager.shared_factory,
+            )
+        self.runtime_last_used[row.agent_id] = time.monotonic()
         if self._harness_manager.shared_factory is None:
             self._repos.agent_repo.set_state(row.agent_id, "failed", error=NO_MODELS_CONFIGURED)
             return None
@@ -2730,6 +3018,9 @@ class AgentManager:
             try:
                 from octop.infra.agents.teams import is_team_agent  # noqa: PLC0415
 
+                resources = getattr(self, "employee_resources", None)
+                if resources is not None:
+                    await resources.initialize_workspace(row.agent_id)
                 cfg, metadata, tags, user_display = self._agent_runtime_bundle(row)
                 # Team hosts already have AGENTS/SOUL/MEMORY from seed_team_template.
                 # Never let harness copy builtin skills just to strip them later.
@@ -2754,6 +3045,11 @@ class AgentManager:
                         row.agent_id,
                     )
                     return recovered
+                from octop.infra.db.repos.execution import ExecutionConflict
+
+                if isinstance(exc, ExecutionConflict) and str(exc) == "sandbox_memory_exhausted":
+                    # Temporary admission failure must not mark an enabled agent broken.
+                    raise
                 logger.exception("Failed to start agent %s", row.agent_id)
                 self._repos.agent_repo.set_state(
                     row.agent_id,
@@ -2824,7 +3120,9 @@ class AgentManager:
 
         # Patch config when bootstrap finishes, but defer graph recompile until
         # the in-flight turn has fully drained (sync _init_graph mid-stream segfaults).
-        if not team_host and not agent.is_bootstrapped():
+        bootstrapped = team_host or await asyncio.to_thread(agent.is_bootstrapped)
+        self._bootstrap_display[row.agent_id] = bootstrapped
+        if not bootstrapped:
             agent_id = row.agent_id
 
             def _on_bootstrap_complete() -> None:
@@ -2834,6 +3132,7 @@ class AgentManager:
 
     def _mark_bootstrap_graph_refresh_pending(self, agent_id: str, agent: HarnessAgent) -> None:
         """Record DB-backed config updates; graph rebuild runs on the next turn."""
+        self._bootstrap_display[agent_id] = True
         row = self._repos.agent_repo.get(agent_id)
         if row is None:
             return
@@ -2947,6 +3246,9 @@ class AgentManager:
         allow_ephemeral_remote: bool = False,
     ) -> Any:
         """Resolve :class:`BackendWorkspace` for *row* without a running harness agent."""
+        if self.runtime_shards is not None:
+            self.runtime_shards.assert_user(row.user_id)
+        self.runtime_last_used[row.agent_id] = time.monotonic()
         from octop_harness.backends import resolve_backend  # noqa: PLC0415
         from octop_harness.backends.workspace import BackendWorkspace  # noqa: PLC0415
 
@@ -3077,8 +3379,22 @@ class AgentManager:
     # Internal — background reload worker
     # ------------------------------------------------------------------
 
-    async def _reload_agent(self, agent_id: str) -> None:
+    async def _reload_agent(self, agent_id: str, *, except_run: str = "") -> None:
         assert self._harness_manager is not None
+        if self.runtime_shards is not None:
+            row = self._repos.agent_repo.get(agent_id)
+            if row is None or not self.runtime_shards.owns_user(row.user_id):
+                return
+            # Configuration changes do not eagerly rehydrate every employee.
+            if self._octop_harness_or_none(agent_id) is None:
+                self._runtime_config_dirty.discard(agent_id)
+                return
+            if self.is_agent_active(agent_id) or await asyncio.to_thread(
+                self._repos.execution_repo.agent_busy, agent_id, except_run=except_run
+            ):
+                self._runtime_config_dirty.add(agent_id)
+                return
+            self._runtime_config_dirty.discard(agent_id)
         async with self._lifecycle_lock_for(agent_id):
             self._bootstrap_graph_refresh_pending.discard(agent_id)
             row = self._repos.agent_repo.get(agent_id)
@@ -3107,6 +3423,11 @@ class AgentManager:
                         agent_id,
                     )
                     return
+                from octop.infra.db.repos.execution import ExecutionConflict
+
+                if isinstance(exc, ExecutionConflict) and str(exc) == "sandbox_memory_exhausted":
+                    self._runtime_config_dirty.add(agent_id)
+                    raise
                 logger.exception("Background reload failed for agent %s", agent_id)
                 self._repos.agent_repo.set_state(
                     agent_id,
@@ -3120,7 +3441,27 @@ class AgentManager:
         if self._reload_worker_running.get(agent_id):
             return
         self._reload_worker_running[agent_id] = True
-        asyncio.create_task(self._reload_worker(agent_id), name=f"reload-agent-{agent_id}")
+        task = asyncio.create_task(self._reload_worker(agent_id), name=f"reload-agent-{agent_id}")
+        self._reload_tasks[agent_id] = task
+
+        def finished(done: asyncio.Task[None]) -> None:
+            if self._reload_tasks.get(agent_id) is done:
+                self._reload_tasks.pop(agent_id, None)
+
+        task.add_done_callback(finished)
+
+    async def wait_source_updates(self, user_id: int) -> None:
+        """A source save includes workspace writes performed by queued reloads."""
+        while True:
+            rows = await asyncio.to_thread(self._repos.agent_repo.list_by_user, user_id)
+            tasks = [
+                self._reload_tasks[row.agent_id]
+                for row in rows
+                if row.agent_id in self._reload_tasks
+            ]
+            if not tasks:
+                return
+            await asyncio.gather(*tasks)
 
     async def _reload_worker(self, agent_id: str) -> None:
         try:
@@ -3251,6 +3592,13 @@ class AgentManager:
         from octop_harness.plugins import collect_plugin_tool_configs  # noqa: PLC0415
 
         req = dict(request)
+        from octop.infra.users.expert_access import ExpertAccess
+
+        caller_id = str(req.get("user") or "")
+        if caller_id.isdigit():
+            access = ExpertAccess(self._repos)
+            if access.assigned_only(int(caller_id)) or access.repo.instance(agent_id) is not None:
+                access.assert_use(int(caller_id), agent_id)
         from octop.infra.backend.isolation import isolation_enabled
 
         if isolation_enabled() and req.get("user") is not None:
@@ -3439,7 +3787,10 @@ class AgentManager:
             DeviceToolGuardMiddleware,
             DeviceToolsMiddleware,
         )
+        from octop.infra.agents.middleware.execution_budget import ExecutionBudgetMiddleware
+        from octop.infra.agents.middleware.expert_access import ExpertAccessMiddleware
         from octop.infra.agents.middleware.history_roles import HistoryRolesMiddleware
+        from octop.infra.agents.middleware.model_access import ModelAccessMiddleware
         from octop.infra.agents.middleware.octop_ui_offload import OctopUiOffloadMiddleware
         from octop.infra.agents.middleware.reasoning import ReasoningRequestMiddleware
         from octop.infra.agents.middleware.thread_artifacts import ThreadArtifactsMiddleware
@@ -3463,10 +3814,15 @@ class AgentManager:
         agent_middleware: list[Any] = [
             DeviceToolGuardMiddleware(device_policy),
             *plugin_middleware,
+            ExpertAccessMiddleware(
+                self._repos, row.agent_id, lambda: getattr(self, "employee_resources", None)
+            ),
+            ModelAccessMiddleware(self._repos, row.agent_id),
             TokenQuotaMiddleware(
                 policy_repo=self._repos.user_policy_repo,
                 usage_repo=self._repos.usage_repo,
             ),
+            ExecutionBudgetMiddleware(),
             ReasoningRequestMiddleware(),
             device_policy,
             HistoryRolesMiddleware(),
@@ -3626,7 +3982,11 @@ class AgentManager:
             log_dir=str(self.paths.logs_dir),
             media_generation=self._media_generation.harness_config(),
             **_memory_extract_settings(cfg, is_ref_usable=self._providers.is_model_ref_usable),
-            **_resolve_memory_backend_kwargs(cfg, workspace_dir=workspace_dir, config=self._config),
+            **_resolve_memory_backend_kwargs(
+                preserve_memory_layout(cfg, parse_config_json(row.config_json)),
+                workspace_dir=workspace_dir,
+                config=self._config,
+            ),
         )
         if "tools_disabled" in _HARNESS_AGENT_CONFIG_FIELDS:
             from octop.infra.agents.settings.tool_catalog import effective_tools_disabled
@@ -3637,6 +3997,9 @@ class AgentManager:
                 registered_plugin_tools=registered,
                 global_plugins=global_plugins,
             )
+            if self._repos.expert_assignment_repo.instance(row.agent_id) is not None:
+                # The initial assignment mode executes only the selected expert.
+                disabled = set(disabled) | {"ask_agent", "agent_list", "task"}
             if team_host:
                 disabled = set(host_tools_disabled(disabled))
             from octop.infra.backend.isolation import HOST_TOOLS, isolation_enabled

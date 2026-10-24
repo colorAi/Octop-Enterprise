@@ -13,8 +13,9 @@ from pydantic import BaseModel, Field
 
 from octop.api.common.content_disposition import content_disposition
 from octop.api.common.upload_limit import read_upload_capped
-from octop.api.deps import current_user, get_server, require_permission
+from octop.api.deps import current_user, get_server, require_admin, require_permission
 from octop.config import DEFAULT_MAX_UPLOAD_MB, MAX_MAX_UPLOAD_MB, upload_mb_to_bytes
+from octop.i18n import tr
 from octop.infra.agents.providers.model_flags import (
     is_chat_eligible_model,
     is_embedding_model,
@@ -58,6 +59,7 @@ from octop.infra.knowledge.service import (
 from octop.infra.server import OctopServer
 from octop.infra.users.identity import User
 from octop.infra.utils.locale import resolve_request_locale
+from octop.infra.utils.runtime_packages import PackageInstallError
 
 router = APIRouter(prefix="/knowledge-bases")
 logger = logging.getLogger(__name__)
@@ -203,6 +205,12 @@ def _map_knowledge_error(
 ) -> OctopError:
     if isinstance(exc, OctopError):
         return exc
+    if isinstance(exc, PackageInstallError):
+        return OctopError.localized(
+            ErrorCode.KNOWLEDGE_PREREQUISITES_FAILED,
+            locale,
+            details={"reason": tr(f"runtime_packages.{exc.reason}", locale)},
+        )
     if isinstance(exc, (LookupError, FileNotFoundError)):
         return OctopError.localized(ErrorCode.KNOWLEDGE_NOT_FOUND, locale)
     if isinstance(exc, PermissionError):
@@ -505,6 +513,7 @@ async def activate_onnx_service(
 @router.post("/onnx-test", summary="Probe the selected local ONNX embedding model")
 async def test_onnx_model(
     body: OnnxDownloadBody,
+    request: Request,
     _: User = Depends(require_permission("knowledge_settings")),
 ) -> dict[str, Any]:
     """Verify the model actually embeds, on-device.
@@ -512,7 +521,7 @@ async def test_onnx_model(
     Mirrors ``/onnx-models/test`` for the knowledge-settings role: that one is
     gated on ``onnx_models``, which a knowledge-settings admin need not hold.
     """
-    return await probe_local_model(body.model.strip())
+    return await probe_local_model(body.model.strip(), locale=resolve_request_locale(request))
 
 
 @router.get("", summary="List visible knowledge bases")
@@ -533,7 +542,7 @@ async def create_base(
     body: CreateBaseBody,
     request: Request,
     server: OctopServer = Depends(get_server),
-    user: User = Depends(require_permission("knowledge_bases")),
+    user: User = Depends(require_admin()),
 ) -> dict[str, Any]:
     locale = resolve_request_locale(request)
     try:

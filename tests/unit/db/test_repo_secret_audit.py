@@ -67,3 +67,22 @@ def test_audit_write_and_query(audit: AuditRepo):
     action_rows = audit.query(action="login")
     assert len(action_rows) == 2
     assert all(r.action == "login" for r in action_rows)
+
+
+def test_concurrent_workers_reuse_one_created_secret(db):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+
+    barrier = Barrier(4)
+
+    def create(index):
+        def factory():
+            barrier.wait(timeout=5)
+            return f"candidate-{index}".encode()
+
+        return SecretRepo(db).get_or_create("communication_instance", factory)
+
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        values = list(executor.map(create, range(4)))
+    assert len(set(values)) == 1
+    assert SecretRepo(db).get("communication_instance") == values[0]

@@ -77,6 +77,20 @@ def test_unrelated_bad_request_does_not_trigger_compaction():
     assert model_failure(error) == {"error": "company_model_http_400", "retryable": False}
 
 
+def test_model_errors_do_not_expose_provider_credentials():
+    sentinel = "sk-model-failure-regression-only"
+    request = httpx.Request("POST", "http://provider.invalid", headers={"Authorization": sentinel})
+    errors = [
+        RuntimeError(sentinel),
+        httpx.ReadTimeout(sentinel, request=request),
+        httpx.HTTPStatusError(
+            sentinel, request=request, response=httpx.Response(401, text=sentinel)
+        ),
+    ]
+    for error in errors:
+        assert sentinel not in json.dumps(model_failure(error))
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("trigger", ["pressure", "overflow", "measured_pressure"])
 async def test_real_compactor_summarizes_via_company_proxy_and_continues(

@@ -39,6 +39,10 @@ def _user_json(user: Any, *, locale: str | None = None) -> dict[str, Any]:
 def me_payload(user: Any, server: Any) -> dict[str, Any]:
     """Profile JSON for ``/auth/me`` and OAuth bind/unbind responses."""
     payload = _user_json(user, locale=user.locale)
+    assignments = getattr(server.services, "expert_assignment_repo", None)
+    if assignments is not None:
+        state = assignments.state(user.id)
+        payload["expert_access_mode"] = state["mode"] if state and not user.is_admin else "legacy"
     row = server.user_manager.get_row(user.id)
     if row is None:
         payload["sso_linked"] = False

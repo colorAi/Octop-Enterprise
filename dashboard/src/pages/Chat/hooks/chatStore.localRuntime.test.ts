@@ -841,6 +841,77 @@ it("does not resume a legacy server approval from a company desktop", async () =
   );
 });
 
+it("shows a native approval, resumes through IPC, and retains the live subscription", async () => {
+  bridge.resumeHitl = vi.fn().mockResolvedValue({ status: "resuming" });
+  const turn = store.sendTurn(
+    "local-thread",
+    "remove fixture",
+    "expert",
+    "key",
+  );
+  listener?.({
+    event: "chunk",
+    thread_id: "local-thread",
+    data: {
+      type: "hitl_required",
+      request: {
+        pending_id: "local-one",
+        action_requests: [{ name: "execute", args: { command: "rm fixture" } }],
+      },
+    },
+  });
+  expect(store.getSnapshot("local-thread").isStreaming).toBe(false);
+  expect(
+    store.getSnapshot("local-thread").messages.at(-1)?.hitlData?.pending_id,
+  ).toBe("local-one");
+  await store.resumeHitl(
+    "local-thread",
+    "expert",
+    "local-thread",
+    [{ type: "approve" }],
+    undefined,
+    false,
+    undefined,
+    "local-one",
+  );
+  expect(bridge.resumeHitl).toHaveBeenCalledWith({
+    thread_id: "local-thread",
+    pending_id: "local-one",
+    decisions: [{ type: "approve" }],
+  });
+  expect(store.getSnapshot("local-thread").isStreaming).toBe(true);
+  expect(bridge.start).toHaveBeenCalledTimes(1);
+  expect(bridge.cancel).not.toHaveBeenCalled();
+  listener?.({ event: "done", thread_id: "local-thread", status: "completed" });
+  await turn;
+  expect(store.getSnapshot("local-thread").isStreaming).toBe(false);
+});
+
+it("restores the pending native approval on a page reattach", async () => {
+  vi.mocked(bridge.status).mockResolvedValue({
+    active_tasks: [
+      {
+        task_id: "paused-task",
+        thread_id: "local-thread",
+        status: "running",
+        pending_approval: {
+          pending_id: "local-pending",
+          action_requests: [
+            { name: "execute", args: { command: "rm fixture" } },
+          ],
+        },
+      },
+    ],
+  });
+  await store.attachThread("local-thread", "expert", "local-thread");
+  expect(store.getSnapshot("local-thread").isStreaming).toBe(false);
+  expect(
+    store.getSnapshot("local-thread").messages.at(-1)?.hitlData?.pending_id,
+  ).toBe("local-pending");
+  expect(bridge.start).not.toHaveBeenCalled();
+  listener?.({ event: "done", thread_id: "local-thread", status: "cancelled" });
+});
+
 it("keeps two live image turns separate even with an old cumulative native result", async () => {
   const first = { path: "/work/one.png", size: 1, sha256: "a".repeat(64) };
   const second = { path: "/work/two.png", size: 2, sha256: "b".repeat(64) };
@@ -936,7 +1007,12 @@ it("displays an explicitly resent image even when its hash is already in history
     content: "把图直接发给我",
     timestamp: 1,
   });
-  const pending = store.sendTurn("local-thread", "把图直接发给我", "expert", "key");
+  const pending = store.sendTurn(
+    "local-thread",
+    "把图直接发给我",
+    "expert",
+    "key",
+  );
   const sent = { ...file, explicitly_sent: true };
   listener?.({
     event: "done",

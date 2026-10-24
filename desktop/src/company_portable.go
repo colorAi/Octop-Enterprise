@@ -28,6 +28,18 @@ func validateCompanyRuntime(root string) error {
 	return validateCompanyRuntimeWorkers(root, 4)
 }
 
+func companyRuntimeRequired(root string) []string {
+	required := []string{"launch.py", "packages/octop/company_runtime.py", "tools/ffmpeg", "tools/ffprobe", "packages/openpyxl/__init__.py", "packages/docx/__init__.py", "packages/pptx/__init__.py", "packages/pypdf/__init__.py", "packages/PIL/__init__.py", "packages/pandas/__init__.py"}
+	if runtime.GOOS == "windows" {
+		required[2] += ".exe"
+		required[3] += ".exe"
+	}
+	required = append(required, "packages/octop_harness/__init__.py")
+	py, _ := filepath.Rel(root, pythonExe(root))
+	required = append(required, filepath.ToSlash(py))
+	return required
+}
+
 func validateCompanyRuntimeWorkers(root string, workers int) error {
 	data, err := os.ReadFile(filepath.Join(root, "company-runtime-manifest.json"))
 	if err != nil {
@@ -37,15 +49,7 @@ func validateCompanyRuntimeWorkers(root string, workers int) error {
 	if json.Unmarshal(data, &m) != nil || m.Protocol != 1 || m.Platform != runtime.GOOS || m.Arch != runtime.GOARCH || len(m.Files) == 0 {
 		return errors.New("企业运行时与当前系统或协议不匹配")
 	}
-	required := []string{"launch.py", "packages/octop/company_runtime.py", "tools/ffmpeg", "tools/ffprobe", "packages/openpyxl/__init__.py", "packages/docx/__init__.py", "packages/pptx/__init__.py", "packages/pypdf/__init__.py", "packages/PIL/__init__.py", "packages/pandas/__init__.py"}
-	if runtime.GOOS == "windows" {
-		required[2] += ".exe"
-		required[3] += ".exe"
-	}
-	required = append(required, "packages/octop_harness/__init__.py")
-	py, _ := filepath.Rel(root, pythonExe(root))
-	required = append(required, filepath.ToSlash(py))
-	for _, name := range required {
+	for _, name := range companyRuntimeRequired(root) {
 		if _, ok := m.Files[name]; !ok {
 			return fmt.Errorf("企业运行时缺少必要工具：%s", name)
 		}
@@ -202,6 +206,19 @@ func ensureCompanyPortable() (string, error) {
 }
 
 func prepareCompanyPortable(zipPath, home string) (string, error) {
+	return prepareCompanyPortableChecked(zipPath, home, validateCompanyRuntime)
+}
+
+func prepareCompanyPortableChecked(zipPath, home string, validate func(string) error) (string, error) {
+	archive, err := companyArchiveStamp(zipPath)
+	if err != nil {
+		return "", err
+	}
+	if root := cachedCompanyRuntime(home, archive); root != "" {
+		return root, nil
+	}
+	// A failed or interrupted check must never leave an old success reusable.
+	_ = os.Remove(companyCheckPath(home, archive.Path))
 	file, err := os.Open(zipPath)
 	if err != nil {
 		return "", err
@@ -214,8 +231,10 @@ func prepareCompanyPortable(zipPath, home string) (string, error) {
 	}
 	// Content-addressed installs keep existing runtimes and account state intact
 	// during upgrade/rollback; the company runner never initializes ~/.octop/portable.
-	root := filepath.Join(home, "company-runtime", "tools", hex.EncodeToString(h.Sum(nil)))
-	if err = validateCompanyRuntime(root); err == nil {
+	digest := hex.EncodeToString(h.Sum(nil))
+	root := filepath.Join(home, "company-runtime", "tools", digest)
+	if err = validate(root); err == nil {
+		recordCompanyRuntime(home, archive, digest, root)
 		return root, nil
 	}
 	if err = verifyCompanyZip(zipPath); err != nil {
@@ -225,7 +244,7 @@ func prepareCompanyPortable(zipPath, home string) (string, error) {
 	if err = unzipGreen(zipPath, next); err != nil {
 		return "", err
 	}
-	if err = validateCompanyRuntime(next); err != nil {
+	if err = validate(next); err != nil {
 		_ = os.RemoveAll(next)
 		return "", err
 	}
@@ -236,5 +255,6 @@ func prepareCompanyPortable(zipPath, home string) (string, error) {
 	if err = os.Rename(next, root); err != nil {
 		return "", err
 	}
+	recordCompanyRuntime(home, archive, digest, root)
 	return root, nil
 }

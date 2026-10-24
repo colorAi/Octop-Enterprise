@@ -75,7 +75,7 @@ class CronJob:
             audit_repo=audit_repo,
         )
 
-    async def run(self, *, raise_on_error: bool = False) -> None:
+    async def run(self, *, raise_on_error: bool = False, scheduled_at: str | None = None) -> None:
         from octop.infra.metrics import METRICS  # noqa: PLC0415
 
         METRICS.inc("cron_runs_total")
@@ -94,6 +94,7 @@ class CronJob:
                     task_type=self._task_type,
                     model=self._model,
                     mcp_servers=tuple(self._mcp_servers),
+                    scheduled_at=scheduled_at,
                 )
             )
         except Exception as exc:

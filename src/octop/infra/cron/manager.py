@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any
 
+from apscheduler.events import EVENT_JOB_SUBMITTED
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from octop.i18n import tr
@@ -69,22 +71,40 @@ class CronManager:
         self._repos = repos
         self._timezone = timezone
         self._scheduler: AsyncIOScheduler = AsyncIOScheduler(timezone=timezone)
+        self._scheduled_times: dict[str, str] = {}
+        self._scheduler.add_listener(self._submitted, EVENT_JOB_SUBMITTED)
         self._lock = asyncio.Lock()
         self._mail_watch = AgentlyWatchManager()
         # Process-level jobs (e.g. TLS auto-renew) that must survive reload_from_db.
         self._system_job_ids: set[str] = set()
+        self._deferred_boot = False
+        self.owns_user: Callable[[int | None], bool] = lambda _: True
+
+    def _submitted(self, event: Any) -> None:
+        if event.scheduled_run_times:
+            self._scheduled_times[event.job_id] = event.scheduled_run_times[-1].isoformat()
 
     def replace_repos(self, repos: RepoBundle) -> None:
         """Point cron persistence at a rebound control-plane pool."""
         self._repos = repos
         self._delivery_service.replace_repos(repos)
 
-    async def boot(self) -> None:
-        self._scheduler.start()
+    async def boot(self, *, paused: bool = False) -> None:
+        self._scheduler.start(paused=paused)
+        self._deferred_boot = paused
+        if paused:
+            return  # Mail watchers must also wait until shared admission is wired.
         rows = self._repos.cron_repo.list_all(include_disabled=False)
         for row in rows:
             self._schedule(row)
         logger.info("CronManager booted; scheduled %d jobs", len(rows))
+
+    def resume(self) -> None:
+        if self._deferred_boot:
+            self._deferred_boot = False
+            for row in self._repos.cron_repo.list_all(include_disabled=False):
+                self._schedule(row)
+        self._scheduler.resume()
 
     async def reload_from_db(self) -> None:
         """Drop user cron schedules and re-register enabled jobs from the DB.
@@ -247,6 +267,8 @@ class CronManager:
         )
 
     def _schedule(self, row: Any) -> None:
+        if not self.owns_user(row.user_id):
+            return
         if not row.enabled:
             return
         try:
@@ -265,19 +287,31 @@ class CronManager:
             creds = decrypt_credentials(self._repos.secret_repo, source.credential_blob)
 
             async def on_mail(message_id: str) -> None:
-                await self._run_mail_event(row.cron_id, message_id)
+                if self.owns_user(row.user_id):
+                    await self._run_mail_event(row.cron_id, message_id)
 
             self._mail_watch.subscribe(source.instance_id, row.cron_id, creds, on_mail)
             return
         job = self._make_job(row)
+
+        async def scheduled() -> None:
+            if not self.owns_user(row.user_id):
+                return
+            at = self._scheduled_times.pop(row.cron_id, None)
+            if at is None:
+                raise RuntimeError("scheduled fire time missing")
+            await job.run(scheduled_at=at)
+
         if self._scheduler.get_job(row.cron_id):
             self._scheduler.remove_job(row.cron_id)
         self._scheduler.add_job(
-            job.run,
+            scheduled,
             trigger=trigger,
             id=row.cron_id,
             replace_existing=True,
             misfire_grace_time=60,
+            coalesce=True,
+            max_instances=1,
         )
 
     async def _unschedule(self, cron_id: str) -> None:
@@ -339,7 +373,7 @@ class CronManager:
             prompt=prompt,
             mcp_servers=list(dict.fromkeys([source.mcp_server_name, *row.mcp_servers])),
         )
-        await self._make_job(event_row).run()
+        await self._make_job(event_row).run(scheduled_at="mail:" + message_id)
 
     async def reload_mail_watches(self) -> None:
         """Rebuild every mailbox watch after a full cron reload."""

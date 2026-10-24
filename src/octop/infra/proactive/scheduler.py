@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
+from collections.abc import Callable
 from datetime import UTC, datetime, time, timedelta
 from typing import TYPE_CHECKING
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -156,6 +157,7 @@ class ProactiveCareScheduler:
         self._config_repo = config_repo
         self._session_repo = session_repo
         self._agent_repo = agent_repo
+        self.owns_user: Callable[[int | None], bool] = lambda _: True
         self._user_repo = user_repo
         self._default_timezone = default_timezone
         # agent_id -> asyncio.Task
@@ -243,6 +245,9 @@ class ProactiveCareScheduler:
         logger.info("ProactiveCareScheduler: all scheduled tasks shut down")
 
     def _schedule(self, agent_id: str) -> None:
+        row = self._agent_repo.get(agent_id) if self._agent_repo is not None else None
+        if not self.owns_user(row.user_id if row else None):
+            return
         """Create a scheduling task for an agent."""
         if self._suspended:
             return

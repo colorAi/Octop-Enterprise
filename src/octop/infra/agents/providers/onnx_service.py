@@ -21,6 +21,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
+from octop.i18n import tr
 from octop.infra.agents.providers.onnx_catalog import (
     ONNX_PRESET_MODEL_IDS,
     get_onnx_model_meta,
@@ -29,6 +30,7 @@ from octop.infra.agents.providers.onnx_catalog import (
 from octop.infra.agents.providers.onnx_download import download_model_raced
 from octop.infra.utils.paths import PathLayout
 from octop.infra.utils.runtime_packages import (
+    PackageInstallError,
     PackageInstallSpec,
     install_packages,
     purge_import_cache,
@@ -45,7 +47,6 @@ _LOCAL_EMBEDDING_PIP_SPECS: tuple[str, ...] = (
 )
 _LOCAL_EMBEDDING_SPEC = PackageInstallSpec(
     packages=_LOCAL_EMBEDDING_PIP_SPECS,
-    extra_fallback="local-embedding",
 )
 _MODEL_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*(?:/[A-Za-z0-9][A-Za-z0-9._-]*)*$")
 _LOCAL_PROBE_TEXT = "octop onnx probe"
@@ -469,7 +470,7 @@ def embed_texts(model: str, texts: Sequence[str]) -> list[list[float]]:
     return out
 
 
-async def probe_local_model(model: str) -> dict[str, Any]:
+async def probe_local_model(model: str, *, locale: str = "en") -> dict[str, Any]:
     """Time a tiny local embedding and report the vector width.
 
     Shared by the ONNX admin test endpoint and the generic provider probe so
@@ -481,6 +482,8 @@ async def probe_local_model(model: str) -> dict[str, Any]:
     try:
         model = assert_catalog_model(model)
         await ensure_local_embedding_deps_async(allow_install=True)
+    except PackageInstallError as exc:
+        return {"ok": False, "error": tr(f"runtime_packages.{exc.reason}", locale)}
     except (ValueError, RuntimeError) as exc:
         return {"ok": False, "error": str(exc)}
     if not is_model_downloaded(model):
@@ -651,11 +654,9 @@ class OnnxDownloadManager:
             winner = download_model_raced(model_name, cache, on_progress=_on_tqdm)
             logger.info("ONNX model %s fetched from %s", model_name, winner)
             mark_model_downloaded(model_name)
-            try:
-                self._set(status=OnnxDownloadStatus.LOADING)
-                _build_text_embedding(model_name)
-            except ImportError:
-                pass
+            # Downloading only prepares files. Loading here creates an unshared
+            # session (possibly beside the resident model) and can OOM the worker.
+            # Probes and inference load on demand through embed_texts' lock/cache.
         finally:
             stop.set()
             watcher.join(timeout=2.0)

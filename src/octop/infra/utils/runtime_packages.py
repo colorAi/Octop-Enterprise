@@ -29,6 +29,15 @@ _PIP_MISSING_MARKERS = ("No module named pip", "No module named 'pip'")
 _INSTALL_LOCK = threading.Lock()
 
 InstallOutcome = Literal["ready", "installed"]
+InstallFailureReason = Literal["permission_denied", "installer_missing", "failed"]
+
+
+class PackageInstallError(RuntimeError):
+    """Safe failure category; HTTP adapters supply localized user-facing text."""
+
+    def __init__(self, reason: InstallFailureReason) -> None:
+        self.reason = reason
+        super().__init__(f"Could not install optional Python components automatically ({reason}).")
 
 
 @dataclass(frozen=True)
@@ -83,10 +92,10 @@ def pip_importable() -> bool:
     return importlib.util.find_spec("pip") is not None
 
 
-def ensure_pip_bootstrapped() -> bool:
-    """Best-effort ``ensurepip`` when the interpreter has no ``pip`` module."""
+def ensure_pip_bootstrapped() -> tuple[bool, str]:
+    """Return readiness and failure detail after trying to bootstrap ``pip``."""
     if pip_importable():
-        return True
+        return True, ""
     logger.info("Bootstrapping pip via ensurepip for %s", sys.executable)
     try:
         proc = subprocess.run(
@@ -98,13 +107,13 @@ def ensure_pip_bootstrapped() -> bool:
             shell=False,
         )
     except subprocess.TimeoutExpired:
-        return False
+        return False, "timed out"
     if proc.returncode != 0:
         detail = (proc.stderr or proc.stdout or "").strip()
         if detail:
             logger.warning("ensurepip failed: %s", detail[-400:])
-        return False
-    return pip_importable()
+        return False, detail
+    return pip_importable(), ""
 
 
 def purge_import_cache(module_names: Sequence[str]) -> None:
@@ -156,6 +165,29 @@ def _pip_missing_output(detail: str) -> bool:
     return any(marker in detail for marker in _PIP_MISSING_MARKERS)
 
 
+def _permission_denied_output(detail: str) -> bool:
+    return any(
+        marker in detail.lower()
+        for marker in (
+            "permission denied",
+            "permissionerror",
+            "read-only file system",
+            "access is denied",
+        )
+    )
+
+
+def _prefer_install_failure(previous: str, detail: str) -> str:
+    # A missing pip fallback must not hide the real failure from an available uv.
+    if _permission_denied_output(previous):
+        return previous
+    if _permission_denied_output(detail):
+        return detail
+    if not previous or (detail and not _pip_missing_output(detail)):
+        return detail
+    return previous
+
+
 def _run_install_command(cmd: list[str], *, timeout: int) -> tuple[bool, str]:
     logger.info("Installing runtime Python packages: %s", " ".join(cmd))
     try:
@@ -182,23 +214,25 @@ def _attempt_install_commands(
     *,
     timeout: int,
 ) -> tuple[bool, str]:
-    last_detail = ""
-    pip_bootstrapped = False
+    failure_detail = ""
+    pip_bootstrap_attempted = False
     for cmd in commands:
         ok, detail = _run_install_command(list(cmd), timeout=timeout)
         if ok:
             return True, ""
-        last_detail = detail
-        if _pip_missing_output(detail) and not pip_bootstrapped:
-            pip_bootstrapped = ensure_pip_bootstrapped()
+        failure_detail = _prefer_install_failure(failure_detail, detail)
+        if _pip_missing_output(detail) and not pip_bootstrap_attempted:
+            pip_bootstrap_attempted = True
+            pip_bootstrapped, bootstrap_detail = ensure_pip_bootstrapped()
+            failure_detail = _prefer_install_failure(failure_detail, bootstrap_detail)
             if pip_bootstrapped:
                 logger.info("Retrying pip install after ensurepip bootstrap")
                 ok, detail = _run_install_command(list(cmd), timeout=timeout)
                 if ok:
                     return True, ""
-                last_detail = detail
-            logger.warning("pip unavailable; trying next installer strategy")
-    return False, last_detail
+                failure_detail = _prefer_install_failure(failure_detail, detail)
+            logger.warning("Package installer strategy failed; trying the next strategy")
+    return False, failure_detail
 
 
 def install_packages(
@@ -233,11 +267,11 @@ def install_packages(
 
         if is_satisfied is not None:
             if not is_satisfied():
-                raise RuntimeError(_install_failed_message(detail if not ok else ""))
+                raise PackageInstallError(_install_failure_reason(detail if not ok else ""))
             return "installed" if ok else "ready"
 
         if not ok:
-            raise RuntimeError(_install_failed_message(detail))
+            raise PackageInstallError(_install_failure_reason(detail))
         return "installed"
 
 
@@ -271,14 +305,9 @@ def build_uninstall_command(packages: Sequence[str]) -> list[str] | None:
     return None
 
 
-def _install_failed_message(detail: str) -> str:
-    """User-facing failure text — no shell commands."""
-    base = (
-        "Could not install optional Python components automatically. "
-        "Check network access and server logs, then retry."
-    )
-    if not detail or detail == "timed out":
-        return base
+def _install_failure_reason(detail: str) -> InstallFailureReason:
+    if _permission_denied_output(detail):
+        return "permission_denied"
     if _pip_missing_output(detail):
-        return f"{base} This Python environment has no package installer (pip/uv unavailable)."
-    return base
+        return "installer_missing"
+    return "failed"

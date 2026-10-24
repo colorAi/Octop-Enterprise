@@ -137,6 +137,11 @@ class SkillPackageStore:
                     )
                     continue
                 text = repaired
+                row = self.repo.get(pack_id)
+                if row is not None:
+                    # Read-time UTF-8 repair is a draft mutation too. The DB
+                    # trigger makes source publication observe it on the next pass.
+                    self.repo.update_skill_count(pack_id, row.skill_count)
             except OSError:
                 continue
             metadata, _ = parse_frontmatter(text)

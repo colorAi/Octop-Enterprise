@@ -7,6 +7,7 @@ import io
 import json
 import logging
 import os
+import re
 import shutil
 import tarfile
 import tempfile
@@ -120,6 +121,11 @@ def _add_dir(
         if not path.is_file():
             continue
         rel = path.relative_to(src)
+        if arc_root == _COMPANY_SKILLS_DIR and (
+            not re.fullmatch(r"[0-9a-f]{64}", rel.as_posix()) or path.is_symlink()
+        ):
+            # In-flight writes have private temporary names and no durable hash.
+            continue
         if _should_skip_path(
             rel,
             skip_chats=skip_chats,

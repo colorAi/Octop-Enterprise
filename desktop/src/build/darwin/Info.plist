@@ -29,5 +29,7 @@
             <key>NSAllowsLocalNetworking</key>
             <true/>
         </dict>
+        <key>NSLocalNetworkUsageDescription</key>
+        <string>Octop Enterprise 需要访问本地网络以连接您选择的企业服务器，完成登录、消息同步和工作任务。 / Connect to your selected company server for sign-in, messaging and work tasks.</string>
     </dict>
 </plist>

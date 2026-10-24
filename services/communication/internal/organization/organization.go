@@ -28,6 +28,9 @@ func (s *Service) Register(m *http.ServeMux) {
 	m.HandleFunc("PUT /api/app/v1/organization/users/{id}/job-title", auth.Require(s.D, "departments", s.assignJobTitle))
 	m.HandleFunc("GET /api/app/v1/organization/users", auth.Require(s.D, "departments", s.users))
 	m.HandleFunc("PUT /internal/identities/{id}", auth.Credential(s.D, "identity", s.identity))
+	m.HandleFunc("GET /internal/resource-membership/{id}", auth.Credential(s.D, "resource-policy", s.resourceMembership))
+	m.HandleFunc("POST /internal/resource-memberships", auth.Credential(s.D, "resource-directory", s.resourceMemberships))
+	m.HandleFunc("POST /internal/resource-membership/{id}/resolve", auth.Credential(s.D, "resource-policy", s.resolveResourceMove))
 	m.HandleFunc("GET /api/app/v1/contacts", auth.Require(s.D, "contacts", s.contacts))
 	m.HandleFunc("GET /api/app/v1/presence", auth.Require(s.D, "contacts", s.presence))
 	m.HandleFunc("GET /api/app/v1/departments", auth.Require(s.D, "contacts", s.departments))
@@ -310,6 +313,11 @@ func (s *Service) patch(w http.ResponseWriter, r *http.Request) {
 		if _, e = tx.Exec(r.Context(), `UPDATE departments SET name=$2,parent_id=$3,sort_order=$4,enabled=$5 WHERE id=$1`, id, next.Name, next.Parent, next.Order, next.Enabled); e != nil {
 			return e
 		}
+		if old.Enabled != next.Enabled {
+			if _, e = tx.Exec(r.Context(), `UPDATE users SET resource_revision=resource_revision+1 WHERE id IN (SELECT user_id FROM department_members WHERE department_id=$1)`, id); e != nil {
+				return e
+			}
+		}
 		if e = groups.New(s.D).ReconcileAll(r.Context(), tx); e != nil {
 			return e
 		}
@@ -323,6 +331,8 @@ func (s *Service) patch(w http.ResponseWriter, r *http.Request) {
 func (s *Service) assign(w http.ResponseWriter, r *http.Request) {
 	var v struct {
 		Department *string `json:"department_id"`
+		Revision   *int64  `json:"expected_revision"`
+		Operation  string  `json:"operation_id"`
 	}
 	if !decode(w, r, &v) {
 		return
@@ -330,8 +340,31 @@ func (s *Service) assign(w http.ResponseWriter, r *http.Request) {
 	u := r.PathValue("id")
 	e := s.tx(r, func(tx pgx.Tx) error {
 		var status string
-		if e := tx.QueryRow(r.Context(), `SELECT status FROM users WHERE id=$1`, u).Scan(&status); e != nil || status == "deleted" {
+		var revision int64
+		if e := tx.QueryRow(r.Context(), `SELECT status,resource_revision FROM users WHERE id=$1 FOR UPDATE`, u).Scan(&status, &revision); e != nil || status == "deleted" {
 			return httpx.ErrNotFound
+		}
+		if v.Operation != "" {
+			if len(v.Operation) > 128 || v.Revision == nil {
+				return httpx.ErrInvalidRequest
+			}
+			var opStatus, opUser string
+			var opRevision int64
+			var opDepartment *string
+			err := tx.QueryRow(r.Context(), `SELECT status,user_id,expected_revision,department_id FROM resource_department_operations WHERE operation_id=$1`, v.Operation).Scan(&opStatus, &opUser, &opRevision, &opDepartment)
+			if err == nil {
+				sameDepartment := (opDepartment == nil && v.Department == nil) || (opDepartment != nil && v.Department != nil && *opDepartment == *v.Department)
+				if opStatus == "complete" && opUser == u && opRevision == *v.Revision && sameDepartment {
+					return nil
+				}
+				return httpx.ErrInvalidState
+			}
+			if !errors.Is(err, pgx.ErrNoRows) {
+				return err
+			}
+		}
+		if v.Revision != nil && *v.Revision != revision {
+			return httpx.ErrInvalidState.WithCode("organization_revision_conflict")
 		}
 		var old *string
 		e := tx.QueryRow(r.Context(), `SELECT department_id FROM department_members WHERE user_id=$1`, u).Scan(&old)
@@ -349,6 +382,14 @@ func (s *Service) assign(w http.ResponseWriter, r *http.Request) {
 		}
 		if v.Department != nil {
 			if _, e = tx.Exec(r.Context(), `INSERT INTO department_members(department_id,user_id)VALUES($1,$2)`, *v.Department, u); e != nil {
+				return e
+			}
+		}
+		if _, e = tx.Exec(r.Context(), `UPDATE users SET resource_revision=resource_revision+1 WHERE id=$1`, u); e != nil {
+			return e
+		}
+		if v.Operation != "" {
+			if _, e = tx.Exec(r.Context(), `INSERT INTO resource_department_operations(operation_id,user_id,expected_revision,department_id,status) VALUES($1,$2,$3,$4,'complete')`, v.Operation, u, *v.Revision, v.Department); e != nil {
 				return e
 			}
 		}
@@ -415,7 +456,7 @@ func (s *Service) group(w http.ResponseWriter, r *http.Request) {
 
 // users exposes organization administration metadata, never passwords or sessions.
 func (s *Service) users(w http.ResponseWriter, r *http.Request) {
-	rows, e := s.D.Store.Pool.Query(r.Context(), `SELECT u.id,u.nickname,u.avatar_icon,u.status,u.permissions ? 'messaging',dm.department_id,u.is_admin,u.job_title_id,j.name,u.avatar_url FROM users u LEFT JOIN job_titles j ON j.id=u.job_title_id LEFT JOIN department_members dm ON dm.user_id=u.id WHERE u.status<>'deleted' ORDER BY u.nickname,u.id`)
+	rows, e := s.D.Store.Pool.Query(r.Context(), `SELECT u.id,u.nickname,u.avatar_icon,u.status,u.permissions ? 'messaging',dm.department_id,u.is_admin,u.job_title_id,j.name,u.avatar_url,u.resource_revision FROM users u LEFT JOIN job_titles j ON j.id=u.job_title_id LEFT JOIN department_members dm ON dm.user_id=u.id WHERE u.status<>'deleted' ORDER BY u.nickname,u.id`)
 	if e != nil {
 		result(w, r, nil, e)
 		return
@@ -426,11 +467,30 @@ func (s *Service) users(w http.ResponseWriter, r *http.Request) {
 		var id, name, icon, status, avatarURL string
 		var canMessage, isAdmin bool
 		var dept, titleID, title *string
-		if e = rows.Scan(&id, &name, &icon, &status, &canMessage, &dept, &isAdmin, &titleID, &title, &avatarURL); e != nil {
+		var revision int64
+		if e = rows.Scan(&id, &name, &icon, &status, &canMessage, &dept, &isAdmin, &titleID, &title, &avatarURL, &revision); e != nil {
 			result(w, r, nil, e)
 			return
 		}
-		items = append(items, map[string]any{"user_id": id, "nickname": name, "avatar_icon": icon, "avatar_url": avatarURL, "status": status, "can_message": canMessage && status == "active", "department_id": dept, "is_admin": isAdmin, "job_title_id": titleID, "job_title": title})
+		items = append(items, map[string]any{"user_id": id, "nickname": name, "avatar_icon": icon, "avatar_url": avatarURL, "status": status, "can_message": canMessage && status == "active", "department_id": dept, "is_admin": isAdmin, "job_title_id": titleID, "job_title": title, "resource_revision": revision})
 	}
 	result(w, r, map[string]any{"items": items}, rows.Err())
+}
+
+// Only the control plane can sign resource-policy credentials. This endpoint
+// exposes one authoritative membership revision without a user/session bypass.
+func (s *Service) resourceMembership(w http.ResponseWriter, r *http.Request, c auth.Claims) {
+	if c.UserID != r.PathValue("id") {
+		result(w, r, nil, httpx.ErrForbidden)
+		return
+	}
+	var revision int64
+	var status string
+	var department *string
+	var enabled bool
+	err := s.D.Store.Pool.QueryRow(r.Context(), `SELECT u.resource_revision,u.status,dm.department_id,COALESCE(d.enabled,true) FROM users u LEFT JOIN department_members dm ON dm.user_id=u.id LEFT JOIN departments d ON d.id=dm.department_id WHERE u.id=$1 AND u.status<>'deleted'`, c.UserID).Scan(&revision, &status, &department, &enabled)
+	if errors.Is(err, pgx.ErrNoRows) {
+		err = httpx.ErrNotFound
+	}
+	result(w, r, map[string]any{"department_id": department, "revision": revision, "enabled": enabled && status == "active"}, err)
 }

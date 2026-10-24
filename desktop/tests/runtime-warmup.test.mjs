@@ -16,4 +16,7 @@ test('an authenticated company page prepares tools once without starting a task'
   assert.equal(calls.length,1);
   assert.match(calls[0],/:runtime:account:1:status:/);
   assert.ok(!calls.some(call=>call.includes(':start:')));
+  void window.__octopRuntime.status({verify_tools:true});
+  assert.equal(calls.length,2);
+  assert.match(decodeURIComponent(calls[1]), /:status:\{"verify_tools":true\}$/);
 });

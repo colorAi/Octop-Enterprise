@@ -290,6 +290,7 @@ export default function KnowledgeBasesPage() {
   const isMobile = useIsMobile();
   const timeZone = useServerTimezone();
   const user = useCurrentUser();
+  const canCreateKb = user?.role === "admin";
   const canConfigureKb = userCan(user, "knowledge_settings");
   const { viewMode, setViewMode, showCardView } = useCardTableView(
     loadDocsViewMode(),
@@ -980,6 +981,7 @@ export default function KnowledgeBasesPage() {
   };
 
   const openCreate = () => {
+    if (!canCreateKb) return;
     if (atBaseLimit) {
       message.warning(
         t("knowledgeBases.baseLimitReached", {
@@ -1878,7 +1880,11 @@ export default function KnowledgeBasesPage() {
   return (
     <PageShell
       title={t("knowledgeBases.title")}
-      subtitle={t("knowledgeBases.subtitle")}
+      subtitle={t(
+        canCreateKb
+          ? "knowledgeBases.subtitle"
+          : "employeeKnowledge.employeeSubtitle",
+      )}
       fill
       actions={
         canConfigureKb ? (
@@ -1947,28 +1953,44 @@ export default function KnowledgeBasesPage() {
             wide
             plain
             icon={setupMascot}
-            title={t("knowledgeBases.emptyGuideTitle")}
-            description={t("knowledgeBases.emptyGuideDesc")}
-            steps={[
-              {
-                label: t("knowledgeBases.emptyGuideStepWhat"),
-                detail: t("knowledgeBases.emptyGuideStepWhatDetail"),
-              },
-              {
-                label: t("knowledgeBases.emptyGuideStepHow"),
-                detail: t("knowledgeBases.emptyGuideStepHowDetail"),
-              },
-              {
-                label: t("knowledgeBases.emptyGuideStepShare"),
-                detail: t("knowledgeBases.emptyGuideStepShareDetail"),
-              },
-            ]}
-            primaryAction={{
-              label: t("knowledgeBases.create"),
-              onClick: openCreate,
-              icon: <Plus size={14} />,
-              disabled: atBaseLimit,
-            }}
+            title={t(
+              canCreateKb
+                ? "knowledgeBases.emptyGuideTitle"
+                : "employeeKnowledge.employeeEmptyTitle",
+            )}
+            description={t(
+              canCreateKb
+                ? "knowledgeBases.emptyGuideDesc"
+                : "employeeKnowledge.employeeEmptyDescription",
+            )}
+            steps={
+              canCreateKb
+                ? [
+                    {
+                      label: t("knowledgeBases.emptyGuideStepWhat"),
+                      detail: t("knowledgeBases.emptyGuideStepWhatDetail"),
+                    },
+                    {
+                      label: t("knowledgeBases.emptyGuideStepHow"),
+                      detail: t("knowledgeBases.emptyGuideStepHowDetail"),
+                    },
+                    {
+                      label: t("knowledgeBases.emptyGuideStepShare"),
+                      detail: t("knowledgeBases.emptyGuideStepShareDetail"),
+                    },
+                  ]
+                : []
+            }
+            primaryAction={
+              canCreateKb
+                ? {
+                    label: t("knowledgeBases.create"),
+                    onClick: openCreate,
+                    icon: <Plus size={14} />,
+                    disabled: atBaseLimit,
+                  }
+                : undefined
+            }
           />
         </div>
       ) : (
@@ -2002,14 +2024,16 @@ export default function KnowledgeBasesPage() {
                 ) : null}
               </div>
               <div className={styles.listActions}>
-                <Button
-                  type="primary"
-                  icon={<Plus size={15} />}
-                  disabled={!usable || atBaseLimit}
-                  onClick={openCreate}
-                >
-                  {t("knowledgeBases.create")}
-                </Button>
+                {canCreateKb && (
+                  <Button
+                    type="primary"
+                    icon={<Plus size={15} />}
+                    disabled={!usable || atBaseLimit}
+                    onClick={openCreate}
+                  >
+                    {t("knowledgeBases.create")}
+                  </Button>
+                )}
                 <Tooltip title={t("common.refresh")}>
                   <Button
                     icon={<RefreshCw size={15} />}

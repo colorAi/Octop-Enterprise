@@ -12,6 +12,7 @@ Procedural flow (bypasses the LangGraph ReAct loop):
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
@@ -115,6 +116,19 @@ class ProactiveCareService:
         self._care_push_repo = care_push_repo
 
     async def run(self, agent_id: str, session_key: str) -> None:
+        shards = getattr(self._agent_manager, "runtime_shards", None)
+        if shards is None:
+            await self._run(agent_id, session_key)
+            return
+        row = await asyncio.to_thread(self._agent_manager.get_row, agent_id)
+        if row is None or not await asyncio.to_thread(shards.owns_user, row.user_id):
+            return
+        async with shards.activity(row.user_id, agent_id):
+            if self._agent_manager._octop_harness_or_none(agent_id) is None:
+                await self._agent_manager.start(agent_id)
+            await self._run(agent_id, session_key)
+
+    async def _run(self, agent_id: str, session_key: str) -> None:
         """Run one proactive care push.
 
         Args:

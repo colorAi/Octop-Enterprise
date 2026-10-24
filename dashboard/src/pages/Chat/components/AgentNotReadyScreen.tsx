@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 import { OctopEmptyMascot } from "../../../components/EmptyState";
 import type { OctopAgent } from "../../../context/AgentContext";
+import { useCurrentUser } from "../../../hooks/useCurrentUser";
 import {
   formatAgentError,
   isAgentModelConfigError,
@@ -23,6 +24,8 @@ export default function AgentNotReadyScreen({
 }: AgentNotReadyScreenProps) {
   const { t } = useTranslation();
   const navigate = useNavigate();
+  const user = useCurrentUser();
+  const assignedOnly = user?.expert_access_mode === "assigned_only";
 
   if (loading) {
     return (
@@ -40,16 +43,20 @@ export default function AgentNotReadyScreen({
             <OctopEmptyMascot className={styles.noAgentsEmptyMascot} />
           </div>
           <h1 className={styles.noAgentsEmptyTitle}>
-            {t("chat.noAgentsTitle")}
+            {t(assignedOnly ? "expertAccess.waiting" : "chat.noAgentsTitle")}
           </h1>
-          <p className={styles.noAgentsEmptyHint}>{t("chat.noAgentsHint")}</p>
-          <Button
-            type="primary"
-            size="large"
-            onClick={() => navigate("/experts")}
-          >
-            {t("chat.createExpert")}
-          </Button>
+          <p className={styles.noAgentsEmptyHint}>
+            {t(assignedOnly ? "expertAccess.waitingHint" : "chat.noAgentsHint")}
+          </p>
+          {!assignedOnly && (
+            <Button
+              type="primary"
+              size="large"
+              onClick={() => navigate("/experts")}
+            >
+              {t("chat.createExpert")}
+            </Button>
+          )}
         </div>
       </div>
     );

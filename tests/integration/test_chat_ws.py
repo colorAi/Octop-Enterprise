@@ -43,6 +43,14 @@ async def env(tmp_octop_home: Path) -> AsyncIterator[Any]:
         admin_auth = await auth_header(c)
         await seed_openai_provider(c, admin_auth)
         users = await ensure_users(c, admin_auth, "alice", "bob")
+        for username in users:
+            user_id = srv.services.user_repo.get_by_username(username).id
+            assigned = await c.put(
+                f"/api/users/{user_id}/models",
+                headers=admin_auth,
+                json={"model_refs": ["openai/gpt-4o"], "expected_revision": "0"},
+            )
+            assigned.raise_for_status()
         aid = await create_agent(c, users["alice"])
         yield c, srv, fake, users["alice"], users["bob"], aid
 
@@ -109,6 +117,158 @@ async def test_ws_rebind_after_disconnect_receives_later_chunks(env: Any) -> Non
     contents = [f.get("content") for f in frames if f.get("type") == "token"]
     assert "second" in contents
     assert frames[-1].get("type") == "done"
+
+
+async def test_execution_replay_resumes_inside_a_committed_batch(env: Any) -> None:
+    from octop.infra.execution.service import ExecutionService
+
+    c, srv, _, auth, _, aid = env
+    tid = (await c.post(f"/api/agents/{aid}/threads", headers=auth)).json()["thread_id"]
+    user = srv.services.thread_repo.get(tid).user_id
+    repo = srv.services.execution_repo
+    repo.register("worker", "boot", "worker")
+    repo.submit(user=user, agent=aid, thread=tid, operation="chat", key="resume", request={})
+    run = repo.claim("worker", "boot")
+    fence = (run["run_id"], run["node_id"], run["incarnation"], run["token"])
+    seq = repo.append(
+        *fence,
+        key="tokens",
+        payload={
+            "frames": [
+                {"type": "token", "content": "first"},
+                {"type": "token", "content": "second"},
+            ]
+        },
+    )
+    repo.transition(*fence, "completed", final_frames=[{"type": "done"}])
+    service = ExecutionService(repo, node="worker", incarnation="boot", role="worker")
+    srv.execution = service
+    async with _chat_ws(c, aid, auth) as socket:
+        await socket.send_json(
+            {
+                "type": "subscribe",
+                "thread_id": tid,
+                "execution_id": run["run_id"],
+                "event_seq": seq,
+                "event_index": 0,
+            }
+        )
+        assert (await socket.receive_json())["type"] == "turn_status"
+        frames = await socket.drain_turn()
+    assert [f["content"] for f in frames if f["type"] == "token"] == ["second"]
+    assert frames[0]["event_seq"] == seq and frames[0]["event_index"] == 1
+    assert frames[-1]["type"] == "done"
+
+
+async def test_ws_admits_before_channel_queue_and_replays_same_task(env: Any, monkeypatch) -> None:
+    from octop.infra.execution.gateway import GatewayExecution
+    from octop.infra.execution.service import ExecutionService
+
+    c, srv, _, auth, _, aid = env
+    tid = (await c.post(f"/api/agents/{aid}/threads", headers=auth)).json()["thread_id"]
+    repo = srv.services.execution_repo
+    gateway = srv.app_runtime.gateway
+    service = ExecutionService(repo, node="worker", incarnation="boot", role="worker")
+    adapter = GatewayExecution(srv, service)
+    srv.execution = service
+    gateway.processor.execution = adapter
+    srv.app_runtime.agent_registry.execution = adapter
+    queued = []
+    enqueue = gateway.channel_manager.enqueue
+    monkeypatch.setattr(gateway.channel_manager, "enqueue", lambda *args: queued.append(args))
+    async with _chat_ws(c, aid, auth) as socket:
+        await socket.send_json({"type": "user_turn", "text": "hello", "thread_id": tid})
+        accepted = await socket.receive_json()
+        assert accepted["state"] == "queued"
+        run = repo.get(accepted["execution_id"])
+        assert run["thread_id"] == tid
+        # The saved request is already recoverable while the channel queue is stalled.
+        await socket.send_json({"type": "ping"})
+        assert (await socket.receive_json())["type"] == "pong"
+        assert len(queued) == 1
+        key = queued[0][1].metadata["client_request_id"]
+        await service.start()
+        enqueue(*queued.pop())
+        frames = await socket.drain_turn()
+        assert [frame["content"] for frame in frames if frame["type"] == "token"] == [
+            "Hello ",
+            "Bob.",
+        ]
+        assert not [frame for frame in frames if frame["type"] == "error"]
+        assert repo.get(run["run_id"])["state"] == "completed"
+        assert repo.get(run["run_id"])["request_key"] == key
+        assert len(repo.list_runs(state="completed")) == 1
+
+
+@pytest.mark.parametrize("reply", ["/approve", "use postgres"])
+async def test_im_approval_resumes_original_execution(env: Any, monkeypatch, reply: str) -> None:
+    from octop_gateway.models import ChannelSubject, InboundMessage, TextContent
+
+    from octop.infra.execution.gateway import GatewayExecution
+    from octop.infra.execution.service import ExecutionService, current_execution
+
+    _, srv, _, _, _, aid = env
+    registry = srv.app_runtime.agent_registry
+    repo = srv.services.execution_repo
+    gateway = srv.app_runtime.gateway
+    service = ExecutionService(repo, node="worker", incarnation="boot", role="worker")
+    adapter = GatewayExecution(srv, service)
+    srv.execution = service
+    registry.execution = gateway.processor.execution = adapter
+    action = {"name": "write_file", "args": {"path": "result.txt"}}
+    if not reply.startswith("/"):
+        action = {"name": "ask_user_question", "args": {"questions": [{"question": "Which DB?"}]}}
+    registry.get_agent(aid).chunks = [
+        {"type": "hitl_required", "request": {"action_requests": [action]}}
+    ]
+    resumed = []
+
+    async def resume(agent, thread, decisions):
+        active = current_execution.get()
+        assert active is not None and active.run["thread_id"] == thread
+        resumed.append((active.run["run_id"], decisions))
+        yield {"type": "token", "node": "agent", "content": "approved result"}
+        if reply == "/approve" and len(resumed) == 1:
+            yield {"type": "hitl_required", "request": {"action_requests": [action]}}
+
+    monkeypatch.setattr(registry, "resume_hitl", resume)
+    inbound = InboundMessage(
+        channel_id="im-test",
+        channel_type="telegram",
+        tenant_id=aid,
+        channel_subject=ChannelSubject(subject_id="external-user"),
+        content=[TextContent(text="begin")],
+        metadata={"message_id": "first"},
+    )
+    await service.start()
+    first = [event async for event in gateway.processor(inbound)]
+    run = repo.list_runs(state="awaiting_approval")[0]
+    paused = repo.get(run["run_id"])
+    assert paused["state"] == "awaiting_approval"
+    assert paused["approval_id"]
+    assert any(
+        event.metadata.get("execution_approval_id") == paused["approval_id"] for event in first
+    )
+    # Redelivering the original message while it is paused cannot become an answer.
+    duplicate = [event async for event in gateway.processor(inbound.model_copy(deep=True))]
+    assert duplicate == first and not resumed
+    command = inbound.model_copy(deep=True)
+    command.content = [TextContent(text=reply)]
+    command.metadata = {"message_id": "approval-message"}
+    events = [event async for event in gateway.processor(command)]
+    assert not [event for event in events if event.error]
+    assert any(part.text == "approved result" for event in events for part in event.content)
+    assert resumed[0][0] == run["run_id"] and len(resumed) == 1
+    if reply == "/approve":
+        again = repo.get(run["run_id"])
+        assert again["state"] == "awaiting_approval"
+        assert again["approval_id"] != paused["approval_id"]
+        command.metadata = {"message_id": "second-approval"}
+        more = [event async for event in gateway.processor(command)]
+        assert not [event for event in more if event.error]
+        assert len(resumed) == 2 and resumed[1][0] == run["run_id"]
+    assert repo.get(run["run_id"])["state"] == "completed"
+    assert len(repo.list_runs(state="completed")) == 1
 
 
 async def _turn_with_second_subscriber(

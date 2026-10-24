@@ -95,6 +95,11 @@ def _mount_routers(app: FastAPI, mounts: Sequence[_RouterMount]) -> None:
 
 
 def _install_exception_handlers(app: FastAPI) -> None:
+    from octop.api.common.execution import execution_error_response
+    from octop.infra.execution.service import ExecutionConflict
+
+    app.add_exception_handler(ExecutionConflict, execution_error_response)
+
     @app.exception_handler(OctopError)
     async def _octop(request: Request, exc: OctopError) -> JSONResponse:
         # Client responses are locale-localized; log the original English message
@@ -150,9 +155,13 @@ def build_app(server: OctopServer) -> FastAPI:
         )
 
     from octop.api.middleware.bridge_proxy import install as install_bridge_proxy
+    from octop.api.middleware.runtime_activity import RuntimeActivityMiddleware
+    from octop.api.middleware.source_publication import SourcePublicationMiddleware
 
     # Bridge proxy must sit inside JWT auth so ``request.state.octop_user`` is set
     # (Starlette runs the last-added middleware first).
+    app.add_middleware(SourcePublicationMiddleware, server=server)
+    app.add_middleware(RuntimeActivityMiddleware, server=server)
     install_bridge_proxy(app, server)
     install_jwt_auth(app, server)
     install_setup_lockdown(app, server)
@@ -199,6 +208,8 @@ def build_app(server: OctopServer) -> FastAPI:
         desktop,
         devices,
         envs,
+        executions,
+        expert_assignments,
         experts,
         health,
         i18n,
@@ -257,6 +268,8 @@ def build_app(server: OctopServer) -> FastAPI:
             _RouterMount(invites.admin_router, "/api/users/invites", ["users"]),
             _RouterMount(user_roles.router, "/api/users/roles", ["users"]),
             _RouterMount(users.router, "/api/users", ["users"]),
+            _RouterMount(expert_assignments.router, "/api/admin/expert-assignments", ["users"]),
+            _RouterMount(executions.router, "/api/executions", ["chat"]),
             _RouterMount(agents.router, "/api/agents", ["agents"]),
             _RouterMount(agent_tools.router, "/api", ["agents"]),
             _RouterMount(acp.router, "/api", ["agents"]),

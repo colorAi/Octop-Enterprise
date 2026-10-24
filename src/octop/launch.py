@@ -4,11 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import sys
 from contextlib import suppress
 from typing import Any
-
-from octop.infra.server import OctopServer
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +49,9 @@ async def _cancel_background_task(task: asyncio.Task[None] | None) -> None:
 
 
 async def _serve(server: Any) -> None:
+    from octop.infra.utils.log_redaction import install_query_secret_filter
+
+    install_query_secret_filter()
     await server.serve()
 
 
@@ -62,17 +64,102 @@ async def run_foreground(
     log_level: str | None,
     ssl_certfile: str | None,
     ssl_keyfile: str | None,
+    role: str = "monolith",
 ) -> None:
     """Boot the domain server, serve the HTTP API, then shut down cleanly."""
     import uvicorn
 
+    if role not in {"monolith", "init", "web", "worker"}:
+        raise ValueError("unsupported process role")
+    if role != "monolith" and (workers != 1 or reload):
+        raise ValueError("distributed roles run one process per container")
+    if role in {"web", "worker"}:
+        from concurrent.futures import ThreadPoolExecutor
+
+        from octop.infra.execution.profiles import profile
+
+        asyncio.get_running_loop().set_default_executor(
+            ThreadPoolExecutor(
+                max_workers=4 if role == "web" else profile().threads, thread_name_prefix="octop-io"
+            )
+        )
+
+    if role in {"init", "web"}:
+        from octop.infra.execution.roles import WebProcess, initialize
+        from octop.infra.utils.paths import PathLayout
+
+        if role == "init":
+            await asyncio.to_thread(initialize, PathLayout.from_env().root)
+            return
+        if workers != 1 or reload:
+            raise ValueError("web roles run one process per container")
+        import uuid
+
+        from octop.api.enterprise import build_web_app
+
+        process = WebProcess(
+            PathLayout.from_env().root,
+            node=os.environ.get("OCTOP_NODE_ID") or "web-" + uuid.uuid4().hex,
+        )
+        app = None
+        try:
+            app = build_web_app(process, os.environ.get("OCTOP_WORKER_URL", ""))
+            await process.start()
+            await _serve(
+                uvicorn.Server(
+                    uvicorn.Config(
+                        app,
+                        host=host or process.config.bind_host,
+                        port=port or process.config.port,
+                        log_level=log_level or process.config.log_level,
+                        ssl_certfile=ssl_certfile,
+                        ssl_keyfile=ssl_keyfile,
+                        ws_max_size=1024 * 1024,
+                        ws_max_queue=16,
+                        limit_concurrency=256,
+                    )
+                )
+            )
+        finally:
+            if app is not None:
+                await app.state.runtime_client.aclose()
+            await process.stop()
+        return
+
     from octop.api.app import build_app
+    from octop.infra.server import OctopServer
     from octop.infra.setup.tls.http_companion import build_http_companion_app
     from octop.infra.setup.tls.listeners import build_listen_plan
     from octop.infra.setup.tls.store import resolve_tls_paths
 
-    srv = OctopServer()
+    srv = OctopServer() if role == "monolith" else OctopServer(role=role)
     await srv.start()
+    if role == "worker":
+        from octop.infra.agents.memory.slim_control import MemorySlimControl
+
+        assert srv.config is not None
+        control = MemorySlimControl(srv)
+        try:
+            await control.start()
+            # TLS terminates at the edge. Stored monolith TLS settings must not
+            # change the private origin or start extra listeners in this role.
+            await _serve(
+                uvicorn.Server(
+                    uvicorn.Config(
+                        build_app(srv),
+                        host=host or "0.0.0.0",
+                        port=port or 8088,
+                        log_level=log_level or srv.config.log_level,
+                        ws_max_size=1024 * 1024,
+                        ws_max_queue=16,
+                        limit_concurrency=256,
+                    )
+                )
+            )
+        finally:
+            await control.close()
+            await srv.stop()
+        return
     bwrap_task = _schedule_linux_bubblewrap_ensure()
     # Greenfield deferral leaves services unset until /setup/database binds.
     cfg = srv.services.config if srv.services is not None else srv.config

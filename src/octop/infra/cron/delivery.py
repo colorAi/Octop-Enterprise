@@ -45,6 +45,7 @@ class CronDeliveryCommand:
     task_type: CronTaskType
     model: str | None
     mcp_servers: tuple[str, ...]
+    scheduled_at: str | None = None
 
 
 class CronDeliveryService:
@@ -67,6 +68,10 @@ class CronDeliveryService:
 
     async def deliver(self, command: CronDeliveryCommand) -> None:
         """Run one delivery under the target channel session lock."""
+        execution = getattr(self._agent_manager, "execution", None)
+        if execution is not None and execution.should_submit is True:
+            await execution.cron(command)
+            return
 
         async def _locked() -> None:
             if command.fresh_thread:

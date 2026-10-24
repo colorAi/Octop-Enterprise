@@ -10,6 +10,17 @@ from octop.infra.agents.workspace.dir import host_system_dir
 from octop.infra.errors import ErrorCode, OctopError
 
 
+def preserve_memory_layout(cfg: dict[str, Any], stored: dict[str, Any]) -> dict[str, Any]:
+    """Keep the internal pre-isolation memory location, not arbitrary host paths.
+
+    The tool workspace can move into Docker while server-owned memory stays
+    in its existing .octop directory. Dashboard memory uses this same layout.
+    """
+    if stored.get("system_files_path") == ".octop":
+        return {**cfg, "system_files_path": ".octop"}
+    return cfg
+
+
 def memory_backend_from_agent_config(
     cfg: dict[str, Any],
     *,

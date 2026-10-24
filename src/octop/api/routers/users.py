@@ -5,12 +5,15 @@ from __future__ import annotations
 import time
 from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, File, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Query, Request, UploadFile
 from pydantic import BaseModel, Field
 
-from octop.api.deps import current_user, get_server, require_permission
+from octop.api.common.reads import management_read
+from octop.api.deps import current_user, get_server, require_admin, require_permission
 from octop.infra.errors import ErrorCode, OctopError
+from octop.infra.knowledge.access import KnowledgeAccess
 from octop.infra.users.identity import Role, User
+from octop.infra.users.model_access import ModelAccess
 from octop.infra.users.permissions import PERMISSIONS, effective_permissions
 from octop.infra.users.resource_policy import (
     normalize_max_agents,
@@ -41,6 +44,31 @@ class UserCreateBody(BaseModel):
     max_agents: int | None = Field(default=None, ge=0)
 
 
+class EmployeeModelsBody(BaseModel):
+    model_refs: list[str] = Field(
+        max_length=1000,
+        description="Complete allowed chat model refs (provider/model); an empty list revokes all access.",
+    )
+    expected_revision: str = Field(
+        min_length=1,
+        max_length=128,
+        description="Revision returned by GET /users/{user_id}/models; stale saves return 409.",
+    )
+
+
+class EmployeeModelItem(BaseModel):
+    ref: str
+    provider_name: str
+    model: str
+    name: str
+
+
+class EmployeeModelAccess(BaseModel):
+    model_refs: list[str]
+    revision: str
+    items: list[EmployeeModelItem]
+
+
 class UserPatchBody(BaseModel):
     role: str | None = Field(
         default=None,
@@ -55,6 +83,34 @@ class UserPatchBody(BaseModel):
     workspace_root_dir: str | None = None
     token_quota: int | None = Field(default=None, ge=0)
     max_agents: int | None = Field(default=None, ge=0)
+    knowledge_base_ids: list[str] | None = Field(
+        default=None,
+        max_length=500,
+        description="Replace this employee's read grants for administrator-maintained knowledge bases.",
+    )
+    model_access: EmployeeModelsBody | None = Field(
+        default=None,
+        description="Administrator-only replacement of this employee's allowed models.",
+    )
+
+
+class EmployeeKnowledgeBase(BaseModel):
+    id: str
+    name: str
+    description: str
+    shared: bool
+
+
+class EmployeeKnowledgeAccess(BaseModel):
+    knowledge_base_ids: list[str]
+    items: list[EmployeeKnowledgeBase]
+
+
+class EmployeeKnowledgeBody(BaseModel):
+    knowledge_base_ids: list[str] = Field(
+        max_length=500,
+        description="Knowledge bases the employee may read and search; an empty list revokes explicit grants.",
+    )
 
 
 class ResetPasswordBody(BaseModel):
@@ -271,9 +327,58 @@ async def list_permission_catalog(
 async def list_users(
     _: Any = Depends(require_permission("users")), server: Any = Depends(get_server)
 ) -> list[dict[str, Any]]:
+    return await management_read(server, _list_users, server)
+
+
+def _list_users(server: Any) -> list[dict[str, Any]]:
     rows = server.user_manager.list_all(include_disabled=True)
     policy_map = server.services.user_policy_repo.list_by_user_ids([r.id for r in rows])
     return [_row_to_dict(r, policy_map.get(r.id), server) for r in rows]
+
+
+class UserPageResponse(BaseModel):
+    items: list[dict[str, Any]]
+    total: int
+    page: int
+    page_size: int
+
+
+def _user_page(server: Any, page: int, page_size: int, search: str) -> UserPageResponse:
+    rows, total = server.services.user_repo.page(page=page, page_size=page_size, search=search)
+    ids = [row.id for row in rows]
+    policies = server.services.user_policy_repo.list_by_user_ids(ids)
+    counts = server.services.agent_repo.counts_by_users(ids)
+    return UserPageResponse(
+        items=[
+            {
+                **_row_to_dict(row, policies.get(row.id), server),
+                "agent_count": counts.get(row.id, 0),
+            }
+            for row in rows
+        ],
+        total=total,
+        page=page,
+        page_size=page_size,
+    )
+
+
+@router.get(
+    "/page",
+    summary="Search a page of users with owned expert counts",
+    response_model=UserPageResponse,
+)
+async def list_user_page(
+    _: Any = Depends(require_permission("users")),
+    server: Any = Depends(get_server),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(25, ge=1, le=100),
+    search: str = Query("", max_length=200),
+) -> UserPageResponse:
+    """Include disabled accounts; never load experts or probe their workspaces.
+
+    The legacy unpaginated GET /users retains its array response for existing clients.
+    """
+    return await management_read(server, _user_page, server, page, page_size, search)
 
 
 @router.post("", status_code=201)
@@ -428,6 +533,86 @@ async def batch_users(
     )
 
 
+@router.get(
+    "/{user_id}/knowledge-bases",
+    response_model=EmployeeKnowledgeAccess,
+    summary="Get an employee's knowledge-base grants and administrator-maintained catalog",
+)
+async def get_employee_knowledge(
+    user_id: int,
+    _: User = Depends(require_admin()),
+    server: Any = Depends(get_server),
+) -> EmployeeKnowledgeAccess:
+    state = await management_read(server, KnowledgeAccess(server.services).get, user_id)
+    return EmployeeKnowledgeAccess.model_validate(state)
+
+
+@router.put(
+    "/{user_id}/knowledge-bases",
+    response_model=EmployeeKnowledgeAccess,
+    summary="Replace an employee's knowledge-base read grants",
+    description="Requires the administrator role. Grants permit reading and chat retrieval; shared bases remain visible to all users.",
+)
+async def set_employee_knowledge(
+    user_id: int,
+    body: EmployeeKnowledgeBody,
+    actor: User = Depends(require_admin()),
+    server: Any = Depends(get_server),
+) -> EmployeeKnowledgeAccess:
+    state = await management_read(
+        server,
+        KnowledgeAccess(server.services).set,
+        user_id,
+        body.knowledge_base_ids,
+        actor=actor.username,
+    )
+    from octop.api.routers.client_config import notify_config_changed
+
+    await notify_config_changed(server, user_id)
+    return EmployeeKnowledgeAccess.model_validate(state)
+
+
+@router.get(
+    "/{user_id}/models",
+    response_model=EmployeeModelAccess,
+    summary="Get employee model assignments and the available chat-model catalog",
+    description="Administrator only. Employees without an assignment cannot use chat models.",
+)
+async def get_employee_models(
+    user_id: int,
+    _: User = Depends(require_admin()),
+    server: Any = Depends(get_server),
+) -> EmployeeModelAccess:
+    state = await management_read(server, ModelAccess(server.services).get, user_id)
+    return EmployeeModelAccess.model_validate(state)
+
+
+@router.put(
+    "/{user_id}/models",
+    response_model=EmployeeModelAccess,
+    summary="Replace an employee's allowed chat models",
+    description="Administrator only. Empty model_refs revokes all models. Stale revisions return 409.",
+)
+async def set_employee_models(
+    user_id: int,
+    body: EmployeeModelsBody,
+    actor: User = Depends(require_admin()),
+    server: Any = Depends(get_server),
+) -> EmployeeModelAccess:
+    state = await management_read(
+        server,
+        ModelAccess(server.services).set,
+        user_id,
+        body.model_refs,
+        body.expected_revision,
+        actor=actor.username,
+    )
+    from octop.api.routers.client_config import notify_config_changed
+
+    await notify_config_changed(server, user_id)
+    return EmployeeModelAccess.model_validate(state)
+
+
 @router.get("/{user_id}")
 async def get_user(
     user_id: int,
@@ -450,6 +635,28 @@ async def patch_user(
     row = server.user_manager.get_row(user_id)
     if row is None:
         raise OctopError(ErrorCode.NOT_FOUND, "user not found")
+    if body.knowledge_base_ids is not None and (not actor.is_admin or body.role == Role.ADMIN):
+        raise OctopError(
+            ErrorCode.FORBIDDEN, "only administrators may assign knowledge to employees"
+        )
+    if body.model_access is not None:
+        if not actor.is_admin or body.role == Role.ADMIN:
+            raise OctopError(
+                ErrorCode.FORBIDDEN, "only administrators may assign models to employees"
+            )
+        await management_read(
+            server,
+            ModelAccess(server.services).validate,
+            user_id,
+            body.model_access.model_refs,
+            body.model_access.expected_revision,
+        )
+    knowledge_access = KnowledgeAccess(server.services)
+    knowledge_ids = (
+        await management_read(server, knowledge_access.validate, user_id, body.knowledge_base_ids)
+        if body.knowledge_base_ids is not None
+        else None
+    )
     if body.permissions is not None:
         _assert_can_assign(actor, body.permissions)
         # An administrator account keeps full access. The form stores that as
@@ -508,6 +715,19 @@ async def patch_user(
     policy_kwargs = _policy_kwargs_from_body(body)
     if policy_kwargs:
         await server.user_manager.set_resource_policy(row.username, **policy_kwargs)
+    if knowledge_ids is not None:
+        await management_read(
+            server, knowledge_access.set, user_id, knowledge_ids, actor=actor.username
+        )
+    if body.model_access is not None:
+        await management_read(
+            server,
+            ModelAccess(server.services).set,
+            user_id,
+            body.model_access.model_refs,
+            body.model_access.expected_revision,
+            actor=actor.username,
+        )
     updated = server.user_manager.get_row(user_id)
     assert updated is not None
     from octop.api.routers.client_config import notify_config_changed

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import logging
+import uuid
 from typing import Any
 
 from octop_gateway.channel import BaseChannel, MessageProcessor
@@ -476,6 +477,7 @@ def _continuation_inbound(
 ) -> InboundMessage:
     """Clone inbound for a steer continuation (same thread / connection)."""
     meta = dict(original.metadata or {})
+    meta["client_request_id"] = uuid.uuid4().hex
     content = _content_from_steer(text, blocks)
     attachments = inbound_attachments_from_parts(content)
     if attachments:
@@ -531,6 +533,7 @@ async def resume_parked_steers(
         logger.error("steer resume has no dashboard queue thread=%s", thread_id)
         return
     meta = steer.continuation_metadata(thread_id)
+    meta["client_request_id"] = uuid.uuid4().hex
     meta["thread_id"] = thread_id
     meta["session_key"] = session_key
     # Subscribers already on the thread receive the turn. This id only

@@ -33,6 +33,7 @@ beforeEach(() => {
 it("shows progress and completion when manually checking an empty tool result", async () => {
   render(<LocalWorkspaceSettings />);
   expect(await screen.findByText("devices.runtimeReady")).toBeVisible();
+  expect(mock.status).toHaveBeenLastCalledWith();
   let finish!: (result: object) => void;
   mock.status.mockReturnValueOnce(
     new Promise((resolve) => {
@@ -47,6 +48,7 @@ it("shows progress and completion when manually checking an empty tool result", 
   expect(await screen.findByText("devices.runtimeReady")).toBeVisible();
   expect(button).toBeEnabled();
   expect(mock.status).toHaveBeenCalledTimes(2);
+  expect(mock.status).toHaveBeenLastCalledWith({ verify_tools: true });
 });
 
 it("shows a tool-check failure and can check successfully again", async () => {

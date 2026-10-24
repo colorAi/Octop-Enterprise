@@ -14,6 +14,7 @@ from pydantic import BaseModel
 from octop.api.common.agent_workspace import resolve_agent_workspace_dir
 from octop.api.common.content_disposition import content_disposition
 from octop.api.common.workspace import (
+    assert_workspace_resource_access,
     coerce_read_content,
     file_info_to_dict,
     reanchor_entry_path,
@@ -132,6 +133,7 @@ async def list_tree(
         agent_id, user=user, as_user=as_user, server=server, owner_only=True
     )
     io_path = _workspace_io_path(path, from_workspace=from_workspace)
+    await assert_workspace_resource_access(server, user, agent_id, ws, io_path)
     result = await ws.als(io_path)
     if result is None:
         raise OctopError(ErrorCode.NOT_FOUND, f"cannot list {path!r}")
@@ -164,6 +166,9 @@ async def read_file(
 ) -> dict[str, Any]:
     """Read a UTF-8 text file."""
     ws = await require_agent_workspace(agent_id, user=user, as_user=as_user, server=server)
+    await assert_workspace_resource_access(
+        server, user, agent_id, ws, _workspace_io_path(path, from_workspace=from_workspace)
+    )
     content = await ws.aread_text(_workspace_io_path(path, from_workspace=from_workspace))
     if content is None:
         raise OctopError(ErrorCode.NOT_FOUND, f"cannot read {path!r}")
@@ -183,6 +188,14 @@ async def write_file(
     """Overwrite ``path`` with ``body.content`` (text)."""
     ws = await require_running_workspace(
         agent_id, user=user, as_user=as_user, server=server, owner_only=True
+    )
+    await assert_workspace_resource_access(
+        server,
+        user,
+        agent_id,
+        ws,
+        _workspace_io_path(path, from_workspace=from_workspace),
+        write=True,
     )
     converter = get_doc_converter(path)
     if converter is not None:
@@ -233,6 +246,7 @@ async def mkdir_workspace_dir(
     ws = await require_running_workspace(
         agent_id, user=user, as_user=as_user, server=server, owner_only=True
     )
+    await assert_workspace_resource_access(server, user, agent_id, ws, rel, write=True)
     try:
         await ws.amkdir(rel)
     except Exception as exc:
@@ -263,6 +277,7 @@ async def delete_workspace_file(
     ws = await require_running_workspace(
         agent_id, user=user, as_user=as_user, server=server, owner_only=True
     )
+    await assert_workspace_resource_access(server, user, agent_id, ws, rel, write=True)
     try:
         await ws.adelete(rel)
     except Exception as exc:
@@ -293,6 +308,8 @@ async def move_workspace_file(
     ws = await require_running_workspace(
         agent_id, user=user, as_user=as_user, server=server, owner_only=True
     )
+    await assert_workspace_resource_access(server, user, agent_id, ws, src, write=True)
+    await assert_workspace_resource_access(server, user, agent_id, ws, dest, write=True)
     try:
         await ws.amove(src, dest)
     except Exception as exc:
@@ -316,6 +333,14 @@ async def upload_file(
         agent_id, user=user, as_user=as_user, server=server, owner_only=True
     )
     target = path or f"/{file.filename or 'upload.bin'}"
+    await assert_workspace_resource_access(
+        server,
+        user,
+        agent_id,
+        ws,
+        _workspace_io_path(target, from_workspace=from_workspace),
+        write=True,
+    )
     data = await file.read()
     try:
         await ws.aupload_bytes(
@@ -345,6 +370,7 @@ async def download_file(
     """
     ws = await require_agent_workspace(agent_id, user=user, as_user=as_user, server=server)
     io_path = _workspace_io_path(path, from_workspace=from_workspace)
+    await assert_workspace_resource_access(server, user, agent_id, ws, io_path)
     if is_host_absolute_path(io_path) and not is_allowed_host_download_abs_path(
         io_path,
         workspace=ws.workspace_dir,
@@ -379,6 +405,7 @@ async def read_doc(
     converter = _ensure_editable_doc(path)
     ws = await require_agent_workspace(agent_id, user=user, as_user=as_user, server=server)
     io_path = _workspace_io_path(path, from_workspace=from_workspace)
+    await assert_workspace_resource_access(server, user, agent_id, ws, io_path)
     try:
         blob = await ws.adownload_bytes(io_path)
     except PermissionError as exc:
@@ -410,6 +437,7 @@ async def write_doc(
     rel = _assert_workspace_mutable(path)
     converter = _ensure_editable_doc(path)
     ws = await require_running_workspace(agent_id, user=user, as_user=as_user, server=server)
+    await assert_workspace_resource_access(server, user, agent_id, ws, rel, write=True)
     try:
         data = converter.from_markdown(body.content)
     except Exception as exc:
@@ -441,6 +469,9 @@ async def preview_media(
     path_agent = _agent_id_from_media_source(source)
     effective_agent = path_agent or agent_id
     ws = await require_running_workspace(effective_agent, user=user, as_user=as_user, server=server)
+    await assert_workspace_resource_access(
+        server, user, effective_agent, ws, _workspace_io_path(source)
+    )
     payload = await resolve_preview_payload(
         source=source,
         workspace=ws,
@@ -479,6 +510,7 @@ async def glob_files(
         agent_id, user=user, as_user=as_user, server=server, owner_only=True
     )
     root = _workspace_io_path(path, from_workspace=from_workspace)
+    await assert_workspace_resource_access(server, user, agent_id, ws, root, recursive=True)
     if pattern in ("**/*.md", "*.md") and root == ".":
         ls_result = await ws.als(".")
         if ls_result is None:
@@ -513,6 +545,14 @@ async def grep_files(
     ws = await require_running_workspace(
         agent_id, user=user, as_user=as_user, server=server, owner_only=True
     )
+    await assert_workspace_resource_access(
+        server,
+        user,
+        agent_id,
+        ws,
+        _workspace_io_path(path, from_workspace=from_workspace),
+        recursive=True,
+    )
     result = await ws.agrep(pattern, _workspace_io_path(path, from_workspace=from_workspace))
     if result is None:
         raise OctopError(ErrorCode.NOT_FOUND, "grep failed")
@@ -538,6 +578,7 @@ async def export_workspace_archive(
     ws = await require_running_workspace(
         agent_id, user=user, as_user=as_user, server=server, owner_only=True
     )
+    await assert_workspace_resource_access(server, user, agent_id, ws, ".", recursive=True)
     data = await export_workspace_zip(ws)
     filename = f"workspace-{agent_id}.zip"
     return StreamingResponse(
@@ -569,6 +610,7 @@ async def import_workspace_archive(
     ws = await require_running_workspace(
         agent_id, user=user, as_user=as_user, server=server, owner_only=True
     )
+    await assert_workspace_resource_access(server, user, agent_id, ws, ".", write=True)
     local_ws = resolve_agent_workspace_dir(server, agent_id)
     result = await import_workspace_zip(
         ws,

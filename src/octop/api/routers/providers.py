@@ -1,4 +1,4 @@
-"""Providers router (admin-only write operations)."""
+"""Provider metadata and permission-protected credential management."""
 
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ from typing import Any, cast
 from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel
 
+from octop.api.common.reads import management_read
 from octop.api.deps import current_user, get_server, require_permission
 from octop.infra.agents.providers.codex_apply import (
     CODEX_PROVIDER_NAME,
@@ -42,6 +43,7 @@ from octop.infra.agents.providers.store import (
     resolve_provider_stream_usage,
 )
 from octop.infra.errors import ErrorCode, OctopError
+from octop.infra.users.model_access import ModelAccess
 from octop.infra.utils.locale import resolve_request_locale
 from octop.infra.utils.ulid import new_ulid
 
@@ -202,14 +204,24 @@ async def list_provider_presets(
 
 @router.get("/resolved")
 async def list_resolved_models(
-    _: Any = Depends(current_user),
+    user: Any = Depends(current_user),
     server: Any = Depends(get_server),
 ) -> list[dict[str, Any]]:
     """Return all enabled models across all providers.
 
     Used by the Agent model selector to show available candidates.
     """
-    return _list_resolved_models(server.services.provider_repo.list_all())
+
+    def visible() -> list[dict[str, Any]]:
+        models = _list_resolved_models(server.services.provider_repo.list_all())
+        allowed = set(
+            ModelAccess(server.services).filter_refs(
+                user.id, [f"{m['provider_name']}/{m['model']}" for m in models]
+            )
+        )
+        return [m for m in models if f"{m['provider_name']}/{m['model']}" in allowed]
+
+    return await management_read(server, visible)
 
 
 class ActiveModelBody(BaseModel):
@@ -219,12 +231,23 @@ class ActiveModelBody(BaseModel):
 
 @router.get("/active-model")
 async def get_active_model(
-    _: Any = Depends(current_user),
+    user: Any = Depends(current_user),
     server: Any = Depends(get_server),
 ) -> dict[str, str]:
     """Return the globally preferred model (provider_name + model id)."""
-    name, model = server.services.settings_repo.get_active_model()
-    return {"provider_name": name, "model": model}
+
+    def preferred() -> dict[str, str]:
+        name, model = server.services.settings_repo.get_active_model()
+        access = ModelAccess(server.services)
+        if access.is_admin(user.id):
+            return {"provider_name": name, "model": model}
+        refs = access.filter_refs(user.id, [item["ref"] for item in access.catalog()])
+        ref = f"{name}/{model}"
+        selected = ref if ref in refs else next(iter(refs), "")
+        provider, _, model_id = selected.partition("/")
+        return {"provider_name": provider, "model": model_id}
+
+    return await management_read(server, preferred)
 
 
 @router.put("/active-model")
@@ -240,12 +263,15 @@ async def set_active_model(
     return {"provider_name": body.provider_name, "model": body.model}
 
 
-@router.get("")
+@router.get("", summary="List providers (model management permission required)")
 async def list_providers(
-    _: Any = Depends(current_user),
+    _: Any = Depends(require_permission("providers")),
     server: Any = Depends(get_server),
 ) -> list[dict[str, Any]]:
-    """Return all providers. Read-only for regular users."""
+    """Return credential-bearing provider records to model managers only.
+
+    Model selectors must use ``/providers/resolved``, which returns metadata.
+    """
     return [_row_to_dict(r) for r in server.services.provider_repo.list_all()]
 
 

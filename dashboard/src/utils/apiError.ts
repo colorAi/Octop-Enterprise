@@ -71,6 +71,12 @@ export function apiErrorMessage(
   t?: TFunction,
 ): string {
   const parsed = parseApiError(error);
+  const reason = parsed?.details?.reason;
+  if (t && typeof reason === "string") {
+    const key = `expertAccess.errors.${reason}`;
+    const translated = t(key);
+    if (translated !== key) return translated;
+  }
   if (parsed?.code && t) {
     const key = `apiErrors.${parsed.code}`;
     const translated = t(key, parsed.details ?? {});

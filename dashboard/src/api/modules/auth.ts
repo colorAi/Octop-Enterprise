@@ -48,6 +48,7 @@ export interface SsoIdentity {
 }
 
 export interface OctopUser {
+  expert_access_mode?: "legacy" | "assigned_only";
   id: number;
   username: string;
   /** Role-template public id: admin | user | custom ULID. */

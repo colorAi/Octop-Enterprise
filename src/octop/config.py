@@ -48,6 +48,8 @@ class DatabaseConfig:
     user: str = "octop"
     password: str | None = None
     url: str | None = None  # verbatim OCTOP_DATABASE_URL when set
+    pool_min: int = 1
+    pool_max: int = 8
 
     @property
     def is_sqlite(self) -> bool:
@@ -353,6 +355,9 @@ def parse_database_config(merged: dict[str, Any]) -> DatabaseConfig:
         raise ValueError("database.user is required for postgresql")
     if not (1 <= port <= 65535):
         raise ValueError(f"database.port must be 1-65535, got {port}")
+    pool_min, pool_max = int(merged.get("pool_min", 1)), int(merged.get("pool_max", 8))
+    if not 1 <= pool_min <= pool_max <= 64:
+        raise ValueError("database pool requires 1 <= pool_min <= pool_max <= 64")
 
     password = merged.get("password")
     if password is not None:
@@ -371,6 +376,8 @@ def parse_database_config(merged: dict[str, Any]) -> DatabaseConfig:
         user=user,
         password=password,
         url=url,
+        pool_min=pool_min,
+        pool_max=pool_max,
     )
 
 
@@ -392,6 +399,9 @@ def _apply_database_env(merged_db: dict[str, Any]) -> dict[str, Any]:
         out["user"] = v
     if v := os.environ.get("OCTOP_DATABASE_PASSWORD"):
         out["password"] = v
+    for name in ("pool_min", "pool_max"):
+        if value := os.environ.get("OCTOP_DATABASE_" + name.upper()):
+            out[name] = int(value)
     return out
 
 

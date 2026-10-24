@@ -27,6 +27,7 @@ export const providerApi = {
   listResolvedModels: (agentId?: string | null) =>
     request<ResolvedModel[]>("/providers/resolved", {
       headers: bridgeAgentHeaders(agentId),
+      cache: "no-store",
     }),
 
   getActiveModel: (agentId?: string | null) =>

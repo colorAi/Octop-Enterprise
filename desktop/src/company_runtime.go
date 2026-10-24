@@ -34,7 +34,7 @@ func parseRuntimeEvent(name, nonce string) (id, method string, params json.RawMe
 		return
 	}
 	switch p[2] {
-	case "status", "refresh_status", "start", "cancel", "reveal", "reconcile", "preview_image", "steer", "steer_remove", "upload_artifact", "import_attachment":
+	case "status", "refresh_status", "start", "cancel", "reveal", "reconcile", "preview_image", "steer", "steer_remove", "hitl_resume", "upload_artifact", "import_attachment":
 	default:
 		return
 	}
@@ -159,6 +159,21 @@ func (a *App) performRuntimeAction(nonce, base, method string, params json.RawMe
 		return nil, errors.New("当前系统不支持打开文件位置")
 	}
 	a.companyMu.Unlock()
+	if method == "status" {
+		var options struct {
+			VerifyTools bool `json:"verify_tools"`
+		}
+		if json.Unmarshal(params, &options) == nil && options.VerifyTools {
+			root, err := ensureCompanyPortable()
+			if err != nil {
+				return nil, err
+			}
+			if err := validateCompanyRuntime(root); err != nil {
+				readyCompanyPortable.invalidate(root)
+				return nil, err
+			}
+		}
+	}
 	process, err := a.ensureRuntimeProcess(nonce, base, method, ensureCompanyPortable)
 	if err != nil {
 		return nil, err
@@ -188,7 +203,7 @@ func (a *App) ensureRuntimeProcess(nonce, base, method string, prepare func() (s
 		return nil, errors.New("请先在设置中选择本地工作目录并授权；终端将使用当前系统用户权限，工作目录不是安全沙箱")
 	}
 	if a.companyRuntime == nil || !a.companyRuntime.Alive() {
-		if method == "cancel" {
+		if method == "cancel" || method == "hitl_resume" {
 			a.companyMu.Unlock()
 			return nil, errors.New("本地任务进程已退出；请核对文件和公司任务记录")
 		}
@@ -227,6 +242,7 @@ func (a *App) ensureRuntimeProcess(nonce, base, method string, prepare func() (s
 		if err != nil {
 			close(events)
 			a.companyMu.Unlock()
+			readyCompanyPortable.invalidate(root)
 			return nil, errors.New("本地运行时无法启动，请重新安装包含完整工具的企业客户端")
 		}
 		a.companyRuntime = process
@@ -237,10 +253,16 @@ func (a *App) ensureRuntimeProcess(nonce, base, method string, prepare func() (s
 		cancel()
 		a.companyMu.Lock()
 		if err != nil {
+			// Account/workspace changes deliberately stop the old process and
+			// must not invalidate otherwise unchanged shared tools.
+			exited := a.companyRuntime == process && !process.Alive()
 			if a.companyRuntime == process {
 				a.stopCompanyRuntimeLocked()
 			}
 			a.companyMu.Unlock()
+			if exited {
+				readyCompanyPortable.invalidate(root)
+			}
 			return nil, err
 		}
 		if a.companyRuntime != process || !a.runtimePreviewScopeCurrent(nonce, base, workspace, epoch) {
@@ -302,26 +324,43 @@ func (a *App) watchRuntimeIdentity(nonce, base string, epoch uint64, expires int
 
 func runtimeErrorText(code string) string {
 	messages := map[string]string{
-		"company_runtime_disabled":             "公司尚未启用本机执行服务，请联系管理员开启；通讯录和员工聊天仍可使用。",
-		"company_protocol_incompatible":        "公司服务与客户端运行协议不兼容，请安装匹配的企业客户端。",
-		"device_session_expired":               "当前设备连接已过期，请重新登录公司账号。",
-		"legacy_thread_read_only":              "此会话包含服务器执行的旧历史，仅供查看；请新建会话开始本机任务。",
-		"project_on_another_device":            "此会话的本地项目属于另一台电脑，文件未同步；请新建会话处理本机文件。",
-		"task_selection_changed":               "任务状态已变化，请刷新任务列表后再核对。",
-		"recovery_not_owned":                   "无法核对该任务的归属，请使用原公司账号、原电脑和原工作目录重新连接。",
-		"previous_device_still_active":         "该任务仍连接到另一会话，请先结束原会话再核对。",
-		"task_not_found":                       "服务器上的原会话已不存在，本地成果文件仍保留；请安装新版客户端以结束这条提示。",
-		"thread_already_running":               "该会话已有活动或待核对的任务，请先检查任务状态。",
-		"edit_history_changed":                 "会话记录已变化，请刷新后重新编辑。",
-		"edit_message_not_found":               "原消息已变化或不存在，请刷新后重新编辑。",
-		"runtime_data_must_be_outside_project": "所选工作目录包含客户端应用数据，请选择独立的项目工作目录。",
-		"expert_not_owned":                     "当前专家不属于此账号或已停用，请选择自己的专家。",
-		"thread_not_owned":                     "此账号无权访问该专家会话，请重新选择会话。",
-		"model_not_available":                  "所选模型当前不可用，请重新选择公司提供的模型。",
-		"company_image_service_unavailable":    "公司尚未配置可用的生图服务，请联系管理员。",
-		"company_image_download_failed":        "图片已生成，但公司服务下载失败；请检查网关图片地址，勿重复提交。",
-		"company_image_provider_timeout":       "生图服务响应超时，结果需到网关核对；不会自动重复生成。",
-		"company_image_provider_unavailable":   "公司生图服务暂时无法连接，请稍后再试。",
+		"company_runtime_disabled":               "公司尚未启用本机执行服务，请联系管理员开启；通讯录和员工聊天仍可使用。",
+		"company_protocol_incompatible":          "公司服务与客户端运行协议不兼容，请安装匹配的企业客户端。",
+		"device_session_expired":                 "当前设备连接已过期，请重新登录公司账号。",
+		"legacy_thread_read_only":                "此会话包含服务器执行的旧历史，仅供查看；请新建会话开始本机任务。",
+		"project_on_another_device":              "此会话的本地项目属于另一台电脑，文件未同步；请新建会话处理本机文件。",
+		"task_selection_changed":                 "任务状态已变化，请刷新任务列表后再核对。",
+		"recovery_not_owned":                     "无法核对该任务的归属，请使用原公司账号、原电脑和原工作目录重新连接。",
+		"previous_device_still_active":           "该任务仍连接到另一会话，请先结束原会话再核对。",
+		"task_not_found":                         "服务器上的原会话已不存在，本地成果文件仍保留；请安装新版客户端以结束这条提示。",
+		"thread_already_running":                 "该会话已有活动或待核对的任务，请先检查任务状态。",
+		"edit_history_changed":                   "会话记录已变化，请刷新后重新编辑。",
+		"edit_message_not_found":                 "原消息已变化或不存在，请刷新后重新编辑。",
+		"runtime_data_must_be_outside_project":   "所选工作目录包含客户端应用数据，请选择独立的项目工作目录。",
+		"expert_not_owned":                       "当前专家不属于此账号或已停用，请选择自己的专家。",
+		"thread_not_owned":                       "此账号无权访问该专家会话，请重新选择会话。",
+		"model_not_available":                    "所选模型当前不可用，请重新选择公司提供的模型。",
+		"company_capability_not_assigned":        "管理员尚未分配此公司能力，请联系管理员。",
+		"company_video_generation_not_assigned":  "管理员尚未分配生视频能力，请联系管理员。",
+		"company_speech_to_text_not_assigned":    "管理员尚未分配语音识别能力，请联系管理员。",
+		"company_text_to_speech_not_assigned":    "管理员尚未分配语音合成能力，请联系管理员。",
+		"company_web_search_not_assigned":        "管理员尚未分配联网搜索能力，请联系管理员。",
+		"company_video_service_unavailable":      "公司尚未配置可用的生视频服务，请联系管理员。",
+		"company_video_download_failed":          "视频已生成，但公司服务下载失败；请联系管理员核对结果，勿重复提交。",
+		"company_video_provider_timeout":         "生视频服务响应超时，请联系管理员核对结果；不会自动重复生成。",
+		"company_video_provider_unavailable":     "公司生视频服务暂时无法连接，请稍后再试。",
+		"company_web_search_service_unavailable": "公司尚未配置可用的联网搜索服务，请联系管理员。",
+		"company_web_search_failed":              "公司联网搜索失败，请稍后再试或联系管理员。",
+		"company_text_to_speech_failed":          "公司语音合成失败，请联系管理员核对服务配置。",
+		"company_image_service_unavailable":      "公司尚未配置可用的生图服务，请联系管理员。",
+		"company_image_generation_not_assigned":  "管理员尚未分配生图能力，请联系管理员在员工技能中勾选公司生图。",
+		"AGENT_NOT_RUNNING":                      "服务端专家实例尚未启动，请稍后重试或联系管理员检查专家状态。",
+		"AGENT_FAILED":                           "服务端专家实例启动失败，请联系管理员检查运行状态。",
+		"MODEL_NOT_ASSIGNED":                     "管理员尚未分配此模型，请联系管理员在员工设置中配置可用模型。",
+		"employee_resources_changed":             "管理员已更新你的资源权限，请重新发送消息以加载最新配置。",
+		"company_image_download_failed":          "图片已生成，但公司服务下载失败；请检查网关图片地址，勿重复提交。",
+		"company_image_provider_timeout":         "生图服务响应超时，结果需到网关核对；不会自动重复生成。",
+		"company_image_provider_unavailable":     "公司生图服务暂时无法连接，请稍后再试。",
 	}
 	if message, ok := messages[code]; ok {
 		return message

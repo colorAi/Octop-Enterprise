@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field
 
 from octop.api.deps import current_user, get_server, require_permission
 from octop.infra.errors import ErrorCode, OctopError
+from octop.infra.users.capabilities import STT_CAPABILITY, TTS_CAPABILITY
 from octop.infra.utils.locale import resolve_request_locale
 from octop.infra.voice.manager import VoiceManager
 from octop.infra.voice.presets import load_voice_presets
@@ -85,20 +86,26 @@ async def list_voice_presets(_: Any = Depends(current_user)) -> list[dict[str, A
     return load_voice_presets()
 
 
-@router.get("/providers")
+@router.get("/providers", summary="List voice providers (voice management permission required)")
 async def list_voice_providers(
-    _: Any = Depends(current_user),
+    _: Any = Depends(require_permission("voice")),
     server: Any = Depends(get_server),
 ) -> list[dict[str, Any]]:
+    """Return credential-bearing records only to authorized voice managers."""
     return [_row_to_dict(r) for r in server.services.voice_provider_repo.list_all()]
 
 
 @router.get("/active")
 async def get_active_voice(
-    _: Any = Depends(current_user),
+    user: Any = Depends(current_user),
     server: Any = Depends(get_server),
-) -> dict[str, str]:
-    return _voice_manager(server).get_active()
+) -> dict[str, Any]:
+    active: dict[str, Any] = _voice_manager(server).get_active()
+    resources = getattr(server, "employee_resources", None)
+    if resources is not None:
+        granted = await resources.granted_capabilities(user.id)
+        active.update(stt_allowed=STT_CAPABILITY in granted, tts_allowed=TTS_CAPABILITY in granted)
+    return active
 
 
 @router.put("/active")
@@ -115,9 +122,12 @@ async def transcribe_audio(
     audio: UploadFile = File(...),
     language: str = Form(default="zh-CN"),
     provider: str | None = Form(default=None),
-    _: Any = Depends(current_user),
+    user: Any = Depends(current_user),
     server: Any = Depends(get_server),
 ) -> dict[str, Any]:
+    resources = getattr(server, "employee_resources", None)
+    if resources is not None:
+        await resources.require_capability(user.id, STT_CAPABILITY)
     data = await audio.read()
     if not data:
         raise OctopError(ErrorCode.SLASH_BAD_ARGS, "audio file is empty")
@@ -134,9 +144,12 @@ async def transcribe_audio(
 @router.post("/tts")
 async def synthesize_speech(
     body: TTSBody,
-    _: Any = Depends(current_user),
+    user: Any = Depends(current_user),
     server: Any = Depends(get_server),
 ) -> StreamingResponse:
+    resources = getattr(server, "employee_resources", None)
+    if resources is not None:
+        await resources.require_capability(user.id, TTS_CAPABILITY)
     mgr = _voice_manager(server)
 
     async def _stream() -> AsyncIterator[bytes]:

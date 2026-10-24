@@ -13,6 +13,10 @@ Client → Server::
   {"type": "mousemove", "x": 150, "y": 250, "button": "left", "buttons": 1}
   {"type": "mousemove", "x": 160, "y": 260, "button": "none", "buttons": 0}
   {"type": "mouseup", "x": 150, "y": 250, "button": "left", "buttons": 0}
+  {"type": "type", "text": "中文 / pasted text"}
+  {"type": "keydown", "key": "Backspace", "code": "Backspace", "keyCode": 8,
+   "ctrlKey": false, "altKey": false, "metaKey": false, "shiftKey": false}
+  {"type": "keyup", "key": "Backspace", "code": "Backspace", "keyCode": 8}
   {"type": "stop"}
 
 Server → Client::
@@ -224,6 +228,105 @@ def _cdp_click_count(msg: dict[str, Any]) -> int:
         return 1
 
 
+_KEY_CODES = {
+    "Backspace": 8,
+    "Tab": 9,
+    "Enter": 13,
+    "Shift": 16,
+    "Control": 17,
+    "Alt": 18,
+    "CapsLock": 20,
+    "Escape": 27,
+    " ": 32,
+    "PageUp": 33,
+    "PageDown": 34,
+    "End": 35,
+    "Home": 36,
+    "ArrowLeft": 37,
+    "ArrowUp": 38,
+    "ArrowRight": 39,
+    "ArrowDown": 40,
+    "Insert": 45,
+    "Delete": 46,
+    "Meta": 91,
+}
+
+
+def _key_commands(msg: dict[str, Any], key: str) -> list[str]:
+    """Explicit editor commands also work when client/server OSes differ."""
+    shift = bool(msg.get("shiftKey"))
+    if (msg.get("ctrlKey") or msg.get("metaKey")) and not msg.get("altKey"):
+        command = {
+            "a": "selectAll",
+            "c": "copy",
+            "x": "cut",
+            "z": "redo" if shift else "undo",
+            "y": "redo",
+        }.get(key.lower())
+        return [command] if command else []
+    if msg.get("altKey") or msg.get("ctrlKey") or msg.get("metaKey"):
+        return []
+    command = {
+        "Backspace": "deleteBackward",
+        "Delete": "deleteForward",
+        "ArrowLeft": "moveLeft",
+        "ArrowRight": "moveRight",
+        "ArrowUp": "moveUp",
+        "ArrowDown": "moveDown",
+        "Home": "moveToBeginningOfLine",
+        "End": "moveToEndOfLine",
+        "PageUp": "movePageUp",
+        "PageDown": "movePageDown",
+    }.get(key)
+    if command and shift and command.startswith("move"):
+        command += "AndModifySelection"
+    return [command] if command else []
+
+
+async def _dispatch_key(sess: Any, msg: dict[str, Any]) -> None:
+    key = str(msg.get("key") or "")
+    if not key or key in {"Process", "Dead", "Unidentified"}:
+        return
+    key_up = msg.get("type") == "keyup"
+    modifiers = sum(
+        mask
+        for name, mask in (("altKey", 1), ("ctrlKey", 2), ("metaKey", 4), ("shiftKey", 8))
+        if msg.get(name)
+    )
+    key_code = int(msg.get("keyCode") or _KEY_CODES.get(key, 0))
+    if not key_code and len(key) == 1 and key.isascii() and key.isalnum():
+        key_code = ord(key.upper())
+    if not key_code and key.startswith("F") and key[1:].isdigit() and 1 <= int(key[1:]) <= 24:
+        key_code = 111 + int(key[1:])
+    params: dict[str, Any] = {
+        "type": "keyUp" if key_up else "rawKeyDown",
+        "key": key,
+        "code": str(msg.get("code") or key),
+        "windowsVirtualKeyCode": key_code,
+        "modifiers": modifiers,
+        "location": int(msg.get("location") or 0),
+    }
+    if not key_up:
+        params["autoRepeat"] = bool(msg.get("repeat"))
+        commands = _key_commands(msg, key)
+        if commands:
+            params["commands"] = commands
+        if key == "Enter" and not modifiers & 7:
+            params.update(type="keyDown", text="\r", unmodifiedText="\r")
+    await sess._internal.client.send("Input.dispatchKeyEvent", params)  # noqa: SLF001
+    # Older dashboards send a complete press as keydown, without code/keyup.
+    if not key_up and "code" not in msg:
+        await sess._internal.client.send(  # noqa: SLF001
+            "Input.dispatchKeyEvent",
+            {
+                k: v
+                for k, v in params.items()
+                if k not in {"text", "unmodifiedText", "commands", "autoRepeat"}
+            }
+            | {"type": "keyUp"},
+        )
+
+
 async def _handle_client_event(sess: Any, msg: dict[str, Any]) -> None:
     t = msg.get("type")
     if t == "navigate":
@@ -301,11 +404,9 @@ async def _handle_client_event(sess: Any, msg: dict[str, Any]) -> None:
     elif t == "type":
         text = str(msg.get("text") or "")
         if text:
-            await sess.type(text)
-    elif t == "keydown":
-        key = str(msg.get("key") or "")
-        if key in ("Enter",):
-            await sess.type("\n")
+            await sess._internal.client.send("Input.insertText", {"text": text})  # noqa: SLF001
+    elif t in ("keydown", "keyup"):
+        await _dispatch_key(sess, msg)
     elif t == "tab_switch":
         tab_id = msg.get("tab_id")
         if tab_id is not None:

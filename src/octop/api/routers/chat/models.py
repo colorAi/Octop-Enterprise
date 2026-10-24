@@ -26,6 +26,7 @@ class ChatTurnBody(BaseModel):
     """User turn payload — same fields for WebSocket ``user_turn`` and legacy HTTP bodies."""
 
     device: DeviceSelection | None = None
+    client_request_id: str | None = Field(default=None, min_length=1, max_length=200)
 
     messages: list[dict[str, Any]] = Field(
         default_factory=list,
@@ -97,6 +98,7 @@ class ChatTurnBody(BaseModel):
         model = payload.get("model") or payload.get("default_model")
         return cls(
             device=payload.get("device"),
+            client_request_id=payload.get("client_request_id"),
             messages=messages,
             thread_id=str(payload["thread_id"]) if payload.get("thread_id") else None,
             session_key=str(payload["session_key"]) if payload.get("session_key") else None,
@@ -150,6 +152,7 @@ class UserTurnWsFrame(BaseModel):
 
     type: Literal["user_turn", "ping"] = "user_turn"
     device: DeviceSelection | None = None
+    client_request_id: str | None = Field(default=None, min_length=1, max_length=200)
     text: str | None = None
     session_key: str | None = None
     thread_id: str | None = None

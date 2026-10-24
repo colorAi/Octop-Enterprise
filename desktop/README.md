@@ -9,6 +9,7 @@ All desktop-client code lives here. This is **not** `src/octop/infra/desktop`
 |------|------|
 | [`portable/`](portable/) | Portable Python runtime and application packaging |
 | [`src/`](src/) | Wails v3 shell: load bundled zip, spawn Octop, tray/settings |
+| [`package-dev.sh`](package-dev.sh) | Start the source backend and Wails shell for local development |
 | [`package-release.sh`](package-release.sh) | Native end-to-end portable + Wails release build |
 
 ## Data directory
@@ -71,7 +72,17 @@ The server must enable `device_channel_enabled` and `company_runtime_enabled`
 (or `OCTOP_DEVICE_CHANNEL_ENABLED=1` and `OCTOP_COMPANY_RUNTIME_ENABLED=1`)
 for company desktop tasks. Both HTTP/WS and HTTPS/WSS
 are supported. HTTP needs no certificate; HTTPS uses normal system certificate
-validation. Neither mode requires a public address. Contacts and employee messaging are
+validation. Neither mode requires a public address.
+
+On macOS, allow **Local Network** access when prompted. If the first connection fails
+while the permission prompt is open, allow access and try again. Previously denied
+access can be enabled in **System Settings → Privacy & Security → Local Network**
+for Octop Enterprise. Both production and development app bundles declare why this
+access is needed. Use an Apple-issued Developer ID for distributed macOS builds so
+the system can reliably identify the app across updates; ATS local-network settings
+alone do not grant the user's local-network permission.
+
+Contacts and employee messaging are
 available after signing in even when the local runtime is unavailable. Password/LDAP authentication and the server's
 configured CAPTCHA are checked by the existing authentication endpoint.
 Login errors stay on the same form. A successful sign-in transfers the session
@@ -182,6 +193,16 @@ The packager refuses missing dependencies and mismatched verification records. T
 all listed files before first launch. Tool payload updates use content-addressed
 directories, preserving account receipts and project files during rollback.
 
+Successful tool checks are persisted under `~/.octop/company-runtime/tool-checks/`
+(or the configured `OCTOP_HOME`). Later launches reuse that result, reading only
+the manifest and startup-file metadata instead of hashing the complete payload
+again. A changed archive, manifest or startup file triggers a full check and, if
+needed, repairs the installed tools. Failed checks are never cached. A worker
+that fails to start invalidates its receipt for the next attempt. Existing
+installations perform one complete check to create the receipt. The **Check
+tools** button in local workspace settings explicitly repeats the full check;
+ordinary startup and status refreshes reuse the cache.
+
 The runtime requires Harness 1.0.3 and Gateway 1.0.2 or later, as specified by
 the source dependencies. Rebuild the company runtime payload and native shell
 together; Harness 1.0.2 payloads fail the server/client version check.
@@ -211,7 +232,7 @@ for setup, supported workflows and data boundaries.
 
 Run the following from the repository root; **`desktop/src`** contains the Wails
 project (`Taskfile.yml` and `build/config.yml`). Requires **Go 1.25+**, [Wails v3](https://v3.wails.io/)
-`v3.0.0-beta.13`.
+`v3.0.0-beta.13`, Node.js/npm and Python 3.11+.
 
 ```bash
 go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-beta.13
@@ -222,7 +243,60 @@ wails3 task package ARCH=arm64 VERSION="<version>" \
   PORTABLE_ZIP="../portable/release/Octop-portable-darwin-arm64-<version>.zip"
 ```
 
-Dev against an already-running Octop (skips the bundled green zip):
+To start the source backend with hot reload and the Wails development shell
+together, run this from the repository root (also requires `uv`):
+
+```bash
+desktop/package-dev.sh
+```
+
+The script owns the backend process on port 8088 (`OCTOP_PORT` overrides it)
+and stops the backend and Wails supervisors on exit, Ctrl+C or SIGTERM.
+It synchronizes Python dependencies against `uv.lock` before waiting for server
+readiness. Frontend dependencies are installed on the first build, when
+`dashboard/package.json` or `package-lock.json` changes, or when the installed
+dependency directory is missing. Unchanged dependencies are reused on later starts.
+
+Python source changes under `src/octop` restart the backend through `watchfiles`;
+Go changes rebuild the Wails shell. The temporary bind address and port are passed
+through the environment and do not overwrite `config.json`. The backend health
+check always targets the local port, even when `OCTOP_DESKTOP_URL` selects a
+different independent-mode UI.
+
+The script enables the device channel
+and company runtime API on that backend by default, so employee sign-in at
+`http://127.0.0.1:8088` can pair the local device. Explicit values of
+`OCTOP_DEVICE_CHANNEL_ENABLED` and `OCTOP_COMPANY_RUNTIME_ENABLED` take precedence.
+The local address is also the initial employee sign-in default; a saved server
+address or an explicit `OCTOP_COMPANY_URL` retains precedence. Check the address
+in the login form when switching between local development and company servers.
+After changing these flags, stop the existing backend and restart the script;
+reopening only the client does not change the running server configuration.
+
+Wails builds the bundled login and `company-dashboard.zip` before compiling the shell. The employee dashboard
+is a build-time snapshot; restart the development session after changing its
+frontend source. This script does not assemble the offline employee tool runtime;
+use `package-company.py` for complete employee installers. To test local tasks
+in a development shell, set `OCTOP_DESKTOP_PORTABLE_ZIP` to an architecture-matched
+company runtime ZIP produced under `build-company/payloads/` by `package-company.py`:
+
+```bash
+OCTOP_DESKTOP_PORTABLE_ZIP=/absolute/path/Octop-darwin-arm64.zip \
+  desktop/package-dev.sh
+```
+
+Use the payload for the current OS and architecture. Relative paths are resolved
+from the caller's directory. Device pairing alone does not supply Python, document
+libraries or FFmpeg. The employee worker runs the Python source inside this ZIP;
+rebuild that payload and restart the shell to test worker changes. Backend reload
+does not update an already packaged employee worker.
+
+Development uses the configured `OCTOP_HOME`, or `~/.octop` by default. Set a
+separate `OCTOP_HOME` before starting if the development server and client should
+use independent accounts, configuration and local state.
+
+Dev against an already-running Octop (skips the bundled green zip in independent
+local mode; employee sign-in still uses the server address in the login form):
 
 ```bash
 cd desktop/src
@@ -274,7 +348,7 @@ bar image to the full `NSStatusBar` thickness (22pt) where the glyph should be
 other app. On macOS the Dock icon comes from the bundle's `icons.icns` only —
 see `applyAppIcon` in `src/icons_darwin.go`.
 
-Enterprise source/manifest checks and the native acceptance matrix: [deployment guide](../docker/enterprise/README_EN.md). Before local Wails builds, run `npm ci --prefix dashboard` from the repository root; the shared build task then generates and verifies login assets.
+Enterprise source/manifest checks and the native acceptance matrix: [deployment guide](../docker/enterprise/README_EN.md). Before local Wails builds, run `npm ci --prefix dashboard` from the repository root; the shared build task then generates the login assets and complete employee dashboard.
 
 ## Independent distribution identity
 

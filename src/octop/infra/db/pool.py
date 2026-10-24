@@ -159,13 +159,38 @@ class PostgresPool:
     def __init__(self, conninfo: str, *, min_size: int = 1, max_size: int = 8) -> None:
         from psycopg_pool import ConnectionPool
 
+        self._conninfo = conninfo
         self._pool = ConnectionPool(
             conninfo=conninfo,
             min_size=min_size,
             max_size=max_size,
+            max_waiting=32,
+            timeout=5,
             kwargs={"row_factory": _compat_row_factory},
             open=True,
         )
+
+    @contextmanager
+    def migration_lock(self) -> Iterator[None]:
+        import time
+
+        from psycopg import connect
+
+        # Initialization only. A separate session avoids exhausting a size-one
+        # transaction pool while holding the session-level migration lock.
+        with connect(self._conninfo, autocommit=True, connect_timeout=5) as conn:
+            # A blocking advisory SELECT retains its snapshot while waiting.
+            # That snapshot can deadlock a separate checkpointer connection's
+            # CREATE INDEX CONCURRENTLY. End each unsuccessful attempt first.
+            while True:
+                row = conn.execute("SELECT pg_try_advisory_lock(724003)").fetchone()
+                if row is not None and row[0]:
+                    break
+                time.sleep(0.1)
+            try:
+                yield
+            finally:
+                conn.execute("SELECT pg_advisory_unlock(724003)")
 
     @contextmanager
     def connect(self) -> Iterator[_PgConnectionProxy]:

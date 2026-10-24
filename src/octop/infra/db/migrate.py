@@ -13,11 +13,24 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from octop.infra.db.pool import DatabasePool
+from octop.infra.db.pool import DatabasePool, PostgresPool
 from octop.infra.utils.ulid import new_ulid
 
 _MIGRATIONS_DIR = Path(__file__).parent / "migrations"
 _SQL_STMT_RE = re.compile(r";\s*\n")
+
+
+def initialize_checkpoints(db: PostgresPool, conninfo: str) -> None:
+    """Migrate the shared saver before any worker can lazily open it.
+
+    The dependency's CREATE TABLE IF NOT EXISTS is not concurrency safe on
+    a fresh PostgreSQL schema. Reuse the initialization lock, including when
+    two init processes are accidentally started together.
+    """
+    from langgraph.checkpoint.postgres import PostgresSaver
+
+    with db.migration_lock(), PostgresSaver.from_conn_string(conninfo) as saver:
+        saver.setup()
 
 
 def _split_pg_sql(sql: str) -> list[str]:
@@ -1927,6 +1940,14 @@ def _apply_sqlite_migration(db: DatabasePool, version: int, path: Path) -> None:
             conn.execute("UPDATE _schema_version SET version = ?", (version,))
         return
     sql = path.read_text(encoding="utf-8")
+    if version >= 26:
+        # Development restores can retain new columns with an older watermark.
+        # Keep the SQL pair canonical while making SQLite ADD COLUMN idempotent.
+        def add_column(match: re.Match[str]) -> str:
+            _ensure_column(db, match[1], match[2], match[3].strip())
+            return ""
+
+        sql = re.sub(r"ALTER TABLE (\w+) ADD COLUMN (\w+)\s+([^;]+);", add_column, sql)
     with db.connect() as conn:
         conn.executescript(sql)
 
@@ -2013,7 +2034,88 @@ def _grant_default_nav_permissions(db: DatabasePool) -> None:
             )
 
 
+def _ensure_sandbox_budget_schema(db: DatabasePool) -> None:
+    # v29 is unreleased. Apply the same idempotent DDL to already-initialized
+    # development databases without changing the product or schema version.
+    suffix = ".pg.sql" if db.dialect == "postgresql" else ".sql"
+    sql = (_MIGRATIONS_DIR / ("029_shared_execution" + suffix)).read_text(encoding="utf-8")
+    block = sql.split("-- Sandbox memory budget:", 1)[1].split("-- End sandbox memory budget.", 1)[
+        0
+    ]
+    block = block.split("\n", 1)[1]
+    with db.transaction() as conn:
+        _apply_postgresql_migration(conn, block)
+
+
+def _ensure_optional_model_limit(db: DatabasePool) -> None:
+    """Allow zero (unlimited) on existing development v29 databases as well."""
+    with db.transaction() as conn:
+        if db.dialect == "postgresql":
+            row = conn.execute(
+                "SELECT pg_get_constraintdef(oid) FROM pg_constraint "
+                "WHERE conrelid='execution_control'::regclass "
+                "AND conname='execution_control_max_models_check'"
+            ).fetchone()
+            if row and ">= 0" in row[0]:
+                return
+            conn.execute(
+                "ALTER TABLE execution_control DROP CONSTRAINT IF EXISTS "
+                "execution_control_max_models_check"
+            )
+            conn.execute(
+                "ALTER TABLE execution_control ADD CONSTRAINT "
+                "execution_control_max_models_check CHECK (max_models>=0)"
+            )
+            conn.execute("ALTER TABLE execution_control ALTER COLUMN max_models SET DEFAULT 0")
+        else:
+            row = conn.execute(
+                "SELECT sql FROM sqlite_master WHERE type='table' AND name='execution_control'"
+            ).fetchone()
+            if re.search(r"max_models\s*>=\s*0", row[0]):
+                return
+            sql = (_MIGRATIONS_DIR / "029_shared_execution.sql").read_text(encoding="utf-8")
+            create = sql.split("CREATE TABLE IF NOT EXISTS execution_control (", 1)[1].split(
+                ");", 1
+            )[0]
+            conn.execute("CREATE TABLE execution_control_next (" + create + ")")
+            conn.execute("INSERT INTO execution_control_next SELECT * FROM execution_control")
+            conn.execute("DROP TABLE execution_control")
+            conn.execute("ALTER TABLE execution_control_next RENAME TO execution_control")
+
+
+def _ensure_source_definition_trigger(db: DatabasePool) -> None:
+    """Repair v29: lifecycle timestamps/state must not invalidate published experts."""
+    suffix = ".pg.sql" if db.dialect == "postgresql" else ".sql"
+    sql = (_MIGRATIONS_DIR / ("029_shared_execution" + suffix)).read_text(encoding="utf-8")
+    with db.transaction() as conn:
+        if db.dialect == "postgresql":
+            statement = next(
+                line
+                for line in sql.splitlines()
+                if line.startswith("CREATE FUNCTION octop_source_agent_dirty()")
+            )
+            conn.execute(statement.replace("CREATE FUNCTION", "CREATE OR REPLACE FUNCTION", 1))
+        else:
+            statement = next(
+                line
+                for line in sql.splitlines()
+                if line.startswith("CREATE TRIGGER IF NOT EXISTS source_agent_update ")
+            )
+            conn.execute("DROP TRIGGER IF EXISTS source_agent_update")
+            conn.execute(statement)
+
+
 def run_migrations(db: DatabasePool) -> None:
+    if isinstance(db, PostgresPool):
+        # One initialization job at a time, including compatibility repairs.
+        # The lock lives on a dedicated checked-out session until all work ends.
+        with db.migration_lock():
+            _run_migrations(db)
+        return
+    _run_migrations(db)
+
+
+def _run_migrations(db: DatabasePool) -> None:
     if db.dialect == "sqlite":
         _repair_legacy_schema(db)
     for version, path in _discover(db.dialect):
@@ -2065,4 +2167,7 @@ def run_migrations(db: DatabasePool) -> None:
     _ensure_sso_provider_kind_schema(db)
     _ensure_user_role_schema(db)
     _ensure_bridge_connections_schema(db)
+    _ensure_sandbox_budget_schema(db)
+    _ensure_optional_model_limit(db)
+    _ensure_source_definition_trigger(db)
     _grant_default_nav_permissions(db)

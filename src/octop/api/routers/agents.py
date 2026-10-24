@@ -11,6 +11,7 @@ from fastapi.responses import Response
 
 from octop.api.common.agent import assert_agent_access_row, assert_agent_owner
 from octop.api.common.agent_runtime import AgentRuntimeFields, runtime_field_updates
+from octop.api.common.reads import management_read
 from octop.api.common.validators import assert_user_backend_root_dirs
 from octop.api.common.workspace import require_agent_workspace
 from octop.api.deps import current_user, get_server
@@ -212,7 +213,61 @@ def _row_dict(
     payload["requires_private_instance"] = (
         isolation_enabled() and payload["is_shared"] and not payload["is_owner"]
     )
+    services = getattr(server, "services", None)
+    assignments = getattr(services, "expert_assignment_repo", None)
+    if assignments is not None:
+        instance = assignments.instance(row.agent_id)
+        if instance is not None:
+            payload.update(managed=True, can_edit=False)
+        if viewer_user_id is not None and row.user_id == viewer_user_id:
+            from octop.infra.users.expert_access import ExpertAccess
+
+            access = ExpertAccess(services)
+            unavailable = (
+                not assignments.granted(
+                    viewer_user_id, instance["source_agent_id"], instance["source_row_id"]
+                )
+                if instance
+                else access.assigned_only(viewer_user_id)
+            )
+            if unavailable:
+                payload.update(
+                    history_only=True,
+                    managed=False,
+                    can_edit=False,
+                    requires_private_instance=False,
+                    state="running",
+                    last_error=None,
+                )
     return payload
+
+
+def _assigned_source_dict(row: Any) -> dict[str, Any]:
+    """A picker entry contains no source owner's prompt, config or filesystem paths."""
+    return {
+        "id": row.id,
+        "agent_id": row.agent_id,
+        "name": row.name,
+        "description": row.description,
+        "state": row.last_state or "running",
+        "icon": row.icon,
+        "icon_name": row.icon_name,
+        "icon_url": None,
+        "color": row.color,
+        "kind": "expert",
+        "config": {},
+        "system_prompt": None,
+        "default_model": None,
+        "persona_mbti": None,
+        "last_error": None,
+        "template_name": None,
+        "is_owner": False,
+        "is_shared": False,
+        "managed": True,
+        "can_edit": False,
+        "requires_private_instance": True,
+        "bootstrap_pending": False,
+    }
 
 
 @router.get("", summary="List agents")
@@ -223,6 +278,9 @@ async def list_agents(
         "mine",
         description="mine: agents owned by the current user; all: every agent (admin only)",
     ),
+    owner_user_id: int | None = Query(
+        None, ge=1, description="Filter scope=all by owner (users permission required)"
+    ),
 ) -> list[dict[str, Any]]:
     """List agents for the dashboard.
 
@@ -230,6 +288,20 @@ async def list_agents(
     agents other users have explicitly shared.
     Holders of the ``users`` permission (and admins) may pass ``scope=all``.
     """
+    payloads = await management_read(server, _list_agents, user, server, scope, owner_user_id)
+    resources = getattr(server, "employee_resources", None)
+    if resources is not None and scope == "mine":
+        for payload in payloads:
+            if payload.get("managed"):
+                payload.update(await resources.display_profile(user.id, payload["agent_id"]))
+    return payloads
+
+
+def _list_agents(
+    user: Any, server: Any, scope: str, owner_user_id: int | None
+) -> list[dict[str, Any]]:
+    if owner_user_id is not None and scope != "all":
+        raise OctopError(ErrorCode.FORBIDDEN, "owner filtering requires scope=all")
     if scope == "all" and not user_has_permission(user, "users"):
         raise OctopError(
             ErrorCode.FORBIDDEN,
@@ -239,8 +311,51 @@ async def list_agents(
 
     assert server.app_runtime is not None
     registry = server.app_runtime.agent_registry
+    from octop.infra.users.expert_access import ExpertAccess
+
+    access = ExpertAccess(server.services)
+    if access.assigned_only(user.id):
+        if scope != "mine":
+            raise OctopError(ErrorCode.FORBIDDEN, "assigned experts only")
+        state = access.repo.state(user.id)
+        mappings = {m["source_agent_id"]: m for m in access.repo.instances(user.id)}
+        payloads = []
+        for source_id in (state or {}).get("expert_ids", []):
+            if not access.repo.granted(user.id, source_id):
+                continue
+            mapping = mappings.get(source_id)
+            instance = registry.get_row(mapping["instance_agent_id"]) if mapping else None
+            if mapping is not None and instance is not None and mapping["state"] == "ready":
+                payloads.append(_row_dict(instance, viewer_user_id=user.id, server=server))
+            else:
+                source = registry.get_row(source_id)
+                if source is not None:
+                    payloads.append(_assigned_source_dict(source))
+        # Assignment changes revoke execution, not ownership of past chats.
+        visible = {payload["agent_id"] for payload in payloads}
+        for old in server.services.agent_repo.list_by_user(user.id):
+            if old.agent_id in visible or not server.services.thread_repo.list_by_agent_user(
+                agent_id=old.agent_id, user_id=user.id, limit=1
+            ):
+                continue
+            payloads.append(
+                {
+                    **_row_dict(old, viewer_user_id=user.id, server=server),
+                    "history_only": True,
+                    "managed": False,
+                    "can_edit": False,
+                    "requires_private_instance": False,
+                    "state": "running",
+                    "last_error": None,
+                }
+            )
+        return _attach_unread_counts(server, user.id, payloads)
     if scope == "all":
-        rows = registry.list_rows()
+        rows = (
+            server.services.agent_repo.list_by_user(owner_user_id)
+            if owner_user_id is not None
+            else registry.list_rows()
+        )
         user_ids = {r.user_id for r in rows if r.user_id is not None}
         username_by_id: dict[int, str] = {}
         for uid in user_ids:
@@ -252,7 +367,7 @@ async def list_agents(
                 r,
                 viewer_user_id=user.id,
                 owner_username=username_by_id.get(r.user_id) if r.user_id is not None else None,
-                bootstrap_pending=_bootstrap_pending_for(server, r.agent_id),
+                bootstrap_pending=not registry.is_bootstrapped_for_display(r.agent_id),
                 server=server,
             )
             for r in rows
@@ -262,6 +377,15 @@ async def list_agents(
     owned = registry.list_agents(user.id)
     shared = server.services.agent_repo.list_shared(exclude_user_id=user.id)
     rows = list({row.agent_id: row for row in [*shared, *owned]}.values())
+    visible_rows = []
+    for row in rows:
+        mapping = access.repo.instance(row.agent_id)
+        if mapping is None or (
+            row.user_id == user.id
+            and access.repo.granted(user.id, mapping["source_agent_id"], mapping["source_row_id"])
+        ):
+            visible_rows.append(row)
+    rows = visible_rows
     shared_owner_username_by_id: dict[int, str] = {}
     for row in shared:
         if row.user_id is None or row.user_id in shared_owner_username_by_id:
@@ -279,7 +403,7 @@ async def list_agents(
                 owner_username=(
                     shared_owner_username_by_id.get(r.user_id) if r.user_id is not None else None
                 ),
-                bootstrap_pending=_bootstrap_pending_for(server, r.agent_id),
+                bootstrap_pending=not registry.is_bootstrapped_for_display(r.agent_id),
                 server=server,
             )
             for r in rows
@@ -296,7 +420,13 @@ async def private_instance(
     server: Any = Depends(get_server),
 ) -> dict[str, str]:
     assert server.app_runtime is not None
-    row = await server.app_runtime.agent_registry.instantiate_shared(agent_id, user.id)
+    from octop.infra.users.expert_access import ExpertAccess
+
+    access = ExpertAccess(server.services)
+    if access.assigned_only(user.id) or access.repo.granted(user.id, agent_id):
+        row = await access.instantiate(server.app_runtime.agent_registry, agent_id, user.id)
+    else:
+        row = await server.app_runtime.agent_registry.instantiate_shared(agent_id, user.id)
     return {"agent_id": row.agent_id}
 
 
@@ -385,13 +515,17 @@ async def get_agent(
     if row is None:
         raise OctopError(ErrorCode.AGENT_NOT_FOUND, f"agent {agent_id!r} not found")
     assert_agent_access_row(row, user)
-    return _row_dict(
+    payload = _row_dict(
         row,
         viewer_user_id=user.id,
         owner_username=_owner_username(server, row),
         bootstrap_pending=_bootstrap_pending_for(server, agent_id),
         server=server,
     )
+    resources = getattr(server, "employee_resources", None)
+    if resources is not None and payload.get("managed"):
+        payload.update(await resources.display_profile(user.id, agent_id))
+    return payload
 
 
 _assert_agent_owner = assert_agent_owner
@@ -511,8 +645,16 @@ async def get_agent_avatar(
     server: Any = Depends(get_server),
 ) -> Response:
     """Return the uploaded avatar bytes. Owner or shared-agent viewers."""
-    workspace = await require_agent_workspace(agent_id, user=user, server=server, owner_only=False)
-    found = await read_workspace_avatar(workspace)
+    resources = getattr(server, "employee_resources", None)
+    definition = await resources.display_definition(user.id, agent_id) if resources else None
+    if definition is not None:
+        assert resources is not None
+        found = await resources.display_avatar(definition)
+    else:
+        workspace = await require_agent_workspace(
+            agent_id, user=user, server=server, owner_only=False
+        )
+        found = await read_workspace_avatar(workspace)
     if found is None:
         raise OctopError(ErrorCode.NOT_FOUND, "avatar not uploaded")
     data, media_type = found

@@ -16,6 +16,7 @@ from typing import Any
 from fastapi import Request
 from fastapi.responses import JSONResponse
 
+from octop.api.common.reads import management_read
 from octop.api.deps import (
     ACCESS_TOKEN_RESPONSE_HEADER,
     authenticate_request,
@@ -24,6 +25,7 @@ from octop.api.deps import (
     maybe_sliding_renew_token,
 )
 from octop.infra.errors import OctopError
+from octop.infra.utils.bounded_io import BoundedIO
 
 _INSTALL_ATTR = "_octop_jwt_auth_installed"
 logger = logging.getLogger(__name__)
@@ -33,6 +35,8 @@ def install(app: Any, server: Any) -> None:
     if getattr(app, _INSTALL_ATTR, False):
         return
     setattr(app, _INSTALL_ATTR, True)
+    if getattr(server, "management_io", None) is None:
+        server.management_io = BoundedIO()
 
     @app.middleware("http")  # type: ignore[untyped-decorator]
     async def _jwt_auth(
@@ -48,7 +52,9 @@ def install(app: Any, server: Any) -> None:
             access_token=request.query_params.get("access_token"),
         )
         try:
-            request.state.octop_user = authenticate_request(request, server)
+            request.state.octop_user = await management_read(
+                server, authenticate_request, request, server
+            )
         except OctopError as exc:
             # Middleware returns directly (skips FastAPI exception handlers).
             if exc.status >= 500:
@@ -64,7 +70,9 @@ def install(app: Any, server: Any) -> None:
         response = await call_next(request)
         if raw is not None:
             try:
-                renewed = maybe_sliding_renew_token(server, raw, request.state.octop_user)
+                renewed = await management_read(
+                    server, maybe_sliding_renew_token, server, raw, request.state.octop_user
+                )
             except OctopError:
                 renewed = None
             if renewed:

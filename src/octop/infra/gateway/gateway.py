@@ -110,6 +110,7 @@ class Gateway:
     ) -> None:
         self._agent_manager = agent_manager
         self._repos = repos
+        self.owns_user: Callable[[int | None], bool] = lambda _: True
         self._trajectory_service = trajectory_service
         self._history_archive = history_archive
         self._thread_registry = ThreadRegistry(
@@ -149,6 +150,19 @@ class Gateway:
 
     async def cancel_dashboard_turn(self, agent_id: str, thread_id: str) -> None:
         """Stop both the active stream and its queued continuation instructions."""
+        execution = getattr(self._processor, "execution", None)
+        if execution is not None:
+            service = execution.service
+            run = await service.io.run(service.repo.active, thread_id)
+            if run is not None and run["agent_id"] == agent_id:
+                await service.io.run(
+                    service.repo.command,
+                    run["run_id"],
+                    user=run["user_id"],
+                    key="cancel",
+                    kind="cancel",
+                    payload={},
+                )
         self._steer.mark_cancelling(thread_id)
         discarded = self._steer.discard(thread_id, reason="turn_cancelled")
         self._agent_manager.cancel_stream(agent_id, thread_id)
@@ -235,7 +249,7 @@ class Gateway:
             "updated_at": status.updated_at,
         }
 
-    async def boot(self) -> None:
+    async def boot(self, *, defer_channels: bool = False) -> None:
         from octop.infra.gateway.process.channel_thinking import (
             install_channel_thinking_clean,
         )
@@ -279,7 +293,7 @@ class Gateway:
         await self._channel_manager.add_channel(self._cli_channel)
 
         rows = self._repos.channel_repo.list_all(include_disabled=False)
-        if rows:
+        if rows and not defer_channels:
             await asyncio.gather(*(self._safe_register_channel(row) for row in rows))
 
         logger.info("Gateway booted")
@@ -297,7 +311,7 @@ class Gateway:
             channel = self._channel_manager.get_channel(row.channel_id)
             if channel is None:
                 continue
-            backend = media_backend_for_agent(self._agent_manager, row.agent_id)
+            backend = self._channel_media_backend(row.agent_id)
             if backend is not None:
                 channel.set_media_backend(backend)
 
@@ -691,6 +705,8 @@ class Gateway:
         )
 
     async def _safe_register_channel(self, row: ChannelRow) -> None:
+        if not self.owns_user(row.user_id):
+            return
         try:
             await self._register_channel(row)
         except Exception as exc:
@@ -698,6 +714,13 @@ class Gateway:
             self._set_runtime_status(
                 row.channel_id, connected=False, reason="error", detail=str(exc)
             )
+
+    def _channel_media_backend(self, agent_id: str) -> Any:
+        if getattr(self._agent_manager, "runtime_shards", None) is not None:
+            from octop.infra.gateway.media.ingress import RuntimeMediaBackend
+
+            return RuntimeMediaBackend(self._agent_manager, agent_id)
+        return media_backend_for_agent(self._agent_manager, agent_id)
 
     async def _register_channel(self, row: ChannelRow) -> None:
         if not self._channel_manager or not self._processor:
@@ -732,7 +755,7 @@ class Gateway:
         )
         registered = manager.get_channel(row.channel_id)
         if registered is not None:
-            backend = media_backend_for_agent(self._agent_manager, row.agent_id)
+            backend = self._channel_media_backend(row.agent_id)
             if backend is not None:
                 registered.set_media_backend(backend)
         self._set_runtime_status(row.channel_id, connected=True)

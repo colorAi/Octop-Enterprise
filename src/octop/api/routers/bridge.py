@@ -282,6 +282,10 @@ async def list_remote_agents(
     user: Any = Depends(current_user),
     server: Any = Depends(get_server),
 ) -> list[dict[str, Any]]:
+    from octop.infra.users.expert_access import ExpertAccess
+
+    if ExpertAccess(server.services).assigned_only(user.id):
+        return []
     mgr = _bridge(server)
     agents = await mgr.list_remote_agents(connection_id, owner_user_id=user.id)
     return [cast(dict[str, Any], item) for item in agents]

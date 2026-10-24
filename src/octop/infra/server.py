@@ -8,7 +8,7 @@ import logging
 import os
 import shutil
 import time
-from contextlib import suppress
+from contextlib import closing, suppress
 from dataclasses import dataclass
 from logging.handlers import TimedRotatingFileHandler
 from pathlib import Path
@@ -247,7 +247,13 @@ class AppRuntime:
 
 
 class OctopServer:
-    def __init__(self, home: Path | None = None) -> None:
+    def __init__(self, home: Path | None = None, *, role: str = "monolith") -> None:
+        from octop.infra.utils.bounded_io import BoundedIO
+
+        self.management_io = BoundedIO()
+        self.role = role
+        self.execution: Any = None
+        self.runtime_shards: Any = None
         self._home = home or PathLayout.from_env().root
         self.paths = PathLayout(self._home)
         self.config: OctopConfig | None = None
@@ -258,6 +264,7 @@ class OctopServer:
         self.plugin_manager: PluginManager | None = None
         self.wizard_tokens = WizardTokenStore(ttl_seconds=300)
         self.communication: CommunicationBridge | None = None
+        self.employee_resources: Any = None
         self.devices: DeviceManager | None = None
         self._started = False
         self._started_at: int | None = None
@@ -328,6 +335,20 @@ class OctopServer:
         return self.services is not None and self.app_runtime is not None
 
     async def start(self) -> None:
+        try:
+            await self._start()
+        except BaseException:
+            if self.role == "worker":
+                if self.execution is not None:
+                    await self.execution.close(grace=0)
+                if self.app_runtime is not None:
+                    self._started = True
+                    await self.stop()
+                elif self.services is not None:
+                    self.services.db.close()
+            raise
+
+    async def _start(self) -> None:
         if self._started:
             return
         self.paths.ensure_root()
@@ -358,8 +379,9 @@ class OctopServer:
             plugins_dir=self.paths.plugins_dir,
             config_path=self.paths.config,
         )
-        self.plugin_manager.seed_bundled()
-        self.plugin_manager.load_installed(install_deps=True)
+        if self.role == "monolith":
+            self.plugin_manager.seed_bundled()
+        self.plugin_manager.load_installed(install_deps=self.role == "monolith")
 
         import time  # noqa: PLC0415
 
@@ -372,12 +394,79 @@ class OctopServer:
             return
 
         db = open_database(config, self.paths)
-        run_migrations(db)
+        if self.role == "worker":
+            from octop.infra.execution.roles import require_initialized
+
+            require_initialized(db)
+        else:
+            run_migrations(db)
         self.services = build_shared_services(db=db, paths=self.paths, config=config)
+        if self.role == "monolith" and self.services.execution_repo.mode() == "distributed-v1":
+            db.close()
+            raise ValueError(
+                "this database uses web/worker roles; stop the old monolith before cutover"
+            )
+        if self.role == "worker":
+            from docker.client import DockerClient
+
+            from octop.infra.execution.profiles import profile
+            from octop.infra.execution.service import ExecutionService
+            from octop.infra.execution.stop_verifier import worker_identity
+
+            node = os.environ.get("OCTOP_NODE_ID", "")
+            incarnation = os.environ.get("OCTOP_NODE_INCARNATION", "")
+
+            def inspect_identity() -> tuple[str, str]:
+                with closing(DockerClient.from_env(timeout=5)) as client:
+                    return worker_identity(
+                        client,
+                        os.environ.get("OCTOP_CONTAINER_ID") or os.environ.get("HOSTNAME", ""),
+                        node,
+                        incarnation,
+                    )
+
+            container_id, incarnation = await self.management_io.run(inspect_identity)
+
+            self.execution = ExecutionService(
+                self.services.execution_repo,
+                node=node,
+                incarnation=incarnation,
+                role="worker",
+                conninfo=config.database.postgresql_conninfo(),
+                container_id=container_id,
+                capacity=profile().running,
+            )
+            await self.execution.io.run(
+                self.execution.repo.register,
+                self.execution.node,
+                self.execution.incarnation,
+                "worker",
+                container_id=self.execution.container_id,
+                ttl=300,
+            )
+            from octop.infra.execution.shards import RuntimeShards
+
+            self.runtime_shards = RuntimeShards(self)
+            if self.runtime_shards.primary:
+                await self.execution.io.run(
+                    self.execution.repo.reserve_runtime_host,
+                    self.execution.node,
+                    self.execution.incarnation,
+                )
+            await self.execution.start_lease()
+            from octop.infra.backend.isolation import configure_execution_tracking
+
+            configure_execution_tracking(
+                self.execution.repo, self.execution.node, self.execution.incarnation
+            )
         from octop.infra.auth.captcha import boot_from_services  # noqa: PLC0415
 
         boot_from_services(self.services.settings_repo, self.services.secret_repo)
-        self._ensure_jwt_secret()
+        if self.role == "worker":
+            if self.services.secret_repo.get("jwt") is None:
+                raise ValueError("JWT secret missing; run the one-time init role")
+        else:
+            self._ensure_jwt_secret()
         await self._boot_runtime(config)
         self._started = True
         assert self.user_manager is not None
@@ -429,6 +518,7 @@ class OctopServer:
             expert_catalog=self.expert_catalog,
             plugin_manager=self.plugin_manager,
         )
+        registry.runtime_shards = self.runtime_shards
 
         from octop.infra.history.trajectory.live import TrajectoryLiveBus  # noqa: PLC0415
         from octop.infra.history.trajectory.service import TrajectoryService  # noqa: PLC0415
@@ -469,7 +559,10 @@ class OctopServer:
             trajectory_service=trajectory_service,
             history_archive=history_archive,
         )
-        await gateway.boot()
+        if self.role == "worker":
+            await gateway.boot(defer_channels=True)
+        else:
+            await gateway.boot()
 
         from octop import __version__  # noqa: PLC0415
 
@@ -494,15 +587,23 @@ class OctopServer:
             repos=self.services.repos,
             timezone=config.default_timezone,
         )
-        await cron_mgr.boot()
+        if self.runtime_shards is not None:
+            cron_mgr.owns_user = self.runtime_shards.owns_user
+            gateway.owns_user = self.runtime_shards.owns_user
+        if self.role == "worker":
+            await cron_mgr.boot(paused=True)
+        else:
+            await cron_mgr.boot()
 
         from octop.infra.setup.tls.renewal import install_auto_renewal_job
 
-        install_auto_renewal_job(cron_mgr, paths=self.paths)
+        if self.runtime_shards is None or self.runtime_shards.primary:
+            install_auto_renewal_job(cron_mgr, paths=self.paths)
 
         from octop.infra.backup.auto import install_auto_backup_job
 
-        install_auto_backup_job(cron_mgr, server=self)
+        if self.runtime_shards is None or self.runtime_shards.primary:
+            install_auto_backup_job(cron_mgr, server=self)
 
         registry.set_cron_manager(cron_mgr)
         registry.set_team_processor(gateway.processor.teams)
@@ -525,13 +626,19 @@ class OctopServer:
             default_timezone=config.default_timezone,
         )
         registry.set_proactive_scheduler(proactive_scheduler)
+        if self.runtime_shards is not None:
+            proactive_scheduler.owns_user = self.runtime_shards.owns_user
 
-        await registry.boot()
+        if self.role == "worker":
+            await registry.boot(lazy=True)
+        else:
+            await registry.boot()
         await gateway.refresh_media_backends()
 
         user_mgr = UserManager(self.services)
         await user_mgr.boot()
-        await proactive_scheduler.start_all()
+        if self.role == "monolith":
+            await proactive_scheduler.start_all()
 
         from octop.infra.auth.tokens import sign_token
         from octop.infra.bridge.manager import BridgeManager, public_base_url_from_config
@@ -561,6 +668,8 @@ class OctopServer:
             advertise_base_url=advertise,
             token_signer=_sign_user_token,
         )
+        if self.runtime_shards is not None:
+            bridge_mgr.owns_user = self.runtime_shards.owns_user
 
         self.app_runtime = AppRuntime(
             agent_registry=registry,
@@ -574,16 +683,49 @@ class OctopServer:
         )
         from octop.infra.knowledge.jobs import resume_pending_index_jobs  # noqa: PLC0415
 
-        resume_pending_index_jobs(self.services)
+        if self.runtime_shards is None or self.runtime_shards.primary:
+            resume_pending_index_jobs(self.services)
         from octop.infra.communication.bridge import CommunicationBridge
 
         self.communication = CommunicationBridge(self.services)
-        await self.communication.start()
+        await self.communication.start(
+            background=self.runtime_shards is None or self.runtime_shards.primary
+        )
+        from octop.infra.users.employee_resources import EmployeeResources
+
+        self.employee_resources = EmployeeResources(self)
+        if self.runtime_shards is None or self.runtime_shards.primary:
+            await self.employee_resources.recover_temporary_files()
+        registry.employee_resources = self.employee_resources
+        if self.role == "worker":
+            from octop.infra.backend.isolation import isolation_enabled
+            from octop.infra.users.source_publication import SourcePublication
+
+            if not isolation_enabled():
+                raise ValueError("worker role requires Docker workspace isolation")
+            self.employee_resources.publication = SourcePublication(
+                self.employee_resources,
+                executor=(self.execution.node, self.execution.incarnation),
+            )
+            if self.runtime_shards.primary:
+                await self.employee_resources.publication.start()
         if config.device_channel_enabled:
             from octop.infra.devices.manager import DeviceManager
 
-            self.devices = DeviceManager(self.services.device_repo)
+            self.devices = DeviceManager(self.services.device_repo, execution=self.execution)
             registry.device_manager = self.devices
+
+        if self.role == "worker":
+            from octop.infra.execution.gateway import GatewayExecution
+
+            adapter = GatewayExecution(self, self.execution)
+            gateway.processor.execution = adapter
+            registry.execution = adapter
+            await self.execution.start()
+            await gateway.reload_channels_from_db()
+            cron_mgr.resume()
+            await proactive_scheduler.start_all()
+            await self.runtime_shards.start()
 
         # Resume Bridge links that opted into auto-reconnect (best-effort).
         async def _resume_bridges() -> None:
@@ -626,6 +768,13 @@ class OctopServer:
         if not self._started:
             return
         try:
+            if self.runtime_shards is not None:
+                await self.runtime_shards.close()
+            if self.execution is not None:
+                await self.execution.close()
+            if self.employee_resources is not None:
+                await self.employee_resources.drain()
+            await self.management_io.drain()
             from octop.infra.connectors.gateway import agently_auth
 
             await agently_auth.close()
@@ -648,6 +797,10 @@ class OctopServer:
 
             dispose_all_browse_sessions()
         finally:
+            if self.role == "worker":
+                from octop.infra.backend.isolation import clear_execution_tracking
+
+                clear_execution_tracking()
             if self.services is not None:
                 self.services.db.close()
             self.services = None
@@ -658,6 +811,11 @@ class OctopServer:
     # ----- helpers -----
 
     def _setup_logging(self) -> None:
+        if self.role != "monolith":
+            logging.basicConfig(level=os.environ.get("OCTOP_LOG_LEVEL", "info").upper())
+            logging.getLogger("httpx").setLevel(logging.WARNING)
+            logging.getLogger("httpcore").setLevel(logging.WARNING)
+            return
         log_dir = self.paths.logs_dir
         log_dir.mkdir(parents=True, exist_ok=True)
         log_path = self.paths.log

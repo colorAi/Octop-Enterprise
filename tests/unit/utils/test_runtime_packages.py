@@ -6,6 +6,7 @@ import subprocess
 import sys
 
 import pytest
+from tests.support.fakes import fake_bin_path
 
 from octop.infra.utils import runtime_packages as mod
 
@@ -119,7 +120,79 @@ def test_find_uv_binary_uses_custom_search_paths(monkeypatch, tmp_path) -> None:
     assert mod.find_uv_binary() == str(uv)
 
 
-def test_install_failed_message_hides_shell_commands() -> None:
-    msg = mod._install_failed_message("No module named pip")
-    assert "pip install" not in msg
-    assert "uv sync" not in msg
+@pytest.mark.parametrize(
+    ("uv_error", "expected_reason"),
+    [
+        ("Permission denied (os error 13)", "permission_denied"),
+        ("Read-only file system (os error 30)", "permission_denied"),
+        ("Access is denied (os error 5)", "permission_denied"),
+        ("Failed to connect to package index", "failed"),
+        ("timed out", "failed"),
+    ],
+)
+def test_pip_fallback_does_not_hide_uv_failure(
+    monkeypatch: pytest.MonkeyPatch, uv_error: str, expected_reason: str
+) -> None:
+    uv = fake_bin_path("uv")
+    calls: list[list[str]] = []
+
+    def fake_run(cmd: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        calls.append(cmd)
+        detail = uv_error if cmd[0] == uv else "No module named pip"
+        return subprocess.CompletedProcess(cmd, 1, stdout="", stderr=detail)
+
+    monkeypatch.setattr(mod, "find_uv_binary", lambda: uv)
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(mod, "pip_importable", lambda: False)
+    spec = mod.PackageInstallSpec(packages=("fastembed>=0.4",), extra_fallback="local-embedding")
+    with pytest.raises(mod.PackageInstallError) as raised:
+        mod.install_packages(spec, is_satisfied=lambda: False)
+
+    assert raised.value.reason == expected_reason
+    assert sum("ensurepip" in cmd for cmd in calls) == 1
+    assert uv_error not in str(raised.value)
+
+
+def test_ensurepip_permission_failure_is_preserved(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fake_run(cmd: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        detail = (
+            "PermissionError: environment is not writable"
+            if "ensurepip" in cmd
+            else "No module named pip"
+        )
+        return subprocess.CompletedProcess(cmd, 1, stdout="", stderr=detail)
+
+    monkeypatch.setattr(mod, "find_uv_binary", lambda: None)
+    monkeypatch.setattr(mod, "pip_importable", lambda: False)
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    with pytest.raises(mod.PackageInstallError) as raised:
+        mod.install_packages(["fastembed>=0.4"])
+    assert raised.value.reason == "permission_denied"
+
+
+def test_missing_installer_is_reported_when_no_strategy_can_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(mod, "find_uv_binary", lambda: None)
+    monkeypatch.setattr(mod, "ensure_pip_bootstrapped", lambda: (False, ""))
+    monkeypatch.setattr(
+        mod, "_run_install_command", lambda *_args, **_kwargs: (False, "No module named pip")
+    )
+    with pytest.raises(mod.PackageInstallError) as raised:
+        mod.install_packages(["fastembed>=0.4"])
+    assert raised.value.reason == "installer_missing"
+
+
+def test_successful_fallback_still_installs_after_uv_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    uv = fake_bin_path("uv")
+
+    def fake_run(cmd: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        if cmd[0] == uv:
+            return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="Permission denied")
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(mod, "find_uv_binary", lambda: uv)
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    assert mod.install_packages(["fastembed>=0.4"]) == "installed"

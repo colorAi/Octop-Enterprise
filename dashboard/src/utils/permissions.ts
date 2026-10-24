@@ -1,6 +1,7 @@
 /** Client-side helpers mirroring backend ``user_has_permission``. */
 
 export type PermissionHolder = {
+  expert_access_mode?: "legacy" | "assigned_only";
   role: "admin" | "user" | string;
   permissions?: string[] | null;
 };
@@ -95,6 +96,8 @@ export function userCan(
 ): boolean {
   if (!user) return false;
   if (user.role === "admin") return true;
+  if (key === "experts" && user.expert_access_mode === "assigned_only")
+    return false;
   return (user.permissions ?? []).includes(key);
 }
 
@@ -105,8 +108,7 @@ export function userCanAny(
 ): boolean {
   if (!user) return false;
   if (user.role === "admin") return true;
-  const held = new Set(user.permissions ?? []);
-  return keys.some((k) => held.has(k));
+  return keys.some((k) => userCan(user, k));
 }
 
 export function canAccessKeys(

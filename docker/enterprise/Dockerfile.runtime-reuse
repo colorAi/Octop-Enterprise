@@ -1,0 +1,17 @@
+# Both images must be local, have matching OS/Python bases, and be verified before use.
+# APP_IMAGE contains the complete current application, dashboard and Python environment.
+# RUNTIME_IMAGE supplies the previously verified OS packages and browser installation.
+ARG APP_IMAGE
+ARG RUNTIME_IMAGE
+FROM ${APP_IMAGE} AS application
+FROM ${RUNTIME_IMAGE}
+USER root
+RUN rm -rf /app
+COPY --from=application /app/ /app/
+COPY --from=application /usr/local/bin/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/octop-browser
+COPY docker/enterprise/verify_runtime.py /usr/local/libexec/octop/verify_runtime.py
+USER 1000:1000
+RUN --network=none python /usr/local/libexec/octop/verify_runtime.py
+ENTRYPOINT []
+CMD ["octop", "run", "--host", "0.0.0.0", "--port", "8088"]

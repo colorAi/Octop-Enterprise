@@ -49,6 +49,86 @@ def test_whitelist_and_credential_signature():
 
 
 @pytest.mark.asyncio
+async def test_resource_directory_is_batched_scoped_and_uses_a_distinct_credential(bridge):
+    import base64
+
+    calls = []
+
+    def handler(req):
+        assert req.url.path == "/internal/resource-memberships"
+        token = req.headers["Authorization"].split()[1].split(".")[0]
+        claims = json.loads(base64.urlsafe_b64decode(token + "=" * (-len(token) % 4)))
+        assert claims["purpose"] == "resource-directory"
+        assert claims["sub"] == bridge.mapped_id(1)
+        ids = json.loads(req.content)["user_ids"]
+        calls.append(ids)
+        return httpx.Response(
+            200,
+            json={
+                "data": {
+                    "items": [
+                        {
+                            "user_id": uid,
+                            "found": True,
+                            "revision": 3,
+                            "enabled": False,
+                            "department_id": "D",
+                        }
+                        for uid in reversed(ids)
+                    ]
+                }
+            },
+        )
+
+    bridge._http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    try:
+        result = await bridge.resource_memberships(1, list(range(2, 404)) + [2])
+        assert [len(batch) for batch in calls] == [200, 200, 2]
+        assert len(result) == 402 and result[2]["revision"] == 3
+        assert result[403]["enabled"] is False
+        assert await bridge.resource_memberships(1, []) == {}
+        assert len(calls) == 3
+    finally:
+        await bridge.stop()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("malformed", ["missing", "duplicate", "foreign", "revision", "enabled"])
+async def test_invalid_resource_batch_fails_closed(bridge, malformed):
+    rows = [
+        {
+            "user_id": bridge.mapped_id(uid),
+            "found": True,
+            "revision": 3,
+            "enabled": True,
+            "department_id": None,
+        }
+        for uid in (2, 3)
+    ]
+    if malformed == "missing":
+        rows.pop()
+    elif malformed == "duplicate":
+        rows[1] = rows[0]
+    elif malformed == "foreign":
+        rows[1]["user_id"] = "octop:foreign:3"
+    elif malformed == "revision":
+        rows[1]["revision"] = True
+    else:
+        rows[1]["enabled"] = "true"
+    bridge._http = httpx.AsyncClient(
+        transport=httpx.MockTransport(
+            lambda req: httpx.Response(200, json={"data": {"items": rows}})
+        )
+    )
+    try:
+        with pytest.raises(OctopError) as error:
+            await bridge.resource_memberships(1, [2, 3])
+        assert error.value.status == 503
+    finally:
+        await bridge.stop()
+
+
+@pytest.mark.asyncio
 async def test_contacts_only_realtime_retains_messaging_permission_boundary(bridge):
     uid = bridge.services.user_repo.create(
         username="directory", role="user", permissions=["contacts"]

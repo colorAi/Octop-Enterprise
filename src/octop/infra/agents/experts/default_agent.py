@@ -91,6 +91,10 @@ async def try_bootstrap_default_agent(
     agent_id: str | None = None,
 ) -> None:
     """Best-effort wrapper used by HTTP adapters (setup / invite)."""
+    from octop.infra.users.expert_access import ExpertAccess
+
+    if ExpertAccess(server.services).assigned_only(user_id):
+        return
     if server.app_runtime is None:
         logger.warning("skip default agent bootstrap: app_runtime not ready")
         return

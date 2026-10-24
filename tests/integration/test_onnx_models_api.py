@@ -5,7 +5,53 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 MODEL = "BAAI/bge-small-zh-v1.5"
+
+
+@pytest.mark.parametrize("locale", ["zh", "en"])
+@pytest.mark.parametrize(
+    ("method", "path", "body", "status"),
+    [
+        ("POST", "/api/onnx-models/download", {"model": MODEL}, 503),
+        ("PUT", "/api/onnx-models/config", {"model": MODEL, "enabled": True}, 503),
+        ("POST", "/api/knowledge-bases/onnx-download", {"model": MODEL}, 409),
+        ("POST", "/api/onnx-models/test", {"model": MODEL}, 200),
+        ("POST", "/api/knowledge-bases/onnx-test", {"model": MODEL}, 200),
+    ],
+)
+async def test_dependency_permission_error_is_localized(
+    env: Any,
+    monkeypatch: pytest.MonkeyPatch,
+    locale: str,
+    method: str,
+    path: str,
+    body: dict[str, Any],
+    status: int,
+) -> None:
+    from octop.i18n import tr
+    from octop.infra.agents.providers import onnx_service
+    from octop.infra.utils.runtime_packages import PackageInstallError
+
+    client, _server, auth = env
+    monkeypatch.setattr(onnx_service, "local_embedding_deps_available", lambda: False)
+
+    def fail_install(*_args: Any, **_kwargs: Any) -> None:
+        raise PackageInstallError("permission_denied")
+
+    monkeypatch.setattr(onnx_service, "install_packages", fail_install)
+    response = await client.request(
+        method, path, headers={**auth, "Accept-Language": locale}, json=body
+    )
+    assert response.status_code == status, response.text
+    payload = response.json()
+    if isinstance(payload.get("error"), dict):
+        detail = payload["error"]["details"]["reason"]
+    else:
+        detail = payload.get("detail") or payload["error"]
+    assert detail == tr("runtime_packages.permission_denied", locale)
+    assert "pip/uv unavailable" not in response.text
 
 
 def _seed_cache(home: Path, model: str) -> None:
@@ -24,7 +70,7 @@ async def test_enable_without_weights_is_rejected(
     client, _server, auth = env
     from octop.infra.agents.providers import onnx_service
 
-    monkeypatch.setattr(onnx_service, "ensure_local_embedding_deps_async", _ready)
+    monkeypatch.setattr(onnx_service, "ensure_local_embedding_deps", _ready)
 
     resp = await client.put(
         "/api/onnx-models/config",
@@ -44,7 +90,7 @@ async def test_enable_succeeds_once_weights_are_present(
     client, _server, auth = env
     from octop.infra.agents.providers import onnx_service
 
-    monkeypatch.setattr(onnx_service, "ensure_local_embedding_deps_async", _ready)
+    monkeypatch.setattr(onnx_service, "ensure_local_embedding_deps", _ready)
     monkeypatch.setattr(onnx_service, "local_embedding_deps_available", lambda: True)
     _seed_cache(tmp_octop_home, MODEL)
 
@@ -67,7 +113,7 @@ async def test_activate_reports_downloaded_nested_weights(
     client, _server, auth = env
     from octop.infra.agents.providers import onnx_service
 
-    monkeypatch.setattr(onnx_service, "ensure_local_embedding_deps_async", _ready)
+    monkeypatch.setattr(onnx_service, "ensure_local_embedding_deps", _ready)
     monkeypatch.setattr(onnx_service, "local_embedding_deps_available", lambda: True)
 
     model = "jinaai/jina-clip-v1"
@@ -88,7 +134,7 @@ async def test_activate_reports_downloaded_nested_weights(
     assert resp.json()["downloaded"] is True
 
 
-async def _ready(*_args: Any, **_kwargs: Any) -> str:
+def _ready(*_args: Any, **_kwargs: Any) -> str:
     return "ready"
 
 
@@ -105,7 +151,7 @@ async def test_knowledge_onnx_test_uses_knowledge_settings_permission(
     client, _server, admin_auth = env
     from octop.infra.agents.providers import onnx_service
 
-    monkeypatch.setattr(onnx_service, "ensure_local_embedding_deps_async", _ready)
+    monkeypatch.setattr(onnx_service, "ensure_local_embedding_deps", _ready)
     monkeypatch.setattr(onnx_service, "local_embedding_deps_available", lambda: True)
     monkeypatch.setattr(onnx_service, "embed_texts", lambda _m, _t: [[0.0] * 512])
     _seed_cache(tmp_octop_home, MODEL)
@@ -136,7 +182,7 @@ async def test_knowledge_onnx_test_reports_missing_weights(
     client, _server, auth = env
     from octop.infra.agents.providers import onnx_service
 
-    monkeypatch.setattr(onnx_service, "ensure_local_embedding_deps_async", _ready)
+    monkeypatch.setattr(onnx_service, "ensure_local_embedding_deps", _ready)
 
     resp = await client.post("/api/knowledge-bases/onnx-test", headers=auth, json={"model": MODEL})
     assert resp.status_code == 200, resp.text

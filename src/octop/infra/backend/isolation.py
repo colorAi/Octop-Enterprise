@@ -8,6 +8,7 @@ import json
 import os
 import posixpath
 import tarfile
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +19,21 @@ from octop.infra.utils.paths import PathLayout
 HOST_TOOLS = frozenset(
     {"browser_use", "desktop_screenshot", "acp_runner", "read_env_file", "write_env_file"}
 )
+
+_execution_tracking: tuple[Any, str, str] | None = None
+# Workspace reads and runtime startup can create separate handles concurrently.
+# Bound lock storage independently of the number of users/agents.
+_container_locks = tuple(threading.RLock() for _ in range(64))
+
+
+def configure_execution_tracking(repo: Any, node: str, incarnation: str) -> None:
+    global _execution_tracking
+    _execution_tracking = (repo, node, incarnation)
+
+
+def clear_execution_tracking() -> None:
+    global _execution_tracking
+    _execution_tracking = None
 
 
 def isolation_enabled() -> bool:
@@ -95,18 +111,106 @@ def create_isolated_backend(
     require_supported_harness()
     from octop_harness.backends.docker_sandbox import DockerSandbox
 
+    from octop.infra.db.repos.execution import ExecutionConflict
+
+    tracking = _execution_tracking
+
+    def stopped(container: Any) -> bool:
+        container.reload()
+        state = container.attrs.get("State", {})
+        return all(state.get(key) is False for key in ("Running", "Paused", "Restarting"))
+
     class IsolatedDockerSandbox(DockerSandbox):
         def __init__(self, **kwargs: Any) -> None:
             self._octop_run_options: dict[str, Any] = options
-            super().__init__(**kwargs)
+            self._budget_token: str | None = None
+            try:
+                super().__init__(**kwargs)
+            except BaseException:
+                # Never infer that a timed-out Docker start did not happen.
+                if hasattr(self, "_client"):
+                    self._client.close()
+                raise
 
         def close(self) -> None:
             if not managed_lifecycle:
                 super().close()
 
         def release(self) -> None:
-            """Detach the manager-owned handle without deleting its private volume."""
-            super().close()
+            """Release RAM when the manager drops its last handle; retain the volume."""
+            self.hibernate()
+
+        def hibernate(self, *, idle: bool = False) -> None:
+            """Stop the private container before dropping its handle; keep the volume."""
+            with self._lock, container_lock:
+                if self._closed:
+                    return
+                # A completed read-only view has no task to drain. Its PID 1
+                # may ignore SIGTERM; do not add ten seconds to every source read.
+                self._container.stop(timeout=0 if idle or spec.get("read_only_workspace") else 10)
+                if not stopped(self._container):
+                    raise RuntimeError("sandbox stop unconfirmed")
+                helper = self._init_container()
+                if helper is not None and not stopped(helper):
+                    raise RuntimeError("sandbox initialization stop unconfirmed")
+                if tracking is not None and self._budget_token is not None:
+                    repo, node, incarnation = tracking
+                    repo.release_sandbox(node, incarnation, name, self._budget_token)
+                super().close()
+                self._client.close()
+
+        def _reserve(self) -> None:
+            if self._closed:
+                raise RuntimeError("sandbox handle is closed")
+            if tracking is not None:
+                repo, node, incarnation = tracking
+                self._budget_token = repo.reserve_sandbox(
+                    node, incarnation, spec["agent_id"], name, memory
+                )
+                if self._budget_token is None:
+                    raise ExecutionConflict("sandbox_memory_exhausted")
+
+        def _track(self, container: Any) -> None:
+            if tracking is not None:
+                repo, node, incarnation = tracking
+                repo.track_workspace(node, incarnation, spec["agent_id"], container.id)
+
+        def _acquire_container(self) -> Any:
+            # Override harness orphan/recreate fallback: an uncertain start must
+            # never create another container against the same reservation.
+            with self._lock, container_lock:
+                self._reserve()
+                existing = self._get_named_container(name)
+                self._reused = existing is not None
+                if existing is not None:
+                    self._ensure_running(existing)
+                    return existing
+                return self._create_container()
+
+        def _ensure_running(self, container: Any) -> bool:
+            with self._lock, container_lock:
+                self._reserve()
+                container.reload()
+                self._track(container)
+                state = container.attrs.get("State", {})
+                if state.get("Running") is not True:
+                    container.start()
+                    container.reload()
+                    state = container.attrs.get("State", {})
+                if not state.get("Running") or state.get("Paused") or state.get("Restarting"):
+                    raise RuntimeError("sandbox start unconfirmed")
+                return True
+
+        def _init_container(self) -> Any:
+            try:
+                helper = self._client.containers.get(name + "_init")
+            except self._docker.errors.NotFound:
+                return None
+            helper.reload()
+            labels = helper.attrs.get("Config", {}).get("Labels", {}) or {}
+            if any(labels.get(key) != value for key, value in init_options["labels"].items()):
+                raise RuntimeError("refusing an unmanaged sandbox initializer")
+            return helper
 
         def _map_path(self, path: str) -> str:
             raw = posixpath.normpath(str(path).replace("\\", "/"))
@@ -131,28 +235,20 @@ def create_isolated_backend(
                 "agent_id"
             ] or volume.attrs.get("Options"):
                 raise RuntimeError("refusing an unmanaged workspace volume")
-            self._client.containers.run(
-                spec["image"],
-                [
-                    "python3",
-                    "-c",
-                    "import os,sys; os.chown(sys.argv[1],1000,1000)",
-                    spec["workspace_path"],
-                ],
-                entrypoint=[],
-                remove=True,
-                network_mode="none",
-                read_only=True,
-                cap_drop=["ALL"],
-                cap_add=["CHOWN"],
-                security_opt=["no-new-privileges:true"],
-                volumes={spec["volume"]: {"bind": spec["workspace_path"], "mode": "rw,nocopy"}},
-                user="0:0",
-                pids_limit=16,
-                mem_limit="128m",
-            )
+            # The initializer and private container share one reservation and
+            # never run together. Keep its stopped identity for crash recovery.
+            helper = self._init_container()
+            if helper is None:
+                helper = self._client.containers.create(**init_options)
+            self._track(helper)
+            helper.reload()
+            if helper.status == "created":
+                helper.start()
+            result = helper.wait(timeout=30)
+            if result.get("StatusCode") != 0 or not stopped(helper):
+                raise RuntimeError("sandbox initialization failed")
             try:
-                return self._client.containers.run(**self._octop_run_options)
+                container = self._client.containers.create(**self._octop_run_options)
             except self._docker.errors.APIError as exc:
                 # Workspace reads and runtime startup can acquire the same
                 # persistent container concurrently.
@@ -162,6 +258,8 @@ def create_isolated_backend(
                 if existing is None or not self._ensure_running(existing):
                     raise
                 return existing
+            self._ensure_running(container)
+            return container
 
         def _put_file(self, container_path: str, data: bytes) -> None:
             parent, name = str(Path(container_path).parent), Path(container_path).name
@@ -189,6 +287,8 @@ def create_isolated_backend(
                 or host.get("Privileged")
                 or not host.get("ReadonlyRootfs")
                 or host.get("NetworkMode") != "none"
+                or host.get("Memory") != memory
+                or host.get("MemorySwap") != memory
                 or config.get("User") != "1000:1000"
                 or "ALL" not in host.get("CapDrop", [])
                 or "no-new-privileges:true" not in host.get("SecurityOpt", [])
@@ -206,12 +306,34 @@ def create_isolated_backend(
             # Workspace .env is private to this agent; never read the global env file.
             return {**self._workspace_dotenv(), "HOME": "/tmp", "OCTOP_AGENT_ID": spec["agent_id"]}
 
-    mounts = {spec["volume"]: {"bind": spec["workspace_path"], "mode": "rw,nocopy"}}
+    mode = "ro,nocopy" if spec.get("read_only_workspace") else "rw,nocopy"
+    mounts = {spec["volume"]: {"bind": spec["workspace_path"], "mode": mode}}
     for host, target in (package_mounts or {}).items():
         mounts[host] = {"bind": target, "mode": "ro"}
-    policy = {"version": 2, "image": spec["image"], "mounts": mounts, "agent": spec["agent_id"]}
+    from octop.infra.execution.profiles import memory_bytes
+
+    memory = (
+        int(tracking[0].sandbox_budget()["sandbox_bytes"])
+        if tracking is not None
+        else memory_bytes(os.environ.get("OCTOP_SANDBOX_MEMORY", "1g"))
+    )
+    if memory < 6 * 1024**2:
+        raise ExecutionConflict("sandbox_budget_uninitialized")
+    policy = {
+        "version": 3,
+        "image": spec["image"],
+        "mounts": mounts,
+        "agent": spec["agent_id"],
+        "memory": memory,
+    }
+    execution_labels = {}
+    if tracking is not None:
+        _, node, incarnation = tracking
+        execution_labels = {"org.octop.node": node, "org.octop.incarnation": incarnation}
+        policy["execution"] = execution_labels
     fingerprint = hashlib.sha256(json.dumps(policy, sort_keys=True).encode()).hexdigest()
     name = f"octop_private_{fingerprint[:24]}"
+    container_lock = _container_locks[int(fingerprint[:8], 16) % len(_container_locks)]
     options = {
         "image": spec["image"],
         "command": ["sleep", "infinity"],
@@ -225,14 +347,37 @@ def create_isolated_backend(
         "security_opt": ["no-new-privileges:true"],
         "network_mode": "none",
         "pids_limit": 128,
-        "mem_limit": "1g",
+        "mem_limit": memory,
+        "memswap_limit": memory,
         "nano_cpus": 1_000_000_000,
         "tmpfs": {"/tmp": "rw,nosuid,nodev,size=268435456,mode=1777"},
         "volumes": mounts,
         "environment": {"HOME": "/tmp"},
         # The application image's HTTP health check does not apply to a worker.
         "healthcheck": {"test": ["NONE"]},
-        "labels": {"octop.isolation.policy": fingerprint, "octop.agent.id": spec["agent_id"]},
+        "labels": {
+            "octop.isolation.policy": fingerprint,
+            "octop.agent.id": spec["agent_id"],
+            **execution_labels,
+        },
+    }
+    init_memory = min(memory, 128 * 1024**2)
+    init_options = {
+        **options,
+        "name": name + "_init",
+        "command": [
+            "python3",
+            "-c",
+            "import os,sys; os.chown(sys.argv[1],1000,1000)",
+            spec["workspace_path"],
+        ],
+        "user": "0:0",
+        "cap_add": ["CHOWN"],
+        "pids_limit": 16,
+        "mem_limit": init_memory,
+        "memswap_limit": init_memory,
+        "volumes": {spec["volume"]: {"bind": spec["workspace_path"], "mode": "rw,nocopy"}},
+        "labels": {**options["labels"], "octop.sandbox.init": "1"},
     }
     # __init__ acquires the container, so policy must exist before it runs.
     backend = IsolatedDockerSandbox(

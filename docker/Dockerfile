@@ -103,14 +103,15 @@ COPY --from=ghcr.io/astral-sh/uv:0.7 /uv /uvx /bin/
 
 WORKDIR /app
 
-# 先安装锁定依赖，仅改源码时可复用此层缓存
+# 预装向量模型运行时；企业容器的非 root 用户不能修改 /app/.venv。
+# 两次 sync 使用相同 extras，避免安装项目时移除已预装的依赖。
 COPY pyproject.toml uv.lock README.md LICENSE ./
 RUN --mount=type=cache,target=/root/.cache/uv \
     if [ -n "$PIP_INDEX_URL" ]; then \
         export UV_INDEX_URL="$PIP_INDEX_URL"; \
         if [ -n "$PIP_TRUSTED_HOST" ]; then export UV_INSECURE_HOST="$PIP_TRUSTED_HOST"; fi; \
     fi \
-    && uv sync --frozen --no-install-project --no-dev --extra browser
+    && uv sync --frozen --no-install-project --no-dev --extra browser --extra local-embedding
 
 ENV PATH="/app/.venv/bin:$PATH" \
     PLAYWRIGHT_BROWSERS_PATH=/root/.cache/ms-playwright
@@ -127,7 +128,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
         export UV_INDEX_URL="$PIP_INDEX_URL"; \
         if [ -n "$PIP_TRUSTED_HOST" ]; then export UV_INSECURE_HOST="$PIP_TRUSTED_HOST"; fi; \
     fi \
-    && uv sync --frozen --no-dev --extra browser \
+    && uv sync --frozen --no-dev --extra browser --extra local-embedding \
     && apt-get update && apt-get install -y --no-install-recommends fonts-noto-cjk \
     && apt-get purge -y --auto-remove build-essential \
     && rm -rf /var/lib/apt/lists/* /tmp/*

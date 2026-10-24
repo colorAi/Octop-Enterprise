@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from collections.abc import Callable
 from contextlib import suppress
 from typing import Any
 from urllib.parse import urljoin, urlsplit
@@ -134,6 +135,7 @@ class BridgeManager:
         token_signer: Any | None = None,
     ) -> None:
         self._repo = bridge_repo
+        self.owns_user: Callable[[int | None], bool] = lambda _: True
         self._secrets = secret_repo
         self._users = user_repo
         self._advertise_base_url = advertise_base_url.rstrip("/")
@@ -620,6 +622,8 @@ class BridgeManager:
     async def resume_auto_connections(self) -> None:
         """Boot-time: dial every connection with auto_reconnect enabled."""
         for row in self._repo.list_auto_reconnect():
+            if not self.owns_user(row.owner_user_id):
+                continue
             if _is_inbound(row):
                 continue
             if row.connection_id in self._user_stopped:

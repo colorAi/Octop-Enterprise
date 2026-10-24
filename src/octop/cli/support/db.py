@@ -10,7 +10,7 @@ from typing import Any
 
 from octop.config import load_config
 from octop.infra.db.factory import open_database
-from octop.infra.db.migrate import run_migrations
+from octop.infra.db.migrate import _current_version, run_migrations
 from octop.infra.db.services import SharedServices, build_shared_services
 from octop.infra.gateway.threads import ThreadRegistry
 from octop.infra.utils.env_file import apply_env_file, env_file_path
@@ -18,15 +18,26 @@ from octop.infra.utils.paths import PathLayout
 
 
 @contextmanager
-def open_cli_services(home: Path | None = None) -> Iterator[SharedServices]:
+def open_cli_services(
+    home: Path | None = None, *, migrate: bool = True
+) -> Iterator[SharedServices]:
     """Open DB + repos for offline CLI reads (caller must not hold while server writes)."""
     paths = PathLayout(home) if home is not None else PathLayout.from_env()
     apply_env_file(env_file_path(paths.root))
     config = load_config(paths.config)
     db = open_database(config, paths)
-    run_migrations(db)
-    services = build_shared_services(db=db, paths=paths, config=config)
     try:
+        services = build_shared_services(db=db, paths=paths, config=config)
+        if migrate:
+            if _current_version(db) and services.execution_repo.mode() == "distributed-v1":
+                raise ValueError(
+                    "Use the running management API or 'octop execution' for this role deployment; offline mutation is disabled"
+                )
+            run_migrations(db)
+        else:
+            from octop.infra.execution.roles import require_initialized
+
+            require_initialized(db)
         yield services
     finally:
         db.close()

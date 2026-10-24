@@ -25,7 +25,10 @@
         cursor: pointer;
       }
       @media (prefers-color-scheme: dark) {
-        body { background: #0e0e0e; color: #b5b5b5; }
+        body {
+          background: #0e0e0e;
+          color: #b5b5b5;
+        }
       }
     </style>
   </head>
@@ -45,7 +48,11 @@
         function invoke(message) {
           if (window._wails && typeof window._wails.invoke === "function") {
             window._wails.invoke(message);
-          } else if (window.chrome && window.chrome.webview && typeof window.chrome.webview.postMessage === "function") {
+          } else if (
+            window.chrome &&
+            window.chrome.webview &&
+            typeof window.chrome.webview.postMessage === "function"
+          ) {
             // WebView2 exposes this before Wails injects _wails after navigation.
             window.chrome.webview.postMessage(message);
           } else {
@@ -59,7 +66,9 @@
         async function acknowledgeResume() {
           for (var attempt = 0; attempt < 80; attempt++) {
             if (emit("login-resumed")) return;
-            await new Promise(function (resolve) { setTimeout(resolve, 50); });
+            await new Promise(function (resolve) {
+              setTimeout(resolve, 50);
+            });
           }
           throw new Error("native_bridge_unavailable");
         }

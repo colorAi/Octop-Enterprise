@@ -33,6 +33,8 @@ from octop.infra.gateway.hitl.coordinator import (
 )
 from octop.infra.gateway.hitl.format import normalize_hitl_request
 from octop.infra.gateway.hitl.store import HitlPendingRecord
+from octop.infra.users.model_access import ModelAccess
+from octop.infra.utils.asyncio import offload
 from octop.infra.utils.llm_text import ainvoke_text
 from octop.infra.utils.locale import resolve_request_locale
 
@@ -79,9 +81,21 @@ async def get_chat_welcome(
         team_payload = await team_host_welcome_payload(row, registry, catalog)
         return {**team_payload, "task_examples": None}
 
-    workspace = registry.workspace_for_agent(agent_id)
+    # Managed welcome copy is published into the row; opening its page must
+    # not allocate a server tool sandbox just to probe for an optional manifest.
+    mapping = server.services.expert_assignment_repo.instance(agent_id)
+    workspace = None if mapping is not None else registry.workspace_for_agent(agent_id)
     payload: dict[str, Any] | None = None
     parsed_examples = None
+    if mapping is not None:
+        definition = await server.employee_resources.display_definition(user.id, agent_id)
+        if definition is not None:
+            manifest = definition.get("presentation")
+            if manifest is not None:
+                welcome = welcome_payload_from_manifest_data(manifest)
+                if welcome_payload_has_content(welcome):
+                    payload = welcome
+                parsed_examples = parse_task_examples(manifest)
     if workspace is not None:
         manifest = await read_workspace_manifest_data(workspace)
         if manifest is not None:
@@ -324,6 +338,11 @@ async def polish_prompt(
 
     harness = server.app_runtime.agent_registry.get_agent(agent_id)
     model_ref = (body.default_model or "").strip() or harness.config.pick_default_model_ref()
+    access = ModelAccess(server.services)
+    if body.default_model:
+        await offload(access.require, user.id, body.default_model.strip())
+    if not user.is_admin:
+        model_ref = await offload(access.resolve, user.id, model_ref)
     llm = harness.model_factory.get(model_ref)
     try:
         polished = await ainvoke_text(

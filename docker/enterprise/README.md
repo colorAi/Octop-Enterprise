@@ -4,7 +4,9 @@
 
 本指南适用于 Linux Docker Engine + Compose v2。基础单机模式使用 `docker/docker-compose.yml`。企业模式包含 Octop 控制面、Go 通信服务、两个 PostgreSQL 数据库和员工隔离工作区。客户端在员工电脑执行项目工具，服务器保留账号、模型授权、记忆、历史和恢复回执。
 
-本指南对应 Octop Enterprise **1.0.0**，依赖 Harness **1.0.3**，主数据库 schema **25**，设备协议 **2**，公司运行时协议 **1**。服务端镜像与客户端工具环境需使用匹配的源码和协议版本构建。
+本指南对应 Octop Enterprise **1.0.1b2**，依赖 Harness **1.0.3**，主数据库 schema **30**，设备协议 **2**，公司运行时协议 **1**。服务端镜像与客户端工具环境需使用匹配的源码和协议版本构建。
+
+当前工作区的分角色入口及 schema 29 操作见[分角色部署、备份与恢复](ROLES.md)。下文 `compose.yml` 命令用于既有单体拓扑，不直接套用于分角色实例。
 
 ## 部署前先了解
 
@@ -35,7 +37,7 @@ Docker daemon 无法连接时，先处理 Docker 启动或 socket 权限。默�
 
 ## 首次安装
 
-使用本项目源码包或确定的发行提交，在仓库根目录逐步执行。采用源码包时记录 `PUBLIC_SOURCE.json` 与源码包校验值；采用 Git 时记录 commit 和本地改动。下列 `enterprise-1.0.0` 是本指南使用的本地镜像标签；每次部署使用可追溯到对应源码的唯一标签。
+使用本项目源码包或确定的发行提交，在仓库根目录逐步执行。采用源码包时记录 `PUBLIC_SOURCE.json` 与源码包校验值；采用 Git 时记录 commit 和本地改动。下列 `enterprise-1.0.1b2` 是本指南使用的本地镜像标签；每次部署使用可追溯到对应源码的唯一标签。
 
 ### 1. 生成新的私有配置
 
@@ -52,9 +54,9 @@ sudo python3 docker/enterprise/prepare.py --data /srv/octop --env /etc/octop.env
 使用管理员编辑器修改 `/etc/octop.env`，保留已生成的密码与密钥，在原文件内将三个镜像值改为：
 
 ```dotenv
-OCTOP_BASE_IMAGE="octop:enterprise-1.0.0"
-OCTOP_APP_IMAGE="octop-enterprise:enterprise-1.0.0"
-OCTOP_IM_IMAGE="octop-im:enterprise-1.0.0"
+OCTOP_BASE_IMAGE="octop:enterprise-1.0.1b2"
+OCTOP_APP_IMAGE="octop-enterprise:enterprise-1.0.1b2"
+OCTOP_IM_IMAGE="octop-im:enterprise-1.0.1b2"
 ```
 
 默认 `OCTOP_BIND_ADDRESS="127.0.0.1"`，8088 端口只供服务器本机或本机反向代理访问，员工电脑无法直接连接。按部署场景选择：
@@ -69,7 +71,7 @@ OCTOP_IM_IMAGE="octop-im:enterprise-1.0.0"
 ### 3. 构建、初始化并启动
 
 ```sh
-sudo docker build -f docker/Dockerfile -t octop:enterprise-1.0.0 .
+sudo docker build -f docker/Dockerfile -t octop:enterprise-1.0.1b2 .
 sudo docker compose --env-file /etc/octop.env -f docker/enterprise/compose.yml config -q
 sudo docker compose --env-file /etc/octop.env -f docker/enterprise/compose.yml build
 sudo docker compose --env-file /etc/octop.env -f docker/enterprise/compose.yml up -d --wait postgres
@@ -83,6 +85,10 @@ sudo docker compose --env-file /etc/octop.env -f docker/enterprise/compose.yml u
 `octop init` 在终端交互输入管理员用户名和密码，不把密码写进命令行。只在首次安装执行；升级不能再次初始化，也不能使用 `--force`。PostgreSQL 只在首次创建数据目录时执行 `init-databases.sh`，分别创建 `octop_app/octop` 和 `im_app/octop_im`，禁止应用角色访问对方数据库。
 
 首次构建需要下载和编译依赖，之后可复用构建缓存；容器启动成功还不等于员工已能工作，继续完成下一步。
+
+基础应用镜像预装锁定版本的本地向量模型运行时（`local-embedding`），企业镜像构建时会以 UID 1000 检查这些依赖能否导入。模型权重仍在管理员选择下载后获取，保存在持久化应用目录的 `embedding_models/` 下。旧镜像出现“依赖尚未就绪”或 Python 环境无写入权限时，按升级流程重新构建基础应用与企业镜像并替换应用容器；仅更新源码文件或重启旧容器不会补齐镜像依赖。
+
+下载完成只保存模型文件；模型测试、知识库索引与检索时才加载推理会话。大模型的运行内存需要单独计入每个 Worker 的容器限额和宿主总预算，下载成功不代表当前限额足够运行。若日志出现 `OOMKilled` 后伴随 `executor_fenced`，先核对内存限额，再按 [分角色恢复流程](ROLES.md#任务补读与故障核对)恢复节点，不要直接重启旧 Worker。
 
 ### 4. 检查服务并完成首个员工流程
 
@@ -148,6 +154,21 @@ sudo docker compose --env-file /etc/octop.env -f docker/enterprise/compose.yml l
 迁移已有部署时，先核对原有环境变量、数据库和密钥与上表的对应关系；保留原数据与密钥，按下节执行升级，不运行 `prepare.py`。
 
 ## 升级与回退
+
+企业镜像包含工作台使用的 Chromium 和系统库，浏览器安装目录为 `/opt/octop-browser`。构建会以 UID 1000 在断网条件下实际启动浏览器并截图，同时加载知识库向量依赖；服务就绪检查不能替代这项验证。可对候选镜像再次执行：
+
+```sh
+docker run --rm --network none --read-only --cap-drop ALL --tmpfs /tmp --tmpfs /data:uid=1000,gid=1000 \
+  --entrypoint python octop-enterprise:enterprise-1.0.1b2 /usr/local/libexec/octop/verify_runtime.py
+```
+
+已有本地应用镜像和验证通过的运行环境时，可用 `Dockerfile.runtime-reuse` 离线组装。`APP_IMAGE` 必须包含完整当前应用、前端和 Python 环境；`RUNTIME_IMAGE` 必须包含可用的浏览器和系统库，两者系统基础层及 Python ABI 必须一致。不要仅凭应用健康检查选择运行环境。使用 `--pull=false --network=none`，并明确传入两个本地镜像：
+
+```sh
+docker build --pull=false --network=none -f docker/enterprise/Dockerfile.runtime-reuse \
+  --build-arg APP_IMAGE=octop:current-application --build-arg RUNTIME_IMAGE=octop-enterprise:verified-runtime \
+  -t octop-enterprise:next-candidate .
+```
 
 1. 保存旧 commit、镜像 ID、配置和四架构客户端发行清单，检查两库版本。主库 `SELECT version FROM _schema_version`；通信启动检查自己的迁移表，升级命令始终使用新通信镜像的 `--migrate`。
 2. 停止接收新任务，等待本地任务上报结束或标记结果未知。未知结果不能自动重做。

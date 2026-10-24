@@ -36,6 +36,14 @@ def _sandbox_ready() -> bool:
 
 async def readiness(server: Any) -> dict[str, Any]:
     checks = {"database": await offload(_database_ready, server)}
+    execution = getattr(server, "execution", None)
+    if execution is not None:
+        try:
+            checks["execution"] = execution._accepting and await execution.io.run(
+                execution.repo.runtime_ready
+            )
+        except Exception:
+            checks["execution"] = False
     bridge = getattr(server, "communication", None)
     if os.environ.get("OCTOP_IM_URL") or (bridge is not None and bridge.enabled):
         checks["communication"] = False

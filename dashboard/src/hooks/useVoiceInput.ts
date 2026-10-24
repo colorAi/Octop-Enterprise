@@ -270,6 +270,10 @@ export function useVoiceInput(onText: (text: string) => void) {
     setTranscribing(true);
     try {
       const active = await fetchActiveVoice();
+      if (active.stt_allowed === false) {
+        antMessage.error(t("voice.notAssigned"));
+        return;
+      }
       // SpeechRecognition cannot consume a recorded blob. If STT is still
       // "browser", ask the user to configure a server provider (or use the
       // click-to-talk browser path from a cold start).
@@ -297,6 +301,10 @@ export function useVoiceInput(onText: (text: string) => void) {
   const startRecording = useCallback(async () => {
     // Read cached config synchronously to stay in the user-gesture stack.
     const active: ActiveVoice | null = cachedActiveVoice();
+    if (active?.stt_allowed === false) {
+      antMessage.error(t("voice.notAssigned"));
+      return;
+    }
 
     if ((active?.stt ?? "browser") === "browser" && browserSttAvailable()) {
       // Browser STT: use the native SpeechRecognition API directly.

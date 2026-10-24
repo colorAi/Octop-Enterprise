@@ -11,6 +11,10 @@ import {
   type RuntimeEvent,
 } from "@/api/desktopRuntime";
 import type { DeviceSelection } from "@/api/modules/devices";
+import {
+  acceptExecutionFrame,
+  executionCursor,
+} from "../utils/executionCursor";
 /**
  * Module-level chat store that survives React component unmount/remount cycles.
  *
@@ -2602,8 +2606,9 @@ async function attachLocalRuntime(
       markActive();
     }
     if (event.event === "chunk" && event.data) {
-      handleHarnessChunk(state, event.data, sessionId);
       markActive();
+      handleHarnessChunk(state, event.data, sessionId);
+      notify(state);
     }
     if (event.event === "done") {
       if (event.error)
@@ -2626,6 +2631,10 @@ async function attachLocalRuntime(
     );
     if (task && ["running", "cancel_requested"].includes(task.status ?? "")) {
       markActive();
+      if (task.pending_approval) {
+        handleHitlRequired(state, { ...task.pending_approval });
+        notify(state);
+      }
       return;
     }
     if (
@@ -2760,7 +2769,13 @@ export async function attachThread(
       touchStreamActivity(sessionId);
       startSocketPing(live);
       try {
-        ws.send(JSON.stringify({ type: "subscribe", thread_id: threadId }));
+        ws.send(
+          JSON.stringify({
+            type: "subscribe",
+            thread_id: threadId,
+            ...executionCursor(threadId),
+          }),
+        );
       } catch {
         // ignore
       }
@@ -2772,6 +2787,7 @@ export async function attachThread(
         const data = JSON.parse(String(event.data)) as Record<string, unknown>;
         if (!data || typeof data !== "object") return;
         if (!frameBelongsToThread(data, live.threadId)) return;
+        if (!acceptExecutionFrame(live.threadId, data)) return;
 
         if (data.type === "turn_status") {
           if (turnStatusAction(Boolean(data.active)) === "expect_stream") {
@@ -3010,6 +3026,7 @@ async function sendTurnWebSocket(
       startSocketPing(live);
       const payload: Record<string, unknown> = {
         type: "user_turn",
+        client_request_id: createRuntimeTaskId(),
         text: typeof messageContent === "string" ? messageContent : text,
         session_key: sessionKey,
         messages: [
@@ -3048,6 +3065,13 @@ async function sendTurnWebSocket(
         if (!data || typeof data !== "object") return;
         if (!frameBelongsToThread(data, live.threadId)) return;
         if ((data as { type?: string }).type === "turn_status") return;
+        if (
+          !acceptExecutionFrame(
+            live.threadId,
+            data as unknown as Record<string, unknown>,
+          )
+        )
+          return;
         if (
           applySteerProtocolFrame(
             state,
@@ -3412,6 +3436,7 @@ export async function sendTurn(
           ...(reasoningMode ? { reasoning_mode: reasoningMode } : {}),
           ...(reasoningEffort ? { reasoning_effort: reasoningEffort } : {}),
           ...(conversationMode ? { conversation_mode: conversationMode } : {}),
+          ...(hitlPolicy ? { hitl_policy: hitlPolicy } : {}),
         },
         (event) => {
           if (state.abortController !== controller) return;
@@ -3429,10 +3454,11 @@ export async function sendTurn(
             handleHarnessChunk(state, event.data, sessionId);
             // The harness may finish before company history/artifacts are
             // acknowledged. Only the native lifecycle event unlocks the turn.
-            if (!state.isStreaming) {
+            if (!state.isStreaming && event.data.type !== "hitl_required") {
               state.isStreaming = true;
               notifyStream(state);
             }
+            if (event.data.type === "hitl_required") notify(state);
           }
           if (event.event === "done" && event.artifacts?.length) {
             const previous = localArtifactHistory.get(state) ?? [];
@@ -3581,6 +3607,47 @@ export async function resumeHitl(
 ): Promise<void> {
   const state = getOrCreate(sessionId);
   if (isCompanyDesktop()) {
+    const runtime = window.__octopRuntime;
+    if (pendingId?.startsWith("local-") && runtime?.resumeHitl) {
+      try {
+        await runtime.resumeHitl({
+          thread_id: threadId,
+          pending_id: pendingId,
+          decisions,
+          ...(hitlPolicy ? { hitl_policy: hitlPolicy } : {}),
+        });
+        resolveHitlPending(
+          state,
+          dismissed || decisions.some((d) => d.type === "reject")
+            ? "rejected"
+            : "approved",
+          hitlPolicy,
+          pendingId,
+        );
+        // The original native subscription owns this turn, including a
+        // possible next approval or a completion racing the IPC reply.
+        if (
+          localStreams.has(sessionId) &&
+          !state.messages.some(
+            (m) =>
+              m.hitlData?.status !== "approved" &&
+              m.hitlData?.status !== "rejected" &&
+              m.hitlData,
+          )
+        ) {
+          state.isStreaming = true;
+          touchStreamActivity(sessionId);
+        }
+      } catch (err) {
+        appendErrorBubble(
+          state,
+          (err as Error).message || "本机审批未确认，请重试。",
+          "local_runtime_error",
+        );
+      }
+      notify(state);
+      return;
+    }
     appendErrorBubble(
       state,
       "企业客户端中的旧服务器会话仅供查看，无法继续服务器审批；请新建本地会话。",

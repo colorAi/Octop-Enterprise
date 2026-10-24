@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import threading
 from dataclasses import replace
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
@@ -18,6 +20,7 @@ from octop.infra.errors import OctopError
 from octop.infra.gateway.ws import WebSocketHub
 from octop.infra.users.client_config import config_revision, publish_release, read_release
 from octop.infra.users.identity import User
+from octop.infra.utils.bounded_io import BoundedIO
 
 
 @pytest.fixture
@@ -39,6 +42,7 @@ def environment(tmp_path):
         hub.register(str(uid), send, user_id=uid)
     manager = SimpleNamespace(list=lambda: [admin, employee])
     server = SimpleNamespace(
+        management_io=BoundedIO(),
         app_runtime=SimpleNamespace(gateway=SimpleNamespace(ws_hub=hub)),
         user_manager=manager,
         services=SimpleNamespace(
@@ -67,6 +71,36 @@ def environment(tmp_path):
         policy=policy,
     )
     pool.close()
+
+
+@pytest.mark.asyncio
+async def test_slow_config_database_read_leaves_the_event_loop_responsive(environment):
+    env = environment
+    started = asyncio.Event()
+    release = threading.Event()
+    loop = asyncio.get_running_loop()
+    original = env.server.services.user_policy_repo.list_for_user
+
+    def slow(uid):
+        loop.call_soon_threadsafe(started.set)
+        assert release.wait(5)
+        return original(uid)
+
+    env.server.services.user_policy_repo.list_for_user = slow
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=env.app), base_url="http://test"
+    ) as client:
+        request = asyncio.create_task(client.get("/api/client-config/status"))
+        try:
+            await asyncio.wait_for(started.wait(), 1)
+            denied = await asyncio.wait_for(
+                client.post("/api/client-config/publish", json={"message": "denied"}), 1
+            )
+            assert denied.status_code == 403
+            assert not request.done()
+        finally:
+            release.set()
+        assert (await request).status_code == 200
 
 
 @pytest.mark.asyncio

@@ -8,7 +8,7 @@ This repository provides source code; server images and Windows/macOS enterprise
 
 ## Source scope
 
-- Keep the English homepage, Chinese edition, English and Chinese employee guides, contribution guide, security policy, and deployment and build instructions.
+- Use Chinese for the default homepage and retain the English edition, English and Chinese employee guides, contribution guide, security policy, and deployment and build instructions.
 - Keep the original MIT license and contributor notices in the root and the communication service. See [NOTICE](../NOTICE_EN.md) for third-party sources and distribution scope.
 - This distribution disables the online update CLI/API, upstream one-click installers and `make publish` / `publish-test`; install and upgrade from this repository's source.
 - The public copy excludes Git history, local tool configuration, runtime environment files, browser sessions, deployment records and build artifacts.
@@ -19,6 +19,8 @@ This repository provides source code; server images and Windows/macOS enterprise
 
 ## Export and verification
 
+All changes between formal releases accumulate in the enterprise repository and share one current pending-release entry point. Export candidate source from the complete worktree, including uncommitted changes and new tests from earlier fixes. Record verification status separately instead of splitting fixes into parallel pending releases. Keep older snapshots only for traceability.
+
 Run in the development repository; the output must be a new directory outside the repository that does not already exist:
 
 ```sh
@@ -27,6 +29,8 @@ python3 tools/check_public_source.py --root /absolute/new-directory/Octop-Enterp
 ```
 
 The export tool uses Git-tracked and unignored files as candidates and copies the current worktree, including uncommitted changes. It does not modify the Git index, branches or remotes. Use a new output directory for each source snapshot.
+
+To refresh the pending-release entry point, export to a new temporary directory and verify it first, then update the source, archive, change list and checksums at that entry point. Retain the previous snapshot as history. Subsequent changes still belong to the same pending release. Before the final build, compare the complete worktree with the candidate manifest again to confirm that nothing is missing; build installers and runtime payloads from that final source together.
 
 `PUBLIC_SOURCE.json` records the source HEAD, `source_worktree_dirty`, export scope and per-file SHA-256. `source_worktree_dirty=true` means the snapshot includes uncommitted changes and must be identified by the per-file manifest and source archive SHA-256. Formal releases export from a clean worktree at a specified commit and keep the corresponding tag, manifest and checksums.
 

@@ -1,14 +1,15 @@
 /**
  * Admin → Users page (plan §14.7).
  *
- * List all users with role/disabled toggles, password reset, delete.
+ * Page/search users with role/disabled toggles, password reset, delete.
  * Card and table views (default table). The view switcher + refresh +
  * new-user buttons live in a content-area toolbar (mirrors the Experts
  * page layout). Each row/card shows agent count; click opens a drawer
  * with that user's agents.
  *
- * Endpoints (all require admin role; backend returns 403 otherwise):
- *   GET    /api/users
+ * Endpoints (require users permission or admin; backend returns 403 otherwise):
+ *   GET    /api/users/page
+ *   GET    /api/agents?scope=all&owner_user_id=...
  *   POST   /api/users
  *   POST   /api/users/batch
  *   PATCH  /api/users/{id}
@@ -35,6 +36,8 @@ import {
   Select,
   Checkbox,
   InputNumber,
+  Pagination,
+  Alert,
 } from "antd";
 import { message } from "@/utils/antdMessage";
 import { ResizableTable } from "@/components/ResizableTable";
@@ -72,12 +75,19 @@ import {
   userRoleLabel,
   type UserRole,
 } from "../../../api/modules/userRoles";
-import { authApi } from "../../../api/modules/auth";
+import { usersApi, type UserRow } from "../../../api/modules/users";
+import { useUserDirectory } from "./useUserDirectory";
+import EmployeeKnowledgePicker from "./EmployeeKnowledgePicker";
+import EmployeeModelPicker from "./EmployeeModelPicker";
+import type { EmployeeModelSelection } from "../../../api/modules/users";
 import { preferencesApi } from "../../../api/modules/preferences";
 import type { SidebarNavLayout } from "../../../layouts/sidebarNavLayout";
 import { buildPermissionPickerGroups } from "./permissionPickerLayout";
 import { useCardTableView } from "../../../hooks/useCardTableView";
-import { useSetCurrentUser } from "../../../hooks/useCurrentUser";
+import {
+  useCurrentUser,
+  useSetCurrentUser,
+} from "../../../hooks/useCurrentUser";
 import { useIsMobile } from "../../../hooks/useIsMobile";
 import { useServerTimezone } from "../../../hooks/useServerTimezone";
 import { apiErrorMessage } from "../../../utils/apiError";
@@ -100,30 +110,6 @@ import {
 } from "./ProfileAvatar";
 
 const { Text } = Typography;
-
-interface UserRow {
-  id: number;
-  username: string;
-  /** Role-template public id: admin | user | custom ULID. */
-  role: string;
-  display_name: string | null;
-  email?: string | null;
-  has_password?: boolean;
-  sso_linked?: boolean;
-  disabled: boolean;
-  login_failed_count?: number;
-  login_locked?: boolean;
-  login_locked_until?: number;
-  login_retry_after_seconds?: number;
-  created_at?: number;
-  permissions?: string[];
-  role_name?: string | null;
-  avatar_url?: string | null;
-  avatar_icon?: string | null;
-  workspace_root_dir?: string | null;
-  token_quota?: number | null;
-  max_agents?: number | null;
-}
 
 export interface PermissionCatalogItem {
   key: string;
@@ -401,8 +387,6 @@ function formatUserTs(ts: number | undefined, timeZone: string): string {
 interface UserCardGridProps {
   rows: UserRow[];
   loading: boolean;
-  agentsByUserId: Map<number, OctopAgent[]>;
-  agentsLoading: boolean;
   currentUserId: number | null;
   permLabelByKey: Map<string, string>;
   selectedIds: number[];
@@ -980,8 +964,6 @@ function RoleLegend() {
 function UserCardGrid({
   rows,
   loading,
-  agentsByUserId,
-  agentsLoading,
   currentUserId,
   permLabelByKey,
   selectedIds,
@@ -1011,7 +993,7 @@ function UserCardGrid({
   return (
     <div className={styles.userCardGrid}>
       {rows.map((row) => {
-        const agentCount = agentsByUserId.get(row.id)?.length ?? 0;
+        const agentCount = row.agent_count;
         const isSelf = row.id === currentUserId;
         const selected = selectedSet.has(row.id);
         const displayName = row.display_name?.trim() || row.username;
@@ -1116,7 +1098,7 @@ function UserCardGrid({
                 onClick={() => onShowAgents(row)}
               >
                 <Bot size={14} />
-                {t("adminUsers.colAgents")} {agentsLoading ? "…" : agentCount}
+                {t("adminUsers.colAgents")} {agentCount}
               </button>
               <span className={styles.userCardFooterSpacer} />
               <Switch
@@ -1250,8 +1232,7 @@ export default function UsersListPanel() {
   const isMobile = useIsMobile();
   const [agents, setAgents] = useState<OctopAgent[]>([]);
   const [agentsLoading, setAgentsLoading] = useState(true);
-  const [rows, setRows] = useState<UserRow[]>([]);
-  const [loading, setLoading] = useState(true);
+  const currentUser = useCurrentUser();
   const [createOpen, setCreateOpen] = useState(false);
   const [pendingUserAvatar, setPendingUserAvatar] = useState<File | null>(null);
   const [pendingUserIcon, setPendingUserIcon] = useState<string | null>(null);
@@ -1259,16 +1240,23 @@ export default function UsersListPanel() {
   const [submitting, setSubmitting] = useState(false);
   const [form] = Form.useForm<CreateValues>();
   const [editTarget, setEditTarget] = useState<UserRow | null>(null);
+  const [knowledgeIds, setKnowledgeIds] = useState<string[] | null>(null);
+  const [modelSelection, setModelSelection] =
+    useState<EmployeeModelSelection | null>(null);
   const [editSubmitting, setEditSubmitting] = useState(false);
   const [editForm] = Form.useForm<EditValues>();
   const [resetTarget, setResetTarget] = useState<UserRow | null>(null);
   const [resetSubmitting, setResetSubmitting] = useState(false);
   const [resetForm] = Form.useForm<ResetValues>();
-  const [currentUserId, setCurrentUserId] = useState<number | null>(null);
-  const [actorIsAdmin, setActorIsAdmin] = useState(true);
+  const currentUserId = currentUser?.id ?? null;
+  const actorIsAdmin = currentUser?.role === "admin";
   const [agentDrawerUser, setAgentDrawerUser] = useState<UserRow | null>(null);
   const [editAgent, setEditAgent] = useState<OctopAgent | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
+  const directory = useUserDirectory(currentUserId, searchQuery);
+  const { rows, loading, refresh: refreshUsers } = directory;
+  const [agentsError, setAgentsError] = useState("");
+  const agentsController = useRef<AbortController>();
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
   const [batchSubmitting, setBatchSubmitting] = useState(false);
   const [batchTokenOpen, setBatchTokenOpen] = useState(false);
@@ -1328,37 +1316,8 @@ export default function UsersListPanel() {
   );
   const nowSec = useNowSeconds(hasLockedUser);
 
-  const agentsByUserId = useMemo(() => {
-    const map = new Map<number, OctopAgent[]>();
-    for (const agent of agents) {
-      if (agent.user_id == null) continue;
-      const list = map.get(agent.user_id) ?? [];
-      list.push(agent);
-      map.set(agent.user_id, list);
-    }
-    return map;
-  }, [agents]);
-
-  const drawerAgents = agentDrawerUser
-    ? agentsByUserId.get(agentDrawerUser.id) ?? []
-    : [];
-
-  const filteredRows = useMemo(() => {
-    const query = searchQuery.trim().toLowerCase();
-    if (!query) return rows;
-    return rows.filter((row) => {
-      const username = row.username.toLowerCase();
-      const displayName = (row.display_name ?? "").trim().toLowerCase();
-      const email = (row.email ?? "").trim().toLowerCase();
-      const roleName = (row.role_name ?? "").trim().toLowerCase();
-      return (
-        username.includes(query) ||
-        displayName.includes(query) ||
-        email.includes(query) ||
-        roleName.includes(query)
-      );
-    });
-  }, [rows, searchQuery]);
+  const drawerAgents = agents;
+  const filteredRows = rows;
 
   const selectedIdSet = useMemo(() => new Set(selectedIds), [selectedIds]);
   const selectedVisibleCount = useMemo(
@@ -1392,20 +1351,6 @@ export default function UsersListPanel() {
     },
     [filteredRows],
   );
-
-  const refreshUsers = useCallback(async () => {
-    setLoading(true);
-    try {
-      const data = await request<UserRow[]>("/users");
-      setRows(data);
-    } catch (err) {
-      message.error(
-        err instanceof Error ? err.message : t("adminUsers.loadFailed"),
-      );
-    } finally {
-      setLoading(false);
-    }
-  }, [t]);
 
   const reportBatchResult = useCallback(
     (body: BatchResponse) => {
@@ -1552,20 +1497,43 @@ export default function UsersListPanel() {
     if (anyExpired) void refreshUsers();
   }, [hasLockedUser, nowSec, rows, refreshUsers]);
 
+  const drawerUserId = agentDrawerUser?.id;
   const refreshAgents = useCallback(async () => {
+    agentsController.current?.abort();
+    if (drawerUserId == null || currentUserId == null) return;
+    const controller = new AbortController();
+    agentsController.current = controller;
     setAgentsLoading(true);
+    setAgentsError("");
     try {
-      const data = await request<OctopAgent[]>("/agents?scope=all");
-      setAgents(data);
+      const data = await usersApi.agents(drawerUserId, controller.signal);
+      if (!controller.signal.aborted) setAgents(data);
     } catch (err) {
-      message.error(
-        err instanceof Error ? err.message : t("adminUsers.loadFailed"),
-      );
-      setAgents([]);
+      if (!controller.signal.aborted)
+        setAgentsError(apiErrorMessage(err, t("adminUsers.loadFailed"), t));
     } finally {
-      setAgentsLoading(false);
+      if (!controller.signal.aborted) setAgentsLoading(false);
     }
-  }, [t]);
+  }, [drawerUserId, currentUserId, t]);
+
+  useEffect(() => {
+    setAgents([]);
+    void refreshAgents();
+    return () => agentsController.current?.abort();
+  }, [refreshAgents]);
+
+  useEffect(() => {
+    setAgentDrawerUser(null);
+    setEditAgent(null);
+    setEditTarget(null);
+    setResetTarget(null);
+    setCreateOpen(false);
+    setInviteOpen(false);
+    setBatchTokenOpen(false);
+    setBatchMaxAgentsOpen(false);
+    setSelectedIds([]);
+    setSearchQuery("");
+  }, [currentUserId]);
 
   const patchAgent = useCallback(
     (agentId: string, patch: Partial<OctopAgent>) => {
@@ -1587,8 +1555,9 @@ export default function UsersListPanel() {
     (agentId: string) => {
       setAgents((prev) => prev.filter((a) => a.agent_id !== agentId));
       void refreshAgents();
+      void refreshUsers();
     },
-    [refreshAgents],
+    [refreshAgents, refreshUsers],
   );
 
   const handleEditSaved = useCallback(
@@ -1614,26 +1583,28 @@ export default function UsersListPanel() {
   }, [refreshUsers, refreshAgents]);
 
   useEffect(() => {
-    void refreshAll();
-    authApi
-      .me()
-      .then((u) => {
-        setCurrentUserId(u.id);
-        setActorIsAdmin(u.role === "admin");
+    const controller = new AbortController();
+    const { signal } = controller;
+    setPermCatalog([]);
+    setUserRoles([]);
+    request<PermissionCatalogItem[]>("/users/permissions", { signal })
+      .then((items) => {
+        if (!signal.aborted) setPermCatalog(items);
       })
       .catch(() => {
-        setCurrentUserId(null);
-        setActorIsAdmin(false);
+        if (!signal.aborted) setPermCatalog([]);
       });
-    request<PermissionCatalogItem[]>("/users/permissions")
-      .then(setPermCatalog)
-      .catch(() => setPermCatalog([]));
     userRolesApi
       .list()
-      .then(setUserRoles)
-      .catch(() => setUserRoles([]));
+      .then((items) => {
+        if (!signal.aborted) setUserRoles(items);
+      })
+      .catch(() => {
+        if (!signal.aborted) setUserRoles([]);
+      });
     fetchFilesystemDefaults()
       .then((defaults) => {
+        if (signal.aborted) return;
         setFsTreeRoots(
           defaults.browse_roots?.length
             ? defaults.browse_roots
@@ -1642,10 +1613,12 @@ export default function UsersListPanel() {
         setWorkspaceRootAllowed(!defaults.in_container);
       })
       .catch(() => {
+        if (signal.aborted) return;
         setFsTreeRoots([HOST_FS_ROOT]);
         setWorkspaceRootAllowed(true);
       });
-  }, [refreshAll]);
+    return () => controller.abort();
+  }, [currentUserId]);
 
   const onCreate = async (values: CreateValues) => {
     setSubmitting(true);
@@ -1727,6 +1700,8 @@ export default function UsersListPanel() {
   };
 
   const openEdit = (row: UserRow) => {
+    setKnowledgeIds(null);
+    setModelSelection(null);
     setEditTarget(row);
     const matched =
       userRoles.find((role) => role.user_role_id === row.role) ??
@@ -1791,6 +1766,10 @@ export default function UsersListPanel() {
           role: values.role,
           permissions: values.role === "admin" ? [] : values.permissions ?? [],
           role_name: values.role_name?.trim() || null,
+          knowledge_base_ids:
+            values.role === "admin" ? undefined : knowledgeIds ?? undefined,
+          model_access:
+            values.role === "admin" ? undefined : modelSelection ?? undefined,
           ...policyPayload(values, { workspaceRootAllowed }),
         }),
       });
@@ -1990,12 +1969,22 @@ export default function UsersListPanel() {
         </div>
       ) : null}
 
+      {directory.error && (
+        <Alert
+          type="error"
+          showIcon
+          message={directory.error}
+          action={
+            <Button onClick={() => void refreshUsers()}>
+              {t("common.retry")}
+            </Button>
+          }
+        />
+      )}
       {showCardView ? (
         <UserCardGrid
           rows={filteredRows}
           loading={loading}
-          agentsByUserId={agentsByUserId}
-          agentsLoading={agentsLoading}
           currentUserId={currentUserId}
           permLabelByKey={permLabelByKey}
           selectedIds={selectedIds}
@@ -2096,7 +2085,7 @@ export default function UsersListPanel() {
               title: t("adminUsers.colAgents"),
               width: 80,
               render: (_, row) => {
-                const count = agentsByUserId.get(row.id)?.length ?? 0;
+                const count = row.agent_count;
                 return (
                   <button
                     type="button"
@@ -2104,7 +2093,7 @@ export default function UsersListPanel() {
                     onClick={() => setAgentDrawerUser(row)}
                   >
                     <Bot size={13} />
-                    {agentsLoading ? "…" : count}
+                    {count}
                   </button>
                 );
               },
@@ -2221,6 +2210,15 @@ export default function UsersListPanel() {
         />
       )}
 
+      <Pagination
+        current={directory.page}
+        pageSize={directory.pageSize}
+        total={directory.total}
+        pageSizeOptions={[25, 50, 100]}
+        showSizeChanger
+        onChange={directory.changePage}
+      />
+
       <Drawer
         title={
           agentDrawerUser
@@ -2234,8 +2232,20 @@ export default function UsersListPanel() {
         width={400}
         destroyOnHidden
       >
+        {agentsError && (
+          <Alert
+            type="error"
+            showIcon
+            message={agentsError}
+            action={
+              <Button onClick={() => void refreshAgents()}>
+                {t("common.retry")}
+              </Button>
+            }
+          />
+        )}
         <Spin spinning={agentsLoading}>
-          {drawerAgents.length === 0 ? (
+          {drawerAgents.length === 0 && !agentsError ? (
             <Empty description={t("adminUsers.noAgents")} />
           ) : (
             <div
@@ -2670,6 +2680,28 @@ export default function UsersListPanel() {
             fsTreeRoots={fsTreeRoots}
             workspaceRootAllowed={workspaceRootAllowed}
           />
+          {actorIsAdmin && editTarget && editTarget.role !== "admin" && (
+            <div className={styles.createSection}>
+              <div className={styles.createSectionTitle}>
+                {t("employeeKnowledge.title")}
+              </div>
+              <EmployeeKnowledgePicker
+                key={editTarget.id}
+                userId={editTarget.id}
+                disabled={editSubmitting}
+                onChange={setKnowledgeIds}
+              />
+              <div className={styles.createSectionTitle}>
+                {t("employeeModels.title")}
+              </div>
+              <EmployeeModelPicker
+                key={`models-${editTarget.id}`}
+                userId={editTarget.id}
+                disabled={editSubmitting}
+                onChange={setModelSelection}
+              />
+            </div>
+          )}
         </Form>
       </Drawer>
 

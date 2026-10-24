@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { message } from "@/utils/antdMessage";
 import { requireDesktopRuntime } from "../api/desktopRuntime";
 import { Alert, Button, Input, Space, Tag, Typography } from "antd";
@@ -23,6 +23,7 @@ export default function LocalWorkspaceSettings() {
   const [reconciling, setReconciling] = useState<string>();
   const [checking, setChecking] = useState(false);
   const [diagnosticRevision, setDiagnosticRevision] = useState(0);
+  const manualToolCheck = useRef(false);
   useEffect(() => {
     setRuntime(null);
     setChecking(false);
@@ -34,9 +35,15 @@ export default function LocalWorkspaceSettings() {
     )
       return;
     let cancelled = false;
+    const verifyTools = manualToolCheck.current;
+    manualToolCheck.current = false;
     setChecking(true);
     void Promise.resolve()
-      .then(() => requireDesktopRuntime().status())
+      .then(() =>
+        verifyTools
+          ? requireDesktopRuntime().status({ verify_tools: true })
+          : requireDesktopRuntime().status(),
+      )
       .then((result) => {
         if (!cancelled)
           setRuntime({
@@ -125,7 +132,10 @@ export default function LocalWorkspaceSettings() {
               size="small"
               loading={checking}
               disabled={checking}
-              onClick={() => setDiagnosticRevision((r) => r + 1)}
+              onClick={() => {
+                manualToolCheck.current = true;
+                setDiagnosticRevision((r) => r + 1);
+              }}
             >
               {t("devices.runtimeCheck")}
             </Button>

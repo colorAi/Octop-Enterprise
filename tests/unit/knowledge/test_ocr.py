@@ -20,6 +20,23 @@ def test_ocr_disabled_by_default() -> None:
     assert capability["usable"] is False
 
 
+@pytest.mark.parametrize("backend", ["onnx", "remote"])
+def test_ocr_install_does_not_replace_octop(monkeypatch: pytest.MonkeyPatch, backend: str) -> None:
+    ready = False
+
+    def fake_install(spec, **_kwargs):
+        nonlocal ready
+        assert spec.extra_fallback is None
+        assert all(not package.startswith("octop") for package in spec.packages)
+        ready = True
+        return "installed"
+
+    monkeypatch.setattr(ocr, "local_ocr_deps_available", lambda: ready)
+    monkeypatch.setattr(ocr, "pdf_ocr_deps_available", lambda: ready)
+    monkeypatch.setattr(ocr, "install_packages", fake_install)
+    assert ocr.ensure_ocr_deps(backend=backend) == "installed"
+
+
 def test_set_local_ocr_settings(monkeypatch: pytest.MonkeyPatch) -> None:
     values: dict[str, str] = {}
     monkeypatch.setattr(ocr, "local_ocr_deps_available", lambda: True)

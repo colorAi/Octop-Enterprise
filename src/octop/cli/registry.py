@@ -18,6 +18,7 @@ COMMANDS: dict[str, tuple[str, str, str]] = {
     "chats": (".commands.chats", "chats", "Chat REPL and session management."),
     "channel": (".commands.channel", "channel", "Channel management commands."),
     "cron": (".commands.cron", "cron", "Cron job management commands."),
+    "execution": (".commands.execution", "execution", "共享执行状态与停止证明管理。"),
     "provider": (".commands.provider", "provider", "Provider management (admin write)."),
     "models": (".commands.models", "models", "Provider presets and resolved models."),
     "skills": (".commands.skills", "skills", "Per-agent skill enable/disable."),

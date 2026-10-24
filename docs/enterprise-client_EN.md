@@ -23,6 +23,12 @@ On the **Local working folder** page, select **Check tools** to check the local 
 
 Project files are stored in the authorized folder on this computer. The company server stores accounts, expert definitions, long-term memory, formal conversations and recovery records. The local computer stores execution checkpoints, operation receipts and pending synchronization records outside the project folder.
 
+Before each question, the client recalls relevant memory from the company server. Synchronized user messages and replies are indexed there, and explicit durable facts are saved through server memory tools. Memory is isolated by employee expert instance. Existing experts retain their server SQLite stores; new instances use the configured server backend. The native harness disables personal memory databases and expert bootstrap. Project documents are not automatically loaded as personal memory.
+
+After switching to managed assignments, personal experts with earlier conversations remain visible with a **History** label and read-only chat access. An unambiguous earlier expert belonging to the same employee and template contributes its server memory and personal profile to the new instance. Ambiguous matches are not combined. Existing data stays in place; another employee's or administrator's personal data is never inherited.
+
+Local commands flagged by the tool guard, including removal and moves, display an approval card. Approval permits the operation; rejection or cancellation leaves it unexecuted. Parallel commands require individual decisions. You can enable automatic approval for the current conversation. Pending approvals return when you revisit the page; restarting the client does not automatically replay interrupted commands.
+
 A temporary synchronization failure does not change completed local work into an execution failure. **Local working folder** reports pending synchronization; the client retries when the connection returns, including reconciliation after signing in again. A conversation must finish its previous synchronization before starting another turn. Uploading receipts never repeats completed tool operations.
 
 Local commands have a default fifteen-minute execution timeout, with a per-command ceiling of one hour. Command output is visible while running. A model request times out after ten minutes without stream data. Transient timeouts, rate limits and connection failures before the first returned model chunk are retried up to three times; streams that have already started returning data are not automatically resent. Each turn applies the selected reasoning effort and Ask, Plan or Craft mode; Plan may write only plan files.
@@ -40,6 +46,22 @@ The forward dialog lets you select the original message text, each image and eac
 Local results sent to an employee or group are verified against the original file's SHA-256 from the message, then uploaded as company chat attachments; recipients view or download them according to company chat permissions. Attachments forwarded to a local agent are saved in the target conversation's task folder; forwarding results between local agents copies the files and keeps the originals. The per-file limit is 50 MiB; long text and multiple attachments are split according to chat limits.
 
 Local file transfer requires a client shell that includes the feature, the computer that holds the result and an authorized working folder. If only the web app has been updated but the client shell has not, local file forwarding reports that the feature is missing; plain text forwarding still works. Forwarding does not automatically enable group bots or synchronize the entire working folder.
+
+## Company knowledge bases
+
+Administrators create knowledge bases, configure retrieval models and maintain documents on the Knowledge Base page. Edit an employee under Management → User Management and select their Knowledge base access, or use the Knowledge tab in Company structure → Employee settings. Only administrator accounts can assign knowledge bases; expert and skill assignments do not grant access automatically.
+
+Employees can browse assigned documents and select a knowledge base in chat, without creating their own. Grants permit reading and retrieval, not editing administrator-maintained documents. Revoking a grant prevents further reads and searches. Existing personal material is preserved.
+
+Shared knowledge bases remain available to everyone. For access limited to selected employees, turn off sharing and assign the base in employee settings. Saving access sends a configuration notification; clients also detect changes after reconnecting. The server checks access on each read and search.
+
+## Employee model access
+
+Administrators select available chat models under Company structure → Employee settings → Models. The employee editor under Management → User Management edits the same assignments. Only administrator accounts can change them.
+
+New employees and existing employees with no model assignments cannot use models. Newly configured models require an explicit assignment, and the same model on different providers is assigned separately. Automatic selection, vision fallback and company local tasks use only assigned models. Administrators retain access to all available models.
+
+After an assignment is removed, the server rejects subsequent model calls, including the next call in a running task. Requests already sent are not rolled back. Saving assignments notifies the employee to update their configuration.
 
 ## Permissions, configuration and software updates
 

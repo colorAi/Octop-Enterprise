@@ -1,4 +1,5 @@
 import type { HarnessChunk } from "../utils/parseHarnessChunk";
+import type { HitlPendingPayload } from "./types/hitl";
 
 export interface LocalArtifact {
   path: string;
@@ -46,6 +47,7 @@ export interface RuntimeStart {
   reasoning_mode?: string;
   reasoning_effort?: string;
   conversation_mode?: string;
+  hitl_policy?: { mode: string; tools?: string[] } | null;
 }
 export interface DesktopRuntimeBridge {
   version: 1;
@@ -53,13 +55,14 @@ export interface DesktopRuntimeBridge {
   refreshStatus?(): Promise<{
     active_tasks: { task_id: string; status?: string }[];
   }>;
-  status(): Promise<{
+  status(options?: { verify_tools: boolean }): Promise<{
     active_tasks: {
       task_id: string;
       thread_id: string;
       status?: string;
       recovery_state?: string;
       sync_state?: "pending" | "synced";
+      pending_approval?: HitlPendingPayload | null;
     }[];
     capabilities?: string[];
     tools?: Record<string, string>;
@@ -67,6 +70,12 @@ export interface DesktopRuntimeBridge {
   }>;
   start(params: RuntimeStart): Promise<{ task_id: string }>;
   cancel(params: { thread_id: string }): Promise<{ status: string }>;
+  resumeHitl?(params: {
+    thread_id: string;
+    pending_id: string;
+    decisions: Array<{ type: string; message?: string }>;
+    hitl_policy?: { mode: string; tools?: string[] };
+  }): Promise<{ status: string }>;
   steer?(params: {
     thread_id: string;
     text: string;

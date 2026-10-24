@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 
 from octop.infra.db.pool import DatabasePool
@@ -175,9 +176,11 @@ class KnowledgeRepo:
         with self._db.connect() as conn:
             rows = conn.execute(
                 "SELECT kb.* FROM knowledge_bases kb "
-                "WHERE kb.owner_user_id = ? OR kb.shared = 1 "
+                "WHERE kb.owner_user_id = ? OR kb.shared = 1 OR EXISTS ("
+                "SELECT 1 FROM employee_knowledge_bases g "
+                "WHERE g.kb_id = kb.knowledge_base_id AND g.user_id = ?) "
                 "ORDER BY kb.name",
-                (user_id,),
+                (user_id, user_id),
             ).fetchall()
         return map_rows(rows, KnowledgeBaseRow)
 
@@ -185,6 +188,52 @@ class KnowledgeRepo:
         with self._db.connect() as conn:
             rows = conn.execute("SELECT * FROM knowledge_bases ORDER BY name").fetchall()
         return map_rows(rows, KnowledgeBaseRow)
+
+    def list_managed(self) -> list[KnowledgeBaseRow]:
+        with self._db.connect() as conn:
+            rows = conn.execute(
+                "SELECT kb.* FROM knowledge_bases kb JOIN users u ON u.id = kb.owner_user_id "
+                "WHERE u.role = 'admin' ORDER BY kb.name"
+            ).fetchall()
+        return map_rows(rows, KnowledgeBaseRow)
+
+    def assigned_base_ids(self, user_id: int) -> list[str]:
+        with self._db.connect() as conn:
+            rows = conn.execute(
+                "SELECT kb_id FROM employee_knowledge_bases WHERE user_id = ? ORDER BY kb_id",
+                (user_id,),
+            ).fetchall()
+        return [str(row["kb_id"]) for row in rows]
+
+    def has_assignment(self, user_id: int, kb_id: str) -> bool:
+        with self._db.connect() as conn:
+            return (
+                conn.execute(
+                    "SELECT 1 FROM employee_knowledge_bases WHERE user_id = ? AND kb_id = ?",
+                    (user_id, kb_id),
+                ).fetchone()
+                is not None
+            )
+
+    def replace_user_bases(self, user_id: int, kb_ids: list[str], *, actor: str) -> None:
+        ts = now_ts()
+        with self._db.transaction() as conn:
+            conn.execute("DELETE FROM employee_knowledge_bases WHERE user_id = ?", (user_id,))
+            for kb_id in dict.fromkeys(kb_ids):
+                conn.execute(
+                    "INSERT INTO employee_knowledge_bases(user_id, kb_id, created_at) VALUES (?, ?, ?)",
+                    (user_id, kb_id, ts),
+                )
+            conn.execute(
+                "INSERT INTO audit_log(ts, actor, action, target, payload) VALUES (?, ?, ?, ?, ?)",
+                (
+                    ts,
+                    actor,
+                    "employee.knowledge_bases",
+                    str(user_id),
+                    json.dumps({"knowledge_base_ids": kb_ids}),
+                ),
+            )
 
     def count_bases_for_owner(self, owner_user_id: int) -> int:
         with self._db.connect() as conn:

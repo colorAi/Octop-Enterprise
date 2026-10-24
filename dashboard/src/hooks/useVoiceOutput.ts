@@ -232,6 +232,10 @@ export function useVoiceOutput() {
       primeMobileAudio();
 
       const cached = cachedActiveVoice();
+      if (cached?.tts_allowed === false) {
+        antMessage.error(t("voice.notAssigned"));
+        return;
+      }
       if (cached || isMobileUserAgent()) {
         beginPlayback(messageId, plain, gen, cached?.tts ?? "browser");
         return;
@@ -239,6 +243,10 @@ export function useVoiceOutput() {
 
       void fetchActiveVoice()
         .then((active) => {
+          if (active.tts_allowed === false) {
+            antMessage.error(t("voice.notAssigned"));
+            return;
+          }
           beginPlayback(messageId, plain, gen, active.tts);
         })
         .catch(() => {

@@ -72,6 +72,72 @@ async def acquire(client, task="task1", thread="thread1"):
 
 
 @pytest.mark.asyncio
+async def test_company_snapshot_excludes_provider_credentials(company):
+    server, client, _, _ = company
+    install_agent(server)
+    sentinel = "sk-company-snapshot-regression-only"
+    server.services.provider_repo.create(name="test", kind="openai", api_key=sentinel)
+    agent = server.app_runtime.agent_registry.get_agent("expert")
+    agent.config.api_key = sentinel
+    agent.config.providers = [{"api_key": sentinel}]
+    agent.model_factory.api_key = sentinel
+    try:
+        task = await acquire(client)
+        assert task["expert"]["models"] == ["test/model"]
+        assert sentinel not in json.dumps(task)
+        assert "api_key" not in json.dumps(task["expert"])
+        assert sentinel not in server.services.company_runtime_repo.task("task1")["expert_json"]
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("state", ["valid", "missing", "corrupt", "symlink"])
+async def test_skill_download_reads_only_intact_task_pinned_objects(company, state):
+    from octop.infra.company_runtime.skills import store_asset
+
+    server, client, _, _ = company
+    install_agent(server)
+    try:
+        task = await acquire(client)
+        cache = server.services.paths.root / "company-runtime-skills"
+        data = b"task-pinned asset"
+        digest = store_asset(cache, data)
+        task["expert"]["skills"] = [
+            {"path": "skills/test/SKILL.md", "sha256": digest, "size": len(data)}
+        ]
+        with server.services.db.transaction() as conn:
+            conn.execute(
+                "UPDATE company_runtime_tasks SET expert_json=? WHERE task_id='task1'",
+                (json.dumps(task["expert"]),),
+            )
+        target = cache / digest
+        if state in {"missing", "symlink"}:
+            target.chmod(0o600)
+            target.unlink()
+        if state == "corrupt":
+            target.chmod(0o600)
+            target.write_bytes(b"partial bytes")
+        if state == "symlink":
+            draft = cache / "writable-draft"
+            draft.write_bytes(data)
+            try:
+                target.symlink_to(draft)
+            except OSError:
+                pytest.skip("symlinks unavailable")
+        denied = await client.http.get("tasks/task1/skills/" + "0" * 64)
+        assert denied.status_code == 403
+        response = await client.http.get("tasks/task1/skills/" + digest)
+        if state == "valid":
+            assert response.status_code == 200 and response.content == data
+        else:
+            assert response.status_code == 409
+            assert response.json()["error"]["details"]["reason"] == "skill_checksum_mismatch"
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
 async def test_identity_event_and_device_isolation(company):
     server, client, credentials, owner = company
     install_agent(server)
@@ -135,6 +201,11 @@ async def test_real_harness_remote_model_tool_checkpoint_history(company, tmp_pa
     registry = server.app_runtime.agent_registry
     registry.get_agent("expert").model_factory.list_refs = lambda: ["test/renamed-model"]
     registry.resolve_fallback_model_ref = lambda: "test/renamed-model"
+    server.services.user_policy_repo.set(
+        server.services.agent_repo.get("expert").user_id,
+        "model_access",
+        json.dumps({"model_refs": ["test/renamed-model"], "revision": "renamed"}),
+    )
     await runtime.start(
         {
             "task_id": "task2",
@@ -569,6 +640,7 @@ async def test_company_backup_cache_and_preserved_tasks(company, tmp_path, monke
     repo.put_writes("thread1", "", "checkpoint1", "write1", [{"idx": 0, "value": {"saved": True}}])
     repo.begin_operation("task1", "operation1", "hash")
     digest = store_asset(cache, b"pinned skill")
+    (cache / ".pending-incomplete").write_bytes(b"incomplete")
     archive = tmp_path / "company.tar.gz"
     monkeypatch.setenv("OCTOP_AGENT_ISOLATION", "docker")
     monkeypatch.setenv("OCTOP_IM_URL", "http://communication:8090")
@@ -580,6 +652,7 @@ async def test_company_backup_cache_and_preserved_tasks(company, tmp_path, monke
         dest=archive,
         include_chats=False,
     )
+    (cache / digest).chmod(0o600)
     (cache / digest).unlink()
     result = restore_system_backup(
         archive,
@@ -601,5 +674,6 @@ async def test_company_backup_cache_and_preserved_tasks(company, tmp_path, monke
         assert summary[key]["rows"] == 1
     assert summary["task_statuses"] == {"running": 1}
     assert summary["skill_cache"] == {"files": 1, "bytes": len(b"pinned skill")}
+    assert summary["temporary_cache"] == {"files": 1, "bytes": len(b"incomplete")}
     assert not summary["automatic_deletion_enabled"]
     assert repo.checkpoint("thread1", "", None)["pending_writes"] == [{"saved": True}]

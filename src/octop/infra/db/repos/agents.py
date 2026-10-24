@@ -186,6 +186,18 @@ class AgentRepo:
             row = conn.execute(sql, params).fetchone()
         return int(row["c"]) if row is not None else 0
 
+    def counts_by_users(self, user_ids: list[int]) -> dict[int, int]:
+        """Count owned experts for one directory page without loading configs."""
+        if not user_ids:
+            return {}
+        placeholders = ",".join("?" for _ in user_ids)
+        with self._db.connect() as conn:
+            rows = conn.execute(
+                f"SELECT user_id, COUNT(*) AS c FROM agents WHERE user_id IN ({placeholders}) GROUP BY user_id",
+                user_ids,
+            ).fetchall()
+        return {int(row["user_id"]): int(row["c"]) for row in rows}
+
     def list_all(self, *, include_disabled: bool = True) -> list[AgentRow]:
         sql = "SELECT * FROM agents"
         if not include_disabled:

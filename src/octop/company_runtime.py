@@ -64,6 +64,8 @@ def main() -> None:
                         result = runtime.steering.send(params)
                     elif method == "steer_remove":
                         result = runtime.steering.remove(params)
+                    elif method == "hitl_resume":
+                        result = runtime.steering.approvals.resolve(params)
                     else:
                         raise ValueError("unknown_runtime_method")
                     emit({"id": request.get("id"), "result": result})

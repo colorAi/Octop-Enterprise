@@ -164,6 +164,8 @@ var shapeChecks = []struct {
 	{desc: "account portraits", table: "users", column: "avatar_url", want: true},
 	{desc: "company positions", table: "users", column: "job_title_id", want: true},
 	{desc: "directory admin flag", table: "users", column: "is_admin", want: true},
+	{desc: "resource membership revision", table: "users", column: "resource_revision", want: true},
+	{desc: "resource move receipts", table: "resource_department_operations", want: true},
 	{desc: "departments", table: "departments", want: true},
 	{desc: "file attachments", table: "media_assets", column: "filename", want: true},
 	{desc: "group types", table: "group_settings", column: "group_kind", want: true},
@@ -182,7 +184,7 @@ func (s *Store) CheckShape(ctx context.Context) error {
 	if e := s.Pool.QueryRow(ctx, `SELECT COALESCE(MAX(version),0),count(*) FROM schema_migrations`).Scan(&version, &count); e != nil {
 		return e
 	}
-	if version != 15 || count != 15 {
+	if version != 16 || count != 16 {
 		return fmt.Errorf("communication schema version mismatch; apply the matching migrations without rebuilding data")
 	}
 

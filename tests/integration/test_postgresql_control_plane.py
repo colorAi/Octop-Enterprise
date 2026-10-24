@@ -150,6 +150,60 @@ def test_pg_control_plane_repo_smoke() -> None:
 
 @requires_postgresql
 @pytest.mark.postgresql
+def test_pg_employee_resource_directory_keeps_selections_and_disabled_accounts() -> None:
+    from octop.infra.db.migrate import run_migrations
+    from octop.infra.db.pool import PostgresPool
+    from octop.infra.db.repos.agents import AgentRepo
+    from octop.infra.db.repos.employee_resources import EmployeeResourceRepo
+    from octop.infra.db.repos.expert_assignments import ExpertAssignmentRepo
+    from octop.infra.db.repos.users import UserRepo
+
+    pool = PostgresPool(_conninfo())
+    try:
+        _reset_public_schema(pool)
+        run_migrations(pool)
+        users = UserRepo(pool)
+        admin = users.create(username="admin", role="admin")
+        employee = users.create(username="Alice", role="user")
+        empty = users.create(username="Empty", role="user")
+        AgentRepo(pool).create(agent_id="expert", user_id=admin, name="Expert")
+        assignments = ExpertAssignmentRepo(pool)
+        assignments.set_source(admin, 0, "admin")
+        assignments.save(employee, ["expert"], "assigned_only", 0, 1, "admin")
+        resources = EmployeeResourceRepo(pool)
+        resources.reconcile(employee, "engineering", 7, True)
+        with pool.transaction() as conn:
+            conn.execute(
+                "INSERT INTO employee_skill_assignments(user_id,resource_id) VALUES (?,?)",
+                (employee, "package:installed:pdf"),
+            )
+            conn.execute(
+                "INSERT INTO department_resource_pools(scope_id,revision,expert_ids,skill_ids) VALUES (?,1,?,?)",
+                ("engineering", '["expert"]', '["package:installed:pdf"]'),
+            )
+        users.set_disabled(employee, True)
+        rows = resources.directory()
+        assert [row["id"] for row in rows] == [employee, empty]
+        assert rows[0]["expert_ids"] == ["expert"]
+        assert rows[0]["skill_ids"] == ["package:installed:pdf"]
+        assert rows[0]["disabled"] == 1 and rows[0]["membership_revision"] == 7
+        assert rows[1]["expert_ids"] == [] and rows[1]["skill_ids"] == []
+        assert rows[1]["scope_id"] is None
+        assert resources.pools() == [
+            {
+                "scope_id": "engineering",
+                "revision": 1,
+                "expert_ids": ["expert"],
+                "skill_ids": ["package:installed:pdf"],
+            }
+        ]
+        assert "password_hash" not in rows[0]
+    finally:
+        pool.close()
+
+
+@requires_postgresql
+@pytest.mark.postgresql
 def test_pg_probe_ok() -> None:
     from octop.config import DatabaseConfig
     from octop.infra.db.probe import probe_database

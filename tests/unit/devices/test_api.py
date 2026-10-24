@@ -139,7 +139,13 @@ def test_pair_probe_revoke_and_credential_audience(client, stack, scheme):
 
 def test_device_list_preserves_native_directory_grants(client, stack):
     code = client.post("/api/devices/pairing", headers=headers(stack)).json()["code"]
-    grant = {"id": "a" * 32, "name": "Reports", "version": 1, "writable": True, "allow_company": True}
+    grant = {
+        "id": "a" * 32,
+        "name": "Reports",
+        "version": 1,
+        "writable": True,
+        "allow_company": True,
+    }
     with client.websocket_connect("wss://testserver/api/devices/ws") as ws:
         ws.send_json(
             pair_frame(

@@ -49,7 +49,7 @@ class CommunicationBridge:
         self._worker: asyncio.Task[None] | None = None
         self._delivery_lock = asyncio.Lock()
 
-    async def start(self) -> None:
+    async def start(self, *, background: bool = True) -> None:
         if not self.enabled:
             return
         parsed = urlsplit(self.url)
@@ -77,8 +77,9 @@ class CommunicationBridge:
         self._http = httpx.AsyncClient(
             timeout=httpx.Timeout(120, connect=5), follow_redirects=False, trust_env=False
         )
-        await asyncio.to_thread(self.repo.enqueue_reconciliation)
-        self._worker = asyncio.create_task(self._deliver_loop())
+        if background:
+            await asyncio.to_thread(self.repo.enqueue_reconciliation)
+            self._worker = asyncio.create_task(self._deliver_loop())
 
     async def stop(self) -> None:
         if self._worker:
@@ -90,6 +91,125 @@ class CommunicationBridge:
 
     def mapped_id(self, user_id: int) -> str:
         return f"octop:{self._instance}:{user_id}"
+
+    async def resource_membership(self, user_id: int) -> dict[str, Any]:
+        """Fresh organization authority; resource use never trusts a browser's department."""
+        if not self.enabled or self._http is None:
+            raise OctopError(ErrorCode.INTERNAL_ERROR, "organization unavailable", status=503)
+        token = self.credential(user_id, 1, "resource-membership", [], purpose="resource-policy")
+        try:
+            response = await self._http.get(
+                f"{self.url}/internal/resource-membership/{self.mapped_id(user_id)}",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            response.raise_for_status()
+            value = response.json()["data"]
+            if not isinstance(value.get("revision"), int) or value["revision"] < 0:
+                raise ValueError("invalid organization revision")
+            return dict(value)
+        except (httpx.HTTPError, ValueError, KeyError, TypeError):
+            raise OctopError(
+                ErrorCode.INTERNAL_ERROR, "organization unavailable", status=503
+            ) from None
+
+    async def resource_memberships(
+        self, actor_id: int, user_ids: list[int]
+    ) -> dict[int, dict[str, Any]]:
+        """Bounded management projection, never used for execution authorization."""
+        if not self.enabled or self._http is None:
+            raise OctopError(ErrorCode.INTERNAL_ERROR, "organization unavailable", status=503)
+        result: dict[int, dict[str, Any]] = {}
+        ids = list(dict.fromkeys(user_ids))
+        try:
+            for start in range(0, len(ids), 200):
+                mapped = {self.mapped_id(uid): uid for uid in ids[start : start + 200]}
+                token = self.credential(
+                    actor_id, 1, "resource-directory", [], purpose="resource-directory"
+                )
+                response = await self._http.post(
+                    f"{self.url}/internal/resource-memberships",
+                    headers={"Authorization": f"Bearer {token}"},
+                    json={"user_ids": list(mapped)},
+                    timeout=10,
+                )
+                response.raise_for_status()
+                values = response.json()["data"]["items"]
+                if not isinstance(values, list) or len(values) != len(mapped):
+                    raise ValueError("incomplete organization projection")
+                seen = set()
+                for value in values:
+                    mid = value["user_id"]
+                    if (
+                        mid not in mapped
+                        or mid in seen
+                        or type(value["revision"]) is not int
+                        or value["revision"] < 0
+                        or type(value["enabled"]) is not bool
+                        or type(value["found"]) is not bool
+                        or not (
+                            value["department_id"] is None
+                            or isinstance(value["department_id"], str)
+                        )
+                    ):
+                        raise ValueError("invalid organization projection")
+                    seen.add(mid)
+                    result[mapped[mid]] = dict(value)
+        except (httpx.HTTPError, ValueError, KeyError, TypeError):
+            raise OctopError(
+                ErrorCode.INTERNAL_ERROR, "organization unavailable", status=503
+            ) from None
+        return result
+
+    async def organization_request(
+        self, actor_id: int, session: str, method: str, path: str, body: dict[str, Any]
+    ) -> dict[str, Any]:
+        async def content() -> AsyncIterator[bytes]:
+            yield json.dumps(body).encode()
+
+        response = await self.proxy(
+            method=method,
+            path=path,
+            user_id=actor_id,
+            session=session,
+            query=[],
+            content=content() if method not in {"GET", "HEAD"} else None,
+            content_type="application/json",
+        )
+        try:
+            await response.aread()
+            if response.status_code >= 400:
+                raise OctopError(
+                    ErrorCode.FORBIDDEN,
+                    "organization settings rejected",
+                    status=response.status_code,
+                    details={
+                        "reason": "organization_revision_conflict"
+                        if response.status_code == 409
+                        else "organization_settings_rejected"
+                    },
+                )
+            return dict(response.json()["data"])
+        finally:
+            await response.aclose()
+
+    async def resolve_resource_move(
+        self, user_id: int, operation_id: str, revision: int
+    ) -> dict[str, Any]:
+        if self._http is None:
+            raise OctopError(ErrorCode.INTERNAL_ERROR, "organization unavailable", status=503)
+        token = self.credential(user_id, 1, "resource-membership", [], purpose="resource-policy")
+        try:
+            response = await self._http.post(
+                f"{self.url}/internal/resource-membership/{self.mapped_id(user_id)}/resolve",
+                headers={"Authorization": f"Bearer {token}"},
+                json={"operation_id": operation_id, "expected_revision": revision},
+            )
+            response.raise_for_status()
+            return dict(response.json()["data"])
+        except (httpx.HTTPError, ValueError, KeyError):
+            raise OctopError(
+                ErrorCode.INTERNAL_ERROR, "organization unavailable", status=503
+            ) from None
 
     def credential(
         self,

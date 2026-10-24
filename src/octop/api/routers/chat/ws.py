@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import json
 import logging
@@ -13,6 +14,7 @@ from pydantic import ValidationError
 from starlette.websockets import WebSocketState
 
 from octop.api.common.agent import assert_agent_access
+from octop.api.common.reads import management_read
 from octop.api.deps import resolve_user_from_token
 from octop.api.routers.chat.models import UserTurnWsFrame
 from octop.api.routers.chat.sse import json_chunk_default
@@ -23,6 +25,7 @@ from octop.api.routers.chat.turn import (
 )
 from octop.infra.bridge.ids import parse_bridge_agent_id
 from octop.infra.errors import OctopError
+from octop.infra.execution.service import ExecutionConflict, public_frames
 from octop.infra.gateway.steer import SteerAdmitOk, SteerAdmitReject, SteerCoordinator
 from octop.infra.gateway.steer.types import preview_text
 from octop.infra.gateway.ws import WS_CHANNEL_ID
@@ -45,14 +48,14 @@ async def dashboard_chat_ws(
         return
 
     try:
-        user = resolve_user_from_token(server, token)
+        user = await management_read(server, resolve_user_from_token, server, token)
     except OctopError as exc:
         await websocket.close(code=4001, reason=f"auth: {exc.code.value}")
         return
 
     bridge_ref = parse_bridge_agent_id(agent_id)
     if bridge_ref is not None:
-        await _bridge_chat_ws(websocket, server=server, user=user, ref=bridge_ref)
+        await _bridge_chat_ws(websocket, server=server, user=user, ref=bridge_ref, token=token)
         return
 
     assert server.app_runtime is not None  # noqa: S101
@@ -83,10 +86,28 @@ async def dashboard_chat_ws(
         )
 
     hub.register(connection_id, send_frame)
+    replay_task: asyncio.Task[None] | None = None
+
+    async def replay_execution(run: dict[str, Any], after: int, index: int) -> None:
+        service = server.execution
+        try:
+            async for event in service.replay(run["run_id"], user=user.id, after=max(0, after - 1)):
+                await management_read(server, resolve_user_from_token, server, token)
+                for frame in public_frames(
+                    event, run=run["run_id"], thread=run["thread_id"], locale=user.locale
+                ):
+                    if event["seq"] == after and frame["event_index"] <= index:
+                        continue
+                    await send_frame(frame)
+        except OctopError:
+            await websocket.close(code=4001)
+        finally:
+            hub.subscribe(run["thread_id"], connection_id)
 
     try:
         while websocket.application_state == WebSocketState.CONNECTED:
             raw = await websocket.receive_text()
+            user = await management_read(server, resolve_user_from_token, server, token)
             try:
                 payload = json.loads(raw)
             except json.JSONDecodeError:
@@ -110,6 +131,33 @@ async def dashboard_chat_ws(
                     await send_frame(
                         {"type": "error", "message": f"thread {thread_id!r} not found"},
                     )
+                    continue
+                if payload.get("execution_id") and getattr(server, "execution", None) is not None:
+                    service = server.execution
+                    run = await service.io.run(
+                        service.repo.get, str(payload["execution_id"]), user=user.id
+                    )
+                    after, index = payload.get("event_seq", 0), payload.get("event_index", -1)
+                    if (
+                        not run
+                        or run["thread_id"] != thread_id
+                        or run["agent_id"] != agent_id
+                        or type(after) is not int
+                        or type(index) is not int
+                        or after < 0
+                        or after > run["event_seq"]
+                        or index < -1
+                    ):
+                        await send_frame({"type": "error", "message": "invalid execution cursor"})
+                        continue
+                    if replay_task is not None:
+                        replay_task.cancel()
+                        await asyncio.gather(replay_task, return_exceptions=True)
+                    hub.unsubscribe_connection(connection_id)
+                    await send_frame(
+                        {"type": "turn_status", "thread_id": thread_id, "active": True}
+                    )
+                    replay_task = asyncio.create_task(replay_execution(run, after, index))
                     continue
                 hub.subscribe(thread_id, connection_id)
                 await send_frame(
@@ -164,6 +212,10 @@ async def dashboard_chat_ws(
             if msg_type != "user_turn":
                 await send_frame({"type": "error", "message": f"unknown message type: {msg_type}"})
                 continue
+            if replay_task is not None:
+                replay_task.cancel()
+                await asyncio.gather(replay_task, return_exceptions=True)
+                replay_task = None
 
             try:
                 frame = UserTurnWsFrame.model_validate({**payload, "type": "user_turn"})
@@ -214,6 +266,23 @@ async def dashboard_chat_ws(
                 ws_connection_id=connection_id,
                 user_is_admin=bool(getattr(user, "is_admin", False)),
             )
+            adapter = getattr(gateway.processor, "execution", None)
+            if adapter is not None:
+                try:
+                    run = await adapter.admit(inbound, mode="dashboard")
+                except (ExecutionConflict, OctopError) as exc:
+                    await send_frame({"type": "error", "message": str(exc)})
+                    await send_frame({"type": "done"})
+                    continue
+                if run is not None:
+                    events = await adapter.service.io.run(
+                        adapter.service.repo.events, run["run_id"], user=user.id, limit=1
+                    )
+                    for event in events:
+                        for accepted in public_frames(
+                            event, run=run["run_id"], thread=prepared_early.thread_id
+                        ):
+                            await send_frame(accepted)
             hub.subscribe(prepared_early.thread_id, connection_id)
             channel_manager.enqueue(WS_CHANNEL_ID, inbound)
 
@@ -225,6 +294,9 @@ async def dashboard_chat_ws(
             with contextlib.suppress(Exception):
                 await send_frame({"type": "error", "message": "internal error"})
     finally:
+        if replay_task is not None:
+            replay_task.cancel()
+            await asyncio.gather(replay_task, return_exceptions=True)
         # Disconnect must not cancel an in-flight turn — clients may reconnect and
         # subscribe to continue receiving subsequent chunks (weak stream resume).
         hub.unregister(connection_id)
@@ -239,6 +311,7 @@ async def _bridge_chat_ws(
     server: Any,
     user: Any,
     ref: Any,
+    token: str,
 ) -> None:
     """Relay dashboard chat frames to a remote agent over Bridge WS."""
     rt = server.app_runtime
@@ -247,6 +320,9 @@ async def _bridge_chat_ws(
         await websocket.close(code=1011, reason="bridge not ready")
         return
     try:
+        from octop.infra.users.expert_access import ExpertAccess
+
+        ExpertAccess(server.services).assert_use(user.id, "bridge:" + ref.remote_agent_id)
         mgr.get_owned(ref.connection_id, user.id)
         mgr.require_session(ref.connection_id)
     except OctopError as exc:
@@ -265,6 +341,7 @@ async def _bridge_chat_ws(
     try:
         while websocket.application_state == WebSocketState.CONNECTED:
             raw = await websocket.receive_text()
+            user = await management_read(server, resolve_user_from_token, server, token)
             try:
                 payload = json.loads(raw)
             except json.JSONDecodeError:
@@ -306,6 +383,7 @@ async def _bridge_chat_ws(
             turn_payload = frame.model_dump(exclude_none=True)
             turn_payload.pop("type", None)
             try:
+                ExpertAccess(server.services).assert_use(user.id, "bridge:" + ref.remote_agent_id)
                 await mgr.relay_user_turn(
                     connection_id=ref.connection_id,
                     owner_user_id=user.id,

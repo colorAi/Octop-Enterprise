@@ -4,6 +4,8 @@
 
 本仓库采用以下发行约定：对外名称 Octop Enterprise，独立仓库 https://github.com/colorAi/Octop-Enterprise；主项目和自有通信服务使用 MIT。当前版本不因资料整理自动升级。仅在维护者明确要求时修改版本或提交 Git，不主动推送。只运行受影响模块及关联检查。独立更新渠道尚未建立，在线自更新与上游安装脚本已停用，不得通过上游 PyPI 包覆盖本分支。公开源码必须使用 tools/export_public_source.py 导出，排除本地记录、Git 历史和限制再分发的材料；上游自动发布工作流在公开副本中归档为 inactive。发布事项以 docs/open-source-release.md 为准。
 
+同一次正式发布之前，所有源码修改统一累积在本仓库，只维护一个当前待发布入口。准备或刷新候选源码时，按既定公开源码范围导出完整当前工作区，包括未提交修改和新增测试，不按本次对话或修复批次挑选文件。尚未验证的改动应列为待验证项，不得静默漏出候选范围。旧候选快照仅作历史记录；后续修改继续更新同一待发布版本。维护者明确要求发布时，再核对完整差异并统一构建安装包和运行时工具包。
+
 名称按使用场景选择：仓库名称、README 标题和主要产品介绍、正式安装包与软件包元数据使用全称 Octop Enterprise；传播文案、海报、紧凑界面标签及日常交流可使用短称 Octop Ent。不做全库缩写清除；安装路径、协议标识、历史版权与来源记录按兼容性和溯源要求保留。
 
 README 与公开使用文档面向使用者，描述当前产品、操作步骤和必要限制；不写命名变更解释、当次整理过程、私库状态、个人工作记录或未确定的发布计划，也不为使用短称添加冗余解释。构建前提放在构建文档，维护者发行流程放在发行文档；保留准确的来源、许可和兼容性说明。
@@ -230,7 +232,7 @@ New agents additionally keep system-scoped files under `{workspace}/.octop/` (e.
 
 **Database:** SQLite and PostgreSQL share one schema. Add or change tables via a numbered pair
 `infra/db/migrations/00N_description.sql` **and** `00N_description.pg.sql`, then bump the
-version assertion in `tests/unit/db/test_db_pool.py` (currently `v == 25`). Rebuilds that SQLite
+version assertion in `tests/unit/db/test_db_pool.py` (currently `v == 29`). Rebuilds that SQLite
 cannot express as `ALTER` live in `infra/db/migrate.py` helpers and must stay idempotent.
 
 Unreleased schema work on `main` **folds into the current unreleased `00N`**, not a new

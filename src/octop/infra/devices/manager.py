@@ -58,6 +58,7 @@ class Connection:
     pending_tools: dict[str, str] = field(default_factory=dict)
     pending_tasks: dict[str, DeviceTask] = field(default_factory=dict)
     send_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    generation: int = 0
 
     async def send(self, frame: dict[str, Any]) -> None:
         async with self.send_lock:
@@ -65,8 +66,9 @@ class Connection:
 
 
 class DeviceManager:
-    def __init__(self, repo: DeviceRepo) -> None:
+    def __init__(self, repo: DeviceRepo, *, execution: Any = None) -> None:
         self.repo = repo
+        self.execution = execution
         self.connections: dict[str, Connection] = {}
         self.closed = False
         self.tasks: dict[str, DeviceTask] = {}
@@ -132,6 +134,19 @@ class DeviceManager:
             if device_id in self.connections:
                 raise _error("device_already_connected")
             conn = Connection(row, socket, list(hello.capabilities), hello.grants)
+            if self.execution is not None:
+                service = self.execution
+                conn.generation = await service.io.run(
+                    service.repo.connect_device,
+                    device_id,
+                    user=int(row["owner_user_id"]),
+                    node=service.node,
+                    incarnation=service.incarnation,
+                    metadata={
+                        "capabilities": list(hello.capabilities),
+                        "grants": [g.model_dump() for g in hello.grants],
+                    },
+                )
             self.connections[device_id] = conn
             ready = {
                 "type": "ready",
@@ -166,6 +181,8 @@ class DeviceManager:
                     await _db(self.repo.touch, device_id, int(time.time()))
                     await conn.send({"type": "heartbeat_ack"})
                 elif message.type in {"result", "cancelled"}:
+                    if self.execution is not None:
+                        await self._receipt(conn, message)
                     future = conn.pending.get(message.call_id or "")
                     if future is None or future.done():
                         continue  # Late results never resolve a different connection/call.
@@ -196,10 +213,20 @@ class DeviceManager:
                         future.set_result({"status": "cancelled"})
         finally:
             if conn is not None:
-                self._detach(conn)
+                await self._detach(conn)
 
-    def _detach(self, conn: Connection) -> None:
+    async def _detach(self, conn: Connection) -> None:
         device_id = str(conn.row["device_id"])
+        if self.execution is not None and conn.generation:
+            service = self.execution
+            with suppress(Exception):
+                await service.io.run(
+                    service.repo.disconnect_device,
+                    device_id,
+                    service.node,
+                    service.incarnation,
+                    conn.generation,
+                )
         if self.connections.get(device_id) is conn:
             del self.connections[device_id]
         for future in conn.pending.values():
@@ -208,6 +235,35 @@ class DeviceManager:
         conn.pending.clear()
         conn.pending_tools.clear()
         conn.pending_tasks.clear()
+
+    async def _receipt(self, conn: Connection, message: DeviceMessage) -> None:
+        service = self.execution
+        operation = await service.io.run(
+            service.repo.device_operation,
+            str(conn.row["device_id"]),
+            conn.generation,
+            message.call_id or "",
+        )
+        if operation is None:
+            return
+        if message.type == "result" and not isinstance(message.result, FileResult):
+            raise _error("invalid_tool_result")
+        result: dict[str, Any]
+        if message.type == "cancelled":
+            result = {"status": "cancelled"}
+        else:
+            assert isinstance(message.result, FileResult)
+            result = {"status": message.result.status, "result": message.result.model_dump()}
+        await service.io.run(
+            service.repo.complete_tool,
+            operation["run_id"],
+            operation["operation_id"],
+            device=str(conn.row["device_id"]),
+            node=service.node,
+            incarnation=service.incarnation,
+            generation=conn.generation,
+            result=result,
+        )
 
     async def list_devices(self, owner: int) -> list[dict[str, Any]]:
         rows = await _db(self.repo.list_for_owner, owner)
@@ -250,6 +306,7 @@ class DeviceManager:
         thread_id: str,
         session_key: str,
         selection: DeviceSelection,
+        request_id: str | None = None,
     ) -> str:
         conn = self.connections.get(selection.device_id)
         if conn is None or conn.row["owner_user_id"] != owner:
@@ -260,6 +317,20 @@ class DeviceManager:
         now = int(time.time())
         self.tasks = {k: t for k, t in self.tasks.items() if t.expires_at > now}
         self.paused = {k: v for k, v in self.paused.items() if v.get(CONFIG_KEY) in self.tasks}
+        if request_id:
+            for existing in self.tasks.values():
+                if (existing.owner, existing.agent_id, existing.thread_id, existing.request_id) != (
+                    owner,
+                    agent_id,
+                    thread_id,
+                    request_id,
+                ):
+                    continue
+                if existing.selection != selection or existing.session_key != session_key:
+                    raise _error("device_task_identity_conflict", status=409)
+                if not existing.valid_grant(conn):
+                    raise _error("directory_permission_or_h3c_consent_required")
+                return existing.token
         if len(self.tasks) >= 4096:
             raise _error("device_tasks_full", status=429)
         token = secrets.token_hex(32)
@@ -271,6 +342,7 @@ class DeviceManager:
             session_key,
             selection,
             min(now + 3600, conn.row["expires_at"]),
+            request_id,
         )
         if not task.valid_grant(conn):
             raise _error("directory_permission_or_h3c_consent_required")
@@ -327,32 +399,55 @@ class DeviceManager:
         if task is not None:
             conn.pending_tasks[call_id] = task
         try:
-            await conn.send(
-                {
-                    "type": "call",
-                    "call_id": call_id,
-                    "task_id": task.token if task else "probe:" + call_id,
-                    "device_id": conn.row["device_id"],
-                    "owner_user_id": owner,
-                    "tool": tool,
-                    "expires_at": min(
-                        int(time.time() + timeout),
-                        conn.row["expires_at"],
-                        task.expires_at if task else conn.row["expires_at"],
-                    ),
-                    "arguments": arguments,
-                    **(
-                        {
-                            "agent_id": task.agent_id,
-                            "thread_id": task.thread_id,
-                            "grant_id": task.selection.grant_id,
-                            "grant_version": task.selection.grant_version,
-                        }
-                        if task
-                        else {}
-                    ),
-                }
-            )
+            frame = {
+                "type": "call",
+                "call_id": call_id,
+                "task_id": task.token if task else "probe:" + call_id,
+                "device_id": conn.row["device_id"],
+                "owner_user_id": owner,
+                "tool": tool,
+                "expires_at": min(
+                    int(time.time() + timeout),
+                    conn.row["expires_at"],
+                    task.expires_at if task else conn.row["expires_at"],
+                ),
+                "arguments": arguments,
+                **(
+                    {
+                        "agent_id": task.agent_id,
+                        "thread_id": task.thread_id,
+                        "grant_id": task.selection.grant_id,
+                        "grant_version": task.selection.grant_version,
+                    }
+                    if task
+                    else {}
+                ),
+            }
+            if self.execution is not None and task is not None:
+                from octop.infra.execution.service import current_execution
+
+                active = current_execution.get()
+                if active is None:
+                    raise _error("shared_execution_required")
+                service = self.execution
+                await service.io.run(
+                    service.repo.request_tool,
+                    *active.fence,
+                    operation=call_id,
+                    device=str(conn.row["device_id"]),
+                    generation=conn.generation,
+                    request=frame,
+                )
+                await service.io.run(
+                    service.repo.send_tool,
+                    active.run["run_id"],
+                    call_id,
+                    device=str(conn.row["device_id"]),
+                    node=service.node,
+                    incarnation=service.incarnation,
+                    generation=conn.generation,
+                )
+            await conn.send(frame)
             result = await asyncio.wait_for(asyncio.shield(future), timeout)
             return {"call_id": call_id, **result}
         except asyncio.CancelledError:
@@ -376,7 +471,7 @@ class DeviceManager:
     async def _close(
         self, conn: Connection, *, code: int = 4001, reason: str = "device_revoked"
     ) -> None:
-        self._detach(conn)
+        await self._detach(conn)
         with suppress(Exception):
             await asyncio.wait_for(conn.socket.close(code=code, reason=reason), 5)
 

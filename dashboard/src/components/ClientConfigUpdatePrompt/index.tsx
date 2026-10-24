@@ -8,6 +8,7 @@ import {
 import { isCompanyDesktop } from "../../api/desktopRuntime";
 import { useCurrentUser, useSetCurrentUser } from "../../hooks/useCurrentUser";
 import { hasActiveChatWork } from "../../pages/Chat/hooks/chatStore";
+import { parseApiError } from "../../utils/apiError";
 import {
   CLIENT_CONFIG_CHECK_EVENT,
   permissionsSignature,
@@ -35,9 +36,14 @@ export default function ClientConfigUpdatePrompt() {
     activeScope.current = userId;
     let cancelled = false;
     let inFlight = false;
+    let pending = false;
     let revision: string | null = null;
     const check = async () => {
-      if (cancelled || inFlight) return;
+      if (cancelled) return;
+      if (inFlight) {
+        pending = true;
+        return;
+      }
       inFlight = true;
       try {
         const next = await clientConfigApi.status();
@@ -50,18 +56,27 @@ export default function ClientConfigUpdatePrompt() {
         const previous = userRef.current;
         const rightsChanged =
           permissionsSignature(previous.role, previous.permissions) !==
-          permissionsSignature(next.role, next.permissions);
+            permissionsSignature(next.role, next.permissions) ||
+          (next.expert_access_mode !== undefined &&
+            (previous.expert_access_mode ?? "legacy") !==
+              next.expert_access_mode);
         // Server enforcement is already current. Reflect revocations immediately,
         // even when the employee postpones refreshing feature configuration.
         if (rightsChanged)
           setUser((prev) =>
             prev?.id === userId
-              ? { ...prev, role: next.role, permissions: next.permissions }
+              ? {
+                  ...prev,
+                  role: next.role,
+                  permissions: next.permissions,
+                  expert_access_mode:
+                    next.expert_access_mode ?? prev.expert_access_mode,
+                }
               : prev,
           );
         if (
           (revision !== null && revision !== next.revision) ||
-          (revision === null && rightsChanged)
+          (revision === null && (rightsChanged || next.resource_update_pending))
         )
           setNotice(next);
         revision = next.revision;
@@ -69,6 +84,10 @@ export default function ClientConfigUpdatePrompt() {
         // Offline or older servers keep their existing configuration and session.
       } finally {
         inFlight = false;
+        if (pending && !cancelled) {
+          pending = false;
+          void check();
+        }
       }
     };
     const onVisible = () => {
@@ -76,14 +95,24 @@ export default function ClientConfigUpdatePrompt() {
     };
     setNotice(null);
     void check();
-    const timer = window.setInterval(onVisible, 30_000);
+    let timer: number;
+    const schedule = () => {
+      timer = window.setTimeout(
+        () => {
+          onVisible();
+          schedule();
+        },
+        25_000 + Math.floor(Math.random() * 10_000),
+      );
+    };
+    schedule();
     window.addEventListener(CLIENT_CONFIG_CHECK_EVENT, onVisible);
     window.addEventListener("focus", onVisible);
     document.addEventListener("visibilitychange", onVisible);
     return () => {
       cancelled = true;
       activeScope.current = null;
-      window.clearInterval(timer);
+      window.clearTimeout(timer);
       window.removeEventListener(CLIENT_CONFIG_CHECK_EVENT, onVisible);
       window.removeEventListener("focus", onVisible);
       document.removeEventListener("visibilitychange", onVisible);
@@ -137,12 +166,34 @@ export default function ClientConfigUpdatePrompt() {
         message.info(t("clientConfig.busy"));
         return;
       }
+      const applied = await clientConfigApi.apply();
+      if (
+        activeScope.current !== user.id ||
+        applied.user_id !== user.id ||
+        userRef.current?.id !== user.id
+      )
+        return;
+      if (!ready()) {
+        message.info(t("clientConfig.busy"));
+        return;
+      }
       // Reload only the webview at its existing URL. Tokens and saved drafts
       // stay in the same browser origin; the native app/runtime remain running.
       reloadClientConfig();
-    } catch {
-      if (activeScope.current === user.id)
-        message.error(t("clientConfig.failed"));
+    } catch (error) {
+      if (activeScope.current === user.id) {
+        const reason = parseApiError(error)?.details?.reason;
+        if (reason === "client_config_busy")
+          message.info(t("clientConfig.busy"));
+        else
+          message.error(
+            t(
+              reason === "employee_resources_changed"
+                ? "clientConfig.changed"
+                : "clientConfig.failed",
+            ),
+          );
+      }
     } finally {
       applying.current = false;
       if (activeScope.current === user.id) setBusy(false);

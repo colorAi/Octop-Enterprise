@@ -102,8 +102,16 @@ async def _ctx(
     registry = server.app_runtime.agent_registry
     require = require_agent_owner_row if owner_only else require_agent_row
     row = require(agent_id, user=user, as_user=as_user, server=server)
+    if owner_only:
+        from octop.infra.users.expert_access import ExpertAccess
+
+        ExpertAccess(server.services).assert_manage(agent_id)
     cfg = registry.get_config(agent_id)
-    agent = registry.get_agent(agent_id)
+    agent = (
+        await registry.ensure_runtime(agent_id)
+        if getattr(registry, "runtime_shards", None) is not None
+        else registry.get_agent(agent_id)
+    )
     return _AgentCtx(runtime=row, workspace=agent.workspace, config=cfg)
 
 
@@ -484,15 +492,25 @@ async def list_skills(
     user: Any = Depends(current_user),
     server: Any = Depends(get_server),
 ) -> list[dict[str, Any]]:
-    await _ctx(agent_id, user=user, as_user=as_user, server=server, owner_only=False)
     assert server.app_runtime is not None
-    return cast(
+    resources = getattr(server, "employee_resources", None)
+    row = require_agent_row(agent_id, user=user, as_user=as_user, server=server)
+    if resources is not None and resources.access.repo.instance(agent_id) is not None:
+        return cast(list[dict[str, Any]], await resources.skill_summaries(row.user_id, agent_id))
+    await _ctx(agent_id, user=user, as_user=as_user, server=server, owner_only=False)
+    if resources is not None:
+        await resources.prepare(agent_id)
+    result = cast(
         list[dict[str, Any]],
         await server.app_runtime.agent_registry.list_skill_summaries(
             agent_id,
             locale=resolve_request_locale(request),
         ),
     )
+    allowed = getattr(
+        server.app_runtime.agent_registry.get_agent(agent_id), "_octop_allowed_skills", None
+    )
+    return [row for row in result if allowed is None or row.get("slug") in allowed]
 
 
 class SkillPackageMountBody(BaseModel):
@@ -527,6 +545,9 @@ async def list_skill_package_mounts(
     server: Any = Depends(get_server),
 ) -> dict[str, Any]:
     require_agent_owner_row(agent_id, user=user, as_user=as_user, server=server)
+    from octop.infra.users.expert_access import ExpertAccess
+
+    ExpertAccess(server.services).assert_manage(agent_id)
     assert server.app_runtime is not None
     package_ids = skill_package_ids_list(server.app_runtime.agent_registry.get_config(agent_id))
     assert server.services is not None
@@ -563,6 +584,9 @@ async def replace_skill_package_mounts(
     server: Any = Depends(get_server),
 ) -> dict[str, list[str]]:
     require_agent_owner_row(agent_id, user=user, as_user=as_user, server=server)
+    from octop.infra.users.expert_access import ExpertAccess
+
+    ExpertAccess(server.services).assert_manage(agent_id)
     assert server.app_runtime is not None
     package_ids = skill_package_ids_list({"skill_package_ids": body.package_ids})
     await server.app_runtime.agent_registry.persist_skill_package_ids(agent_id, package_ids)
@@ -700,6 +724,19 @@ async def get_skill(
     user: Any = Depends(current_user),
     server: Any = Depends(get_server),
 ) -> dict[str, Any]:
+    resources = getattr(server, "employee_resources", None)
+    row = require_agent_row(agent_id, user=user, as_user=as_user, server=server)
+    if resources is not None and resources.access.repo.instance(agent_id) is not None:
+        manifest = await resources.skill_manifest(row.user_id, agent_id, name)
+        meta, body = _parse_frontmatter(manifest)
+        return {
+            **_summary_dict(
+                name, meta, enabled=True, kind="workspace", locale=resolve_request_locale(request)
+            ),
+            "frontmatter": meta,
+            "body": body,
+            "raw": manifest,
+        }
     ctx = await _ctx(
         agent_id,
         user=user,
@@ -707,6 +744,8 @@ async def get_skill(
         server=server,
         owner_only=False,
     )
+    if resources is not None:
+        await resources.assert_skill_read(user.id, agent_id, name)
     resolved = await _resolve_skill(ctx.workspace, name)
     if resolved is None:
         raise OctopError(ErrorCode.NOT_FOUND, f"skill {name!r} not found")

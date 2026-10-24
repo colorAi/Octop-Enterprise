@@ -15,6 +15,7 @@ from octop.infra.agents.middleware.device_tools import DeviceToolsMiddleware
 from octop.infra.devices.protocol import DeviceSelection, DirectoryGrant
 from octop.infra.devices.tasks import CONFIG_KEY, stamp_device_task
 from octop.infra.errors import OctopError
+from octop.infra.users.model_access import ModelAccess
 from tests.unit.devices.test_channel import Socket, finish
 
 
@@ -50,6 +51,92 @@ async def bind(manager, owner, selection):
         selection=selection,
     )
     return manager.tasks[token]
+
+
+async def test_retried_turn_reuses_device_authority_but_changed_selection_conflicts(stack):
+    server, alice, _, _ = stack
+    manager = server.devices
+    _, runner, selection = await connect_files(manager, alice)
+    kwargs = {
+        "owner": alice,
+        "agent_id": "private",
+        "thread_id": "thread",
+        "session_key": "session",
+        "request_id": "request",
+    }
+    try:
+        token = await manager.bind_task(**kwargs, selection=selection)
+        assert await manager.bind_task(**kwargs, selection=selection) == token
+        with pytest.raises(OctopError, match="identity_conflict"):
+            await manager.bind_task(
+                **kwargs, selection=selection.model_copy(update={"grant_version": 2})
+            )
+        assert len(manager.tasks) == 1
+    finally:
+        await finish(runner)
+
+
+async def test_durable_tool_receipt_survives_lost_in_memory_future(stack):
+    from octop.infra.execution.service import ActiveExecution, ExecutionService, current_execution
+
+    server, alice, _, _ = stack
+    manager = server.devices
+    repo = server.services.execution_repo
+    repo.register("worker", "boot", "worker")
+    service = ExecutionService(repo, node="worker", incarnation="boot", role="worker")
+    manager.execution = service
+    server.services.agent_repo.create(agent_id="private", user_id=alice, name="Private")
+    server.services.thread_repo.insert(
+        thread_id="thread",
+        agent_id="private",
+        user_id=alice,
+        channel_type="dashboard",
+        session_key="session",
+    )
+    repo.submit(
+        user=alice,
+        agent="private",
+        thread="thread",
+        operation="chat",
+        key="tool-request",
+        request={},
+    )
+    run = repo.claim("worker", "boot")
+    socket, runner, selection = await connect_files(manager, alice)
+    token = current_execution.set(ActiveExecution(service, run))
+    try:
+        task = await bind(manager, alice, selection)
+        conn = manager.connections[selection.device_id]
+        pending = asyncio.create_task(
+            manager._call(
+                conn,
+                alice,
+                "local_write_file",
+                {"path": "result.txt", "content": "test"},
+                timeout=0.05,
+                task=task,
+            )
+        )
+        call = await socket.receive()
+        assert (await pending)["status"] == "timed_out"
+        assert call["call_id"] not in conn.pending
+        assert (await socket.receive())["type"] == "cancel"
+        await socket.send(
+            {
+                "type": "result",
+                "call_id": call["call_id"],
+                "result": {"kind": "local_operation", "status": "completed", "path": "result.txt"},
+            }
+        )
+        await socket.send({"type": "heartbeat"})
+        assert (await socket.receive())["type"] == "heartbeat_ack"
+        operation = repo.device_operation(selection.device_id, conn.generation, call["call_id"])
+        assert operation["state"] == "completed"
+        assert json.loads(operation["result_json"])["result"]["status"] == "completed"
+    finally:
+        current_execution.reset(token)
+        await finish(runner)
+        await service.io.drain()
 
 
 async def test_file_context_owner_consent_version_and_revocation(stack):
@@ -332,6 +419,15 @@ async def test_chat_preparation_binds_authenticated_owner_and_private_expert(sta
 
     server, alice, bob, _ = stack
     svc = server.services
+    svc.provider_repo.create(
+        name="test",
+        kind="openai",
+        base_url="https://model.invalid/v1",
+        api_key="fake",
+        models_json='[{"id":"chat"}]',
+    )
+    ModelAccess(svc).set(alice, ["test/chat"], "0", actor="bob")
+    user = server.user_manager.get_by_id(alice)
     svc.agent_repo.create(agent_id="private", user_id=alice, name="Private")
     svc.thread_repo.insert(
         thread_id="thread",
@@ -356,9 +452,7 @@ async def test_chat_preparation_binds_authenticated_owner_and_private_expert(sta
         turn = ChatTurnBody(
             text="read input.csv", device=selection, mcp_servers=["external"], skills=["script"]
         )
-        prepared = await prepare_dashboard_turn(
-            server, agent_id="private", user=SimpleNamespace(id=alice), turn=turn
-        )
+        prepared = await prepare_dashboard_turn(server, agent_id="private", user=user, turn=turn)
         assert prepared.device_task in server.devices.tasks
         assert svc.device_repo.is_file_thread("thread")
         assert mcp.call_args.kwargs["names"] == []
@@ -369,14 +463,10 @@ async def test_chat_preparation_binds_authenticated_owner_and_private_expert(sta
         assert inbound.metadata["mcp_servers"] == []
         row.user_id = bob
         with pytest.raises(OctopError):
-            await prepare_dashboard_turn(
-                server, agent_id="private", user=SimpleNamespace(id=alice), turn=turn
-            )
+            await prepare_dashboard_turn(server, agent_id="private", user=user, turn=turn)
         row.user_id, row.kind = alice, "team"
         with pytest.raises(OctopError):
-            await prepare_dashboard_turn(
-                server, agent_id="private", user=SimpleNamespace(id=alice), turn=turn
-            )
+            await prepare_dashboard_turn(server, agent_id="private", user=user, turn=turn)
     finally:
         await finish(runner)
 

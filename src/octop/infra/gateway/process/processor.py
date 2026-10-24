@@ -179,6 +179,7 @@ class GlobalProcessor:
         self._hitl = hitl or HitlChannelCoordinator()
         self._trajectory_service = trajectory_service
         self._history_archive = history_archive
+        self.execution: Any = None
         self.teams = TeamManager(
             agent_manager=agent_manager,
             thread_registry=thread_registry,
@@ -562,6 +563,15 @@ class GlobalProcessor:
         if not model_ref:
             fallback = self._agent_manager.resolve_fallback_model_ref()
             model_ref = fallback.strip() if isinstance(fallback, str) and fallback.strip() else None
+        if user_id > 0:
+            from octop.infra.users.model_access import ModelAccess
+
+            access = ModelAccess(self._agent_manager._repos)
+            if not access.is_admin(user_id):
+                explicit = (meta or {}).get("model")
+                if isinstance(explicit, str) and explicit.strip() and explicit.lower() != "auto":
+                    access.require(user_id, explicit.strip())
+                return access.resolve(user_id, model_ref, needs_multimodal=needs_multimodal)
         if not model_ref:
             return None
         return providers.resolve_model_for_multimodal_turn(
@@ -613,6 +623,10 @@ class GlobalProcessor:
     # -- IM channel entry (MessageEvent stream) --------------------------------
 
     async def __call__(self, msg: InboundMessage) -> AsyncIterator[MessageEvent]:
+        if self.execution is not None and self.execution.should_submit:
+            async for event in self.execution.inbound(msg, mode="channel"):
+                yield event
+            return
         from octop.infra.metrics import METRICS  # noqa: PLC0415
 
         METRICS.inc("messages_total")
@@ -767,7 +781,8 @@ class GlobalProcessor:
             media_backend=media_backend,
             locale=locale,
         )
-        model_ref = self._resolve_harness_model(
+        model_ref = await asyncio.to_thread(
+            self._resolve_harness_model,
             agent_id,
             thread_id,
             None,
@@ -924,6 +939,10 @@ class GlobalProcessor:
         IM channels use :meth:`__call__` → ``project_stream`` → ``MessageEvent``
         (e.g. DingTalk ``BaseChannel.handle_inbound``).
         """
+        if self.execution is not None and self.execution.should_submit:
+            async for frame in self.execution.inbound(msg, mode="dashboard"):
+                yield frame
+            return
         from octop.infra.metrics import METRICS  # noqa: PLC0415
 
         METRICS.inc("messages_total")
@@ -1276,6 +1295,12 @@ class GlobalProcessor:
         decisions: list[dict[str, Any]],
     ) -> AsyncIterator[dict[str, Any]]:
         """Resume a dashboard HITL turn with the normal history bookkeeping."""
+        if self.execution is not None and self.execution.should_submit:
+            async for frame in self.execution.resume(
+                agent_id=agent_id, thread_id=thread_id, user_id=user_id, decisions=decisions
+            ):
+                yield frame
+            return
         usage_tracker = UsageTracker()
         history_tracker = await self._begin_history(agent_id, thread_id, {}, resume=True)
         completed = False
@@ -1378,7 +1403,8 @@ class GlobalProcessor:
             media_backend=media_backend,
             locale=locale,
         )
-        model_ref = self._resolve_harness_model(
+        model_ref = await asyncio.to_thread(
+            self._resolve_harness_model,
             agent_id,
             thread_id,
             meta,

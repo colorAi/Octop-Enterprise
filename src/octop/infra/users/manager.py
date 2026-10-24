@@ -213,13 +213,17 @@ class UserManager:
             )
 
     def get(self, username: str) -> User | None:
-        return self._users.get(username)
+        row = self._services.user_repo.get_by_username(username)
+        if row is None or row.disabled:
+            self._users.pop(username, None)
+            return None
+        return self._cached_or_row_user(row)
 
     def get_by_id(self, user_id: int) -> User | None:
-        for u in self._users.values():
-            if u.id == user_id:
-                return u
-        return None
+        row = self._services.user_repo.get(user_id)
+        if row is None or row.disabled:
+            return None
+        return self._cached_or_row_user(row)
 
     def get_row(self, user_id: int) -> Any:
         """Return the raw UserRow (includes disabled flag) for admin read operations."""
@@ -414,7 +418,13 @@ class UserManager:
 
     def _cached_or_row_user(self, row: Any) -> User:
         cached = self._users.get(row.username)
-        if cached is not None:
+        if cached is not None and cached.id == row.id:
+            # Another web/worker may have changed role or module permissions.
+            # Cached identity objects must never be an authorization authority.
+            cached.role = str(row.role)
+            cached.display_name = row.display_name
+            cached.locale = normalize_locale(row.locale)
+            cached.permissions = list(row.permissions)
             return cached
         user = User(
             id=row.id,
@@ -493,17 +503,7 @@ class UserManager:
                 )
             return None
         self._services.user_repo.clear_login_lockout(row.id)
-        user = self._users.get(row.username)
-        if user is None:
-            user = User(
-                id=row.id,
-                username=row.username,
-                role=str(row.role),
-                display_name=row.display_name,
-                locale=normalize_locale(row.locale),
-                permissions=list(row.permissions),
-            )
-            self._users[row.username] = user
+        user = self._cached_or_row_user(row)
         self._services.audit_repo.write(actor=row.username, action="auth.login")
         return user
 

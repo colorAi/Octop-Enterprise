@@ -132,6 +132,23 @@ async def test_boot_starts_pre_existing_agents(tmp_path: Path, monkeypatch) -> N
 
 
 @pytest.mark.asyncio
+async def test_lazy_boot_does_not_preload_source_experts(tmp_path, monkeypatch):
+    services = _make_services(tmp_path)
+    fake_hm = _patch_harness(monkeypatch)
+    admin = services.user_repo.create(username="source-owner", role="admin")
+    services.expert_assignment_repo.set_source(admin, 0, "admin")
+    for index in range(40):
+        services.agent_repo.create(
+            agent_id=f"expert-{index}", user_id=admin, name=f"Expert {index}"
+        )
+    registry = AgentManager(repos=services.repos, paths=services.paths)
+    await registry.boot(lazy=True)
+    fake_hm.acreate_agent.assert_not_called()
+    assert len(registry.list_rows()) == 40
+    assert not registry._isolated_backends
+
+
+@pytest.mark.asyncio
 async def test_boot_skips_disabled_agents(tmp_path: Path, monkeypatch) -> None:
     """boot() must not start agents that have enabled=0."""
     services = _make_services(tmp_path)
@@ -952,6 +969,13 @@ async def test_impact_ids_needing_model_excludes_running(
         name="Failed",
     )
     services.repos.agent_repo.set_state("failed-one", "failed")
+    services.provider_repo.create(
+        name="other",
+        kind="openai",
+        api_key="test-only",
+        base_url="https://example.test/v1",
+        models_json=json.dumps([{"id": "x", "name": "x", "enabled": True}]),
+    )
     registry = _make_registry(services)
     services.repos.settings_repo.set_active_model("other", "x")
 

@@ -11,7 +11,7 @@ def test_existing_schema_21_upgrades_without_touching_users(stack):
     run_migrations(db)
     run_migrations(db)
     with db.connect() as conn:
-        assert conn.execute("SELECT version FROM _schema_version").fetchone()[0] == 25
+        assert conn.execute("SELECT version FROM _schema_version").fetchone()[0] == 30
         assert conn.execute("SELECT COUNT(*) FROM desktop_devices").fetchone()[0] == 0
         assert conn.execute("SELECT COUNT(*) FROM desktop_pairing_codes").fetchone()[0] == 0
     assert server.services.user_repo.get(alice).username == "alice"

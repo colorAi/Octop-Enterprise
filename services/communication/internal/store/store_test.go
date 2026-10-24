@@ -34,8 +34,8 @@ func TestMigrateIdempotentAndConstraints(t *testing.T) {
 	if err := st.Pool.QueryRow(ctx, "SELECT max(version) FROM schema_migrations").Scan(&version); err != nil {
 		t.Fatal(err)
 	}
-	if version != 15 {
-		t.Fatalf("expected current migration version 15, got %d", version)
+	if version != 16 {
+		t.Fatalf("expected current migration version 16, got %d", version)
 	}
 
 	if _, err := st.Pool.Exec(ctx, `INSERT INTO conversations(id,type) VALUES('c1','private'),('c2','private'),('c3','private')`); err != nil {

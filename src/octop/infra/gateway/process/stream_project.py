@@ -19,6 +19,7 @@ from octop.infra.gateway.media.tool_media import (
 from octop.infra.gateway.process.agent_resolve import harness_workspace_for_agent
 from octop.infra.gateway.process.usage_record import UsageTracker
 from octop.infra.history.projection import TurnHistoryTracker
+from octop.infra.utils.asyncio import close_event_stream
 from octop.infra.utils.locale import DEFAULT_LOCALE, Locale, normalize_locale
 from octop.infra.utils.turn_failure import log_failed_tool_results
 
@@ -79,7 +80,7 @@ def enrich_tool_stream_chunk(
     return out
 
 
-async def _project_chunks(
+async def project_chunks(
     chunks: AsyncIterator[dict[str, Any]],
     *,
     agent_manager: AgentManager,
@@ -205,7 +206,8 @@ async def _project_chunks(
                 if projection_state is not None:
                     projection_state.hitl_paused = True
                     projection_state.hitl_pending_id = record.pending_id
-                yield MessageEvent.text(card)
+                yield MessageEvent.text(card, metadata={"execution_approval_id": record.pending_id})
+            await close_event_stream(chunks)
             return
 
         elif ctype == "state_update":
@@ -228,7 +230,7 @@ async def project_stream(
     hitl_ctx: HitlStreamContext | None = None,
 ) -> AsyncIterator[MessageEvent]:
     del media_backend  # IM tool media uses agent.backend directly
-    async for ev in _project_chunks(
+    async for ev in project_chunks(
         agent_manager.stream(agent_id, request),
         agent_manager=agent_manager,
         agent_id=agent_id,
@@ -255,7 +257,7 @@ async def project_resume_stream(
     hitl_coordinator: HitlChannelCoordinator | None = None,
     hitl_ctx: HitlStreamContext | None = None,
 ) -> AsyncIterator[MessageEvent]:
-    async for ev in _project_chunks(
+    async for ev in project_chunks(
         agent_manager.resume_hitl(agent_id, thread_id, decisions),
         agent_manager=agent_manager,
         agent_id=agent_id,

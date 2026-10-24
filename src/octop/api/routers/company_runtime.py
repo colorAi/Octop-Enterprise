@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import time
 from collections.abc import AsyncIterator
 from typing import Any, Literal
 
@@ -14,7 +13,12 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from octop.api.deps import get_server
 from octop.infra.company_runtime import PROTOCOL_VERSION
-from octop.infra.company_runtime.service import CompanyRuntimeService, denied, model_failure
+from octop.infra.company_runtime.service import (
+    CompanyRuntimeService,
+    authenticate_company_device,
+    denied,
+    model_failure,
+)
 from octop.infra.db.repos.company_runtime import RuntimeConflict
 from octop.infra.utils.asyncio import offload
 
@@ -43,18 +47,12 @@ class Capabilities(Document):
 async def service(request: Request, server: Any = Depends(get_server)) -> CompanyRuntimeService:
     if not server.services.config.company_runtime_enabled:
         raise denied("company_runtime_disabled", 404)
-    if request.headers.get("origin"):
-        raise denied("native_runtime_required", 403)
-    raw = request.headers.get("x-octop-device-credential", "")
-    if not raw.startswith("octop-device.") or len(raw) > 256:
-        raise denied("device_credential_required", 401)
     identity = await offload(
-        server.services.device_repo.authenticate,
-        hashlib.sha256(raw.encode()).hexdigest(),
-        int(time.time()),
+        authenticate_company_device,
+        server.services,
+        request.headers.get("x-octop-device-credential", ""),
+        request.headers.get("origin"),
     )
-    if identity is None:
-        raise denied("device_session_expired", 401)
     return CompanyRuntimeService(server, identity)
 
 
@@ -78,6 +76,7 @@ class StartTask(Document):
     reasoning_mode: Literal["auto", "enabled", "disabled"] | None = None
     reasoning_effort: str | None = Field(default=None, max_length=64)
     conversation_mode: Literal["ask", "plan", "craft"] | None = None
+    hitl_policy: dict[str, Any] | None = None
     knowledge_base_ids: list[str] = Field(default_factory=list, max_length=100)
     installation_token: str = Field(min_length=32, max_length=256)
     recovery_token: str = Field(min_length=32, max_length=256)
@@ -267,7 +266,7 @@ class MemoryRequest(Document):
 )
 async def memory(
     task_id: str,
-    action: Literal["search", "get", "remember"],
+    action: Literal["search", "get", "remember", "recall"],
     body: MemoryRequest,
     svc: CompanyRuntimeService = Depends(service),
 ) -> Any:
@@ -299,6 +298,77 @@ class ImageRequest(Document):
     reference_images: list[str] = Field(default_factory=list, max_length=4)
 
 
+class VideoRequest(Document):
+    operation_id: str = Field(pattern=ID)
+    prompt: str = Field(min_length=1, max_length=20000)
+    first_frame: str | None = None
+    last_frame: str | None = None
+    reference_images: list[str] = Field(default_factory=list, max_length=4)
+    duration: int = Field(default=5, ge=1, le=30)
+    aspect_ratio: str = Field(default="16:9", max_length=16)
+    resolution: str = Field(default="720p", max_length=16)
+    generate_audio: bool = False
+
+
+class SpeechRequest(Document):
+    operation_id: str = Field(pattern=ID)
+    text: str = Field(min_length=1, max_length=8000)
+    voice_id: str | None = Field(default=None, max_length=128)
+    speed: float = Field(default=1, ge=0.5, le=2)
+
+
+class TranscribeRequest(Document):
+    audio_base64: str = Field(min_length=1, max_length=35 * 1024 * 1024)
+    media_type: str = Field(pattern=r"^audio/[a-zA-Z0-9.+-]+$", max_length=100)
+    language: str = Field(default="zh-CN", max_length=32)
+
+
+class WebSearchRequest(Document):
+    query: str = Field(min_length=1, max_length=4000)
+
+
+@router.post(
+    "/tasks/{task_id}/speech", summary="Synthesize speech once with the assigned company service"
+)
+async def synthesize_speech(
+    task_id: str, body: SpeechRequest, svc: CompanyRuntimeService = Depends(service)
+) -> Any:
+    from octop.infra.company_runtime.company_tools import synthesize
+
+    return await synthesize(svc, task_id, body.model_dump())
+
+
+@router.post(
+    "/tasks/{task_id}/transcribe", summary="Transcribe an employee-selected local audio file"
+)
+async def transcribe_audio(
+    task_id: str, body: TranscribeRequest, svc: CompanyRuntimeService = Depends(service)
+) -> Any:
+    from octop.infra.company_runtime.company_tools import transcribe
+
+    return await transcribe(svc, task_id, body.model_dump())
+
+
+@router.post(
+    "/tasks/{task_id}/search", summary="Search the web using an assigned company search service"
+)
+async def web_search(
+    task_id: str, body: WebSearchRequest, svc: CompanyRuntimeService = Depends(service)
+) -> Any:
+    from octop.infra.company_runtime.company_tools import search
+
+    return await search(svc, task_id, body.model_dump())
+
+
+@router.post("/tasks/{task_id}/videos", summary="Generate a video once using company configuration")
+async def generate_video(
+    task_id: str, body: VideoRequest, svc: CompanyRuntimeService = Depends(service)
+) -> Any:
+    from octop.infra.company_runtime.media import generate
+
+    return await generate(svc, task_id, body.model_dump(), kind="video")
+
+
 @router.post(
     "/tasks/{task_id}/images",
     response_model=dict[str, Any],
@@ -315,6 +385,12 @@ async def generate_image(
 @router.get(
     "/tasks/{task_id}/images/{operation}/{file_id}",
     summary="Download an owned generated output with a SHA-256 checksum",
+)
+@router.get(
+    "/tasks/{task_id}/videos/{operation}/{file_id}", summary="Download an owned generated video"
+)
+@router.get(
+    "/tasks/{task_id}/speech/{operation}/{file_id}", summary="Download owned synthesized speech"
 )
 async def image_file(
     task_id: str, operation: str, file_id: str, svc: CompanyRuntimeService = Depends(service)
@@ -371,9 +447,12 @@ async def skill_asset(
     assets = json.loads(task["expert_json"])["skills"]
     if not any(item["sha256"] == digest for item in assets):
         raise denied("skill_not_granted", 403)
-    data = await offload((svc.services.paths.root / "company-runtime-skills" / digest).read_bytes)
-    if hashlib.sha256(data).hexdigest() != digest:
-        raise denied("skill_checksum_mismatch", 409)
+    from octop.infra.company_runtime.skills import read_asset
+
+    try:
+        data = await offload(read_asset, svc.services.paths.root / "company-runtime-skills", digest)
+    except ValueError as exc:
+        raise denied("skill_checksum_mismatch", 409) from exc
     return Response(
         data,
         media_type="application/octet-stream",

@@ -29,8 +29,8 @@ _BACKEND_KEY = "knowledge_ocr_backend"
 _MODEL_KEY = "knowledge_ocr_model"
 _PROVIDER_ID_KEY = "knowledge_ocr_provider_id"
 _LOCAL_PACKAGES = ("rapidocr>=3.4,<4", "onnxruntime>=1.17", "pymupdf>=1.24")
-_LOCAL_SPEC = PackageInstallSpec(packages=_LOCAL_PACKAGES, extra_fallback="knowledge-ocr")
-_PDF_SPEC = PackageInstallSpec(packages=("pymupdf>=1.24",), extra_fallback="knowledge-ocr")
+_LOCAL_SPEC = PackageInstallSpec(packages=_LOCAL_PACKAGES)
+_PDF_SPEC = PackageInstallSpec(packages=("pymupdf>=1.24",))
 _OCR_PROMPT = (
     "Transcribe all visible text in this image exactly. Preserve reading order, headings, "
     "lists, and table rows. Return only the transcription, without commentary."

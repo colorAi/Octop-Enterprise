@@ -16,6 +16,23 @@ if TYPE_CHECKING:
 _DEEPAGENTS_EMPTY_WARNING = "System reminder: File exists but has empty contents"
 
 
+async def assert_workspace_resource_access(
+    server: Any,
+    user: Any,
+    agent_id: str,
+    workspace: Any,
+    path: str,
+    *,
+    write: bool = False,
+    recursive: bool = False,
+) -> None:
+    resources = getattr(server, "employee_resources", None)
+    if resources is not None:
+        await resources.workspace_access(
+            user.id, agent_id, workspace, path, write=write, recursive=recursive
+        )
+
+
 def coerce_read_content(content: Any) -> str:
     """Normalize backend read payloads for the dashboard file viewer."""
     if content is None:

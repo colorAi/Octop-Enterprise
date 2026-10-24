@@ -64,7 +64,11 @@ class CompanyClient:
         )
 
     async def request(self, path: str, body: dict[str, Any] | None = None) -> Any:
-        timeout = httpx.Timeout(900, connect=10) if path.endswith("/images") else self.http.timeout
+        timeout = (
+            httpx.Timeout(900, connect=10)
+            if path.endswith(("/images", "/videos", "/speech"))
+            else self.http.timeout
+        )
         for attempt in range(3):
             try:
                 response = await self.http.request(
@@ -79,7 +83,8 @@ class CompanyClient:
             reason = f"company_service_{response.status_code}"
             try:
                 data = response.json()
-                reason = data.get("error", {}).get("details", {}).get("reason", reason)
+                error = data.get("error") or {}
+                reason = (error.get("details") or {}).get("reason") or error.get("code") or reason
             except (ValueError, AttributeError):
                 pass
             raise CompanyServiceError(reason, response.status_code)

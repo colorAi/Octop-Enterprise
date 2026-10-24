@@ -23,6 +23,8 @@ Administrators build the server from this repository's source and build matching
 3. Under **Admin → Model Management**, configure model services; under **Admin → Users**, prepare employee accounts, roles and permissions, and prepare experts for employees.
 4. Distribute matching clients, and validate one employee's local task, messages, attachments and results before expanding.
 
+To assign experts and skills, open **Admin → Users → Company structure**, select the source administrator, set the department resource pools, then use the employee's expert and skill controls. The **Basic settings** tab manages the department and position. See [expert and skill assignments](expert-assignments.md) (Chinese), including existing-account behavior and definition-update limits.
+
 `octop init` creates the administrator account only on first install. See the deployment guide for databases, keys and recovery.
 
 ## Employee quick start

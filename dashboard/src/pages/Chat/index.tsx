@@ -548,9 +548,10 @@ function ChatPageInner() {
   );
 
   const companyHistoryReadOnly =
-    isCompanyDesktop() &&
-    composerSession?.executionLocation === "server" &&
-    Boolean(composerSession.hasMessages);
+    Boolean(activeAgent?.history_only) ||
+    (isCompanyDesktop() &&
+      composerSession?.executionLocation === "server" &&
+      Boolean(composerSession.hasMessages));
 
   const panelFilePaths = useMemo(() => {
     const fromTabs = openTabs
@@ -1846,8 +1847,16 @@ function ChatPageInner() {
               <Alert
                 type="info"
                 showIcon
-                message="此会话的历史由服务器执行，仅供查看。请新建会话开始本机任务。"
-                action={<Button onClick={handleNewChat}>新建本机会话</Button>}
+                message={
+                  activeAgent?.history_only
+                    ? t("expertAccess.historyOnlyHint")
+                    : "此会话的历史由服务器执行，仅供查看。请新建会话开始本机任务。"
+                }
+                action={
+                  activeAgent?.history_only ? undefined : (
+                    <Button onClick={handleNewChat}>新建本机会话</Button>
+                  )
+                }
               />
             )}
             <div className={styles.todoProgressDock}>

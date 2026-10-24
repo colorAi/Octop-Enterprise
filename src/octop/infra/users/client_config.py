@@ -15,6 +15,34 @@ from octop.infra.db.repos.user_policies import UserPolicyRow
 RELEASE_KEY = "enterprise.client_config_release"
 
 
+def read_config_state(
+    services: Any, user_id: int, resources: Any = None
+) -> tuple[dict[str, Any], list[UserPolicyRow], dict[str, Any] | None]:
+    """Read revision inputs off the event loop; no provider credentials are included."""
+    release = read_release(services.settings_repo)
+    policies = services.user_policy_repo.list_for_user(user_id)
+    assignments = getattr(services, "expert_assignment_repo", None)
+    expert_access = None
+    if assignments is not None:
+        state = assignments.state(user_id)
+        expert_access = {
+            "selection": state,
+            "source": assignments.source(),
+            "available": [
+                eid
+                for eid in (state or {}).get("expert_ids", [])
+                if assignments.granted(user_id, eid)
+            ],
+        }
+        if resources is not None:
+            expert_access["resources"] = resources.state(user_id)
+            expert_access["default_skill_ids"] = resources.repo.defaults()
+        knowledge = getattr(services, "knowledge_repo", None)
+        if knowledge is not None:
+            expert_access["knowledge_base_ids"] = knowledge.assigned_base_ids(user_id)
+    return release, policies, expert_access
+
+
 def read_release(settings: SettingsRepo) -> dict[str, Any]:
     raw = settings.get(RELEASE_KEY)
     if not raw:
@@ -34,11 +62,13 @@ def config_revision(
     permissions: Sequence[str],
     policies: Sequence[UserPolicyRow],
     release: dict[str, Any],
+    expert_access: Any = None,
 ) -> str:
     data = {
         "role": role,
         "permissions": sorted(set(permissions)),
         "policies": sorted((p.name, p.enabled, p.value) for p in policies),
         "release": release.get("id"),
+        "expert_access": expert_access,
     }
     return hashlib.sha256(json.dumps(data, sort_keys=True).encode()).hexdigest()

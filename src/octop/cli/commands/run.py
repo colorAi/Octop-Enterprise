@@ -143,6 +143,13 @@ def _save_configfile_overrides(host: str | None, port: int | None) -> None:
 @click.option("--reload", is_flag=True, default=False, help="Enable uvicorn auto-reload (dev).")
 @click.option("--workers", default=1, type=int, help="Worker process count (default 1).")
 @click.option(
+    "--role",
+    type=click.Choice(["monolith", "init", "web", "worker"]),
+    default="monolith",
+    envvar="OCTOP_PROCESS_ROLE",
+    help="Process role; each container runs one process.",
+)
+@click.option(
     "--log-level",
     type=click.Choice(
         ["critical", "error", "warning", "info", "debug", "trace"], case_sensitive=False
@@ -162,6 +169,7 @@ def run(
     port: int | None,
     reload: bool,
     workers: int,
+    role: str,
     log_level: str | None,
     ssl: bool,
     ssl_certfile: str | None,
@@ -178,7 +186,7 @@ def run(
     cli_host, cli_port = host, port
     try:
         host, port = resolve_bind(host, port)
-        if cli_host is not None or cli_port is not None:
+        if role == "monolith" and (cli_host is not None or cli_port is not None):
             _save_configfile_overrides(cli_host, cli_port)
     except OctopError as exc:
         fail_octop(exc)
@@ -191,4 +199,5 @@ def run(
         log_level=log_level,
         ssl_certfile=certfile,
         ssl_keyfile=keyfile,
+        **({"role": role} if role != "monolith" else {}),
     )

@@ -158,8 +158,11 @@ class UsageRepo:
         thread_id: str = "",
         source: str = "chat",
         ts: int | None = None,
+        execution_id: str | None = None,
     ) -> int:
         """Append one usage row. Returns the new row id."""
+        from octop.infra.utils.execution_context import execution_run_id
+
         with self._db.connect() as conn:
             return insert_returning_id(
                 conn,
@@ -168,8 +171,8 @@ class UsageRepo:
                     ts, agent_id, user_id, thread_id, model,
                     input_tokens, uncached_input_tokens,
                     cache_read_tokens, cache_write_tokens,
-                    output_tokens, reasoning_tokens, total_tokens, model_calls, source
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    output_tokens, reasoning_tokens, total_tokens, model_calls, source, execution_run_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     ts or now_ts(),
@@ -188,6 +191,7 @@ class UsageRepo:
                     int(input_tokens) + int(output_tokens),
                     int(model_calls),
                     source,
+                    execution_id or execution_run_id.get(),
                 ),
             )
 

@@ -17,15 +17,20 @@ from octop.infra.db.repos.company_runtime import CompanyRuntimeRepo
 from octop.infra.db.repos.connectors import ConnectorRepo
 from octop.infra.db.repos.cron import CronJobRepo
 from octop.infra.db.repos.devices import DeviceRepo
+from octop.infra.db.repos.employee_resources import EmployeeResourceRepo
+from octop.infra.db.repos.execution import ExecutionRepo
+from octop.infra.db.repos.expert_assignments import ExpertAssignmentRepo
 from octop.infra.db.repos.invites import InviteRepo
 from octop.infra.db.repos.knowledge import KnowledgeRepo
 from octop.infra.db.repos.proactive_care_config import ProactiveCareConfigRepo
 from octop.infra.db.repos.providers import ProviderRepo
 from octop.infra.db.repos.published_experts import PublishedExpertRepo
+from octop.infra.db.repos.resource_manifests import ResourceManifestRepo
 from octop.infra.db.repos.secrets import SecretRepo
 from octop.infra.db.repos.sessions import SessionRepo
 from octop.infra.db.repos.settings import SettingsRepo
 from octop.infra.db.repos.skill_packages import SkillPackageRepo
+from octop.infra.db.repos.source_publication import SourcePublicationRepo
 from octop.infra.db.repos.sso import SsoRepo
 from octop.infra.db.repos.thread_messages import ThreadMessageRepo
 from octop.infra.db.repos.threads import ThreadRepo
@@ -40,6 +45,26 @@ from octop.infra.utils.paths import PathLayout
 @dataclass(frozen=True)
 class RepoBundle:
     db: DatabasePool
+
+    @property
+    def execution_repo(self) -> ExecutionRepo:
+        return ExecutionRepo(self.db)
+
+    @property
+    def resource_manifest_repo(self) -> ResourceManifestRepo:
+        return ResourceManifestRepo(self.db)
+
+    @property
+    def source_publication_repo(self) -> SourcePublicationRepo:
+        return SourcePublicationRepo(self.db)
+
+    @property
+    def employee_resource_repo(self) -> EmployeeResourceRepo:
+        return EmployeeResourceRepo(self.db)
+
+    @property
+    def expert_assignment_repo(self) -> ExpertAssignmentRepo:
+        return ExpertAssignmentRepo(self.db)
 
     user_repo: UserRepo
     user_policy_repo: UserPolicyRepo
@@ -108,6 +133,26 @@ class SharedServices:
     @property
     def db(self) -> DatabasePool:
         return self.repos.db
+
+    @property
+    def execution_repo(self) -> ExecutionRepo:
+        return self.repos.execution_repo
+
+    @property
+    def resource_manifest_repo(self) -> ResourceManifestRepo:
+        return self.repos.resource_manifest_repo
+
+    @property
+    def source_publication_repo(self) -> SourcePublicationRepo:
+        return self.repos.source_publication_repo
+
+    @property
+    def employee_resource_repo(self) -> EmployeeResourceRepo:
+        return self.repos.employee_resource_repo
+
+    @property
+    def expert_assignment_repo(self) -> ExpertAssignmentRepo:
+        return self.repos.expert_assignment_repo
 
     @property
     def communication_identity_repo(self) -> CommunicationIdentityRepo:

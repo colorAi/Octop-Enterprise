@@ -52,5 +52,12 @@ func Load() (Config, error) {
 	if c.DatabaseURL == "" {
 		return c, fmt.Errorf("OCTOP_IM_DATABASE_URL is required")
 	}
+	if v := os.Getenv("OCTOP_IM_POOL_MAX_CONNS"); v != "" {
+		n, e := strconv.Atoi(v)
+		if e != nil || n < 1 || n > 64 {
+			return c, fmt.Errorf("OCTOP_IM_POOL_MAX_CONNS must be between 1 and 64")
+		}
+		c.Resource.PoolMaxConns = int32(n)
+	}
 	return c, nil
 }

@@ -143,6 +143,10 @@ class ReceiptMiddleware(AgentMiddleware):
             "remember",
             "search_knowledge",
             "company_generate_image",
+            "company_generate_video",
+            "company_synthesize_speech",
+            "company_transcribe_audio",
+            "company_web_search",
             "send_local_file",
             "load_company_skill",
         }

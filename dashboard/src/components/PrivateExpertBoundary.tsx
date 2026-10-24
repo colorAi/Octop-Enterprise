@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { Alert, Button } from "antd";
+import { Button, Result, Select, Space } from "antd";
 import { useNavigate, useParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { useAgent } from "../context/AgentContext";
@@ -35,12 +35,11 @@ export default function PrivateExpertBoundary({
       .privateInstance(source, controller.signal)
       .then(async (result) => {
         if (controller.signal.aborted) return;
-        await refresh({ silent: true, force: true });
-        if (controller.signal.aborted) return;
         setActiveAgent(result.agent_id);
         navigate(`/chat/${encodeURIComponent(result.agent_id)}`, {
           replace: true,
         });
+        await refresh({ silent: true, force: true });
       })
       .catch((err) => {
         if (!controller.signal.aborted)
@@ -50,13 +49,31 @@ export default function PrivateExpertBoundary({
   }, [source, attempt, refresh, setActiveAgent, navigate, t, pageVisible]);
   if (source && error)
     return (
-      <Alert
-        type="error"
-        message={error}
-        action={
-          <Button onClick={() => setAttempt((value) => value + 1)}>
-            {t("communication.retry")}
-          </Button>
+      <Result
+        status="warning"
+        title={selected?.name}
+        subTitle={error}
+        extra={
+          <Space direction="vertical">
+            <Button
+              type="primary"
+              onClick={() => setAttempt((value) => value + 1)}
+            >
+              {t("communication.retry")}
+            </Button>
+            <Select
+              aria-label={t("chat.pickAgent")}
+              placeholder={t("chat.pickAgent")}
+              style={{ minWidth: 240 }}
+              options={agents
+                .filter((agent) => agent.agent_id !== source)
+                .map((agent) => ({ value: agent.agent_id, label: agent.name }))}
+              onChange={(id: string) => {
+                setActiveAgent(id);
+                navigate(`/chat/${encodeURIComponent(id)}`);
+              }}
+            />
+          </Space>
         }
       />
     );

@@ -53,12 +53,13 @@ function mountConnectionPanel(config) {
   };
   window.__octopRuntime = Object.freeze({
     version: 1,
-    status: () => runtimeRequest("status"),
+    status: (options) => runtimeRequest("status", options),
     refreshStatus: () => runtimeRequest("refresh_status"),
     start: params => runtimeRequest("start", params),
     cancel: params => runtimeRequest("cancel", params),
     steer: params => runtimeRequest("steer", params),
     removeSteer: params => runtimeRequest("steer_remove", params),
+    resumeHitl: params => runtimeRequest("hitl_resume", params),
     reveal: params => runtimeRequest("reveal", params),
     previewImage: params => runtimeRequest("preview_image", params),
     uploadArtifact: params => runtimeRequest("upload_artifact", params),

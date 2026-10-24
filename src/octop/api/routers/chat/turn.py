@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -32,6 +33,7 @@ from octop.infra.gateway.process.message_keys import (
 from octop.infra.gateway.process.usage_record import extract_usage_from_chunk
 from octop.infra.gateway.threads import ThreadRegistry
 from octop.infra.gateway.ws import WS_CHANNEL_ID
+from octop.infra.utils.asyncio import offload
 
 __all__ = [
     "COMPOSER_CTX_KEY",
@@ -232,7 +234,32 @@ async def prepare_dashboard_turn(
     turn: ChatTurnBody,
 ) -> PreparedDashboardTurn:
     """Validate MCP/skills, resolve thread, return data for gateway enqueue."""
+    shards = getattr(server, "runtime_shards", None)
+    async with shards.activity(user.id, agent_id) if shards is not None else nullcontext():
+        return await _prepare_dashboard_turn(server, agent_id=agent_id, user=user, turn=turn)
+
+
+async def _prepare_dashboard_turn(
+    server: Any, *, agent_id: str, user: Any, turn: ChatTurnBody
+) -> PreparedDashboardTurn:
     row = require_agent_row(agent_id, user=user, as_user=None, server=server)
+    from octop.infra.users.expert_access import ExpertAccess
+
+    access = ExpertAccess(server.services)
+    access.assert_use(user.id, agent_id)
+    if not user.is_admin and not (turn.default_model or "").strip():
+        from octop.infra.users.model_access import ModelAccess
+
+        await offload(ModelAccess(server.services).resolve, user.id)
+    # Ordinary turns can enter the durable queue without occupying a sandbox.
+    # Only an explicit skill/MCP selection needs runtime-backed validation here.
+    if getattr(server, "role", None) == "worker" and (turn.skills or turn.mcp_servers):
+        registry = server.app_runtime.agent_registry
+        if registry._octop_harness_or_none(agent_id) is None:
+            await registry.start(agent_id)
+    if access.assigned_only(user.id):
+        for target_id in turn.target_agent_ids or []:
+            access.assert_use(user.id, target_id)
     if turn.device is not None:
         if row.user_id != user.id or row.is_shared or row.kind != "expert" or turn.target_agent_ids:
             raise OctopError(
@@ -292,6 +319,9 @@ async def prepare_dashboard_turn(
         )
     composer_updates: dict[str, Any] = {}
     if model_ref is not None:
+        from octop.infra.users.model_access import ModelAccess
+
+        await offload(ModelAccess(server.services).require, user.id, model_ref)
         composer_updates["model_ref"] = model_ref
     if turn.reasoning_mode is not None:
         composer_updates["reasoning_mode"] = turn.reasoning_mode
@@ -320,6 +350,7 @@ async def prepare_dashboard_turn(
             thread_id=thread_id,
             session_key=session_key,
             selection=turn.device,
+            request_id=turn.client_request_id,
         )
         from octop.infra.devices.manager import _db
 
@@ -352,6 +383,8 @@ def build_dashboard_inbound(
         "thread_id": prepared.thread_id,
         "user_is_admin": user_is_admin,
     }
+    if turn.client_request_id:
+        metadata["client_request_id"] = turn.client_request_id
     if prepared.device_task:
         from octop.infra.devices.tasks import CONFIG_KEY
 

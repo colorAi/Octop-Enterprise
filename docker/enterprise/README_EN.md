@@ -4,7 +4,7 @@
 
 This guide targets Linux with Docker Engine and Compose v2. Base single-host mode uses `docker/docker-compose.yml`. Enterprise mode includes the Octop control plane, the Go communication service, two PostgreSQL databases and isolated employee workspaces. Clients run project tools on employee computers; the server keeps accounts, model access, memory, history and recovery receipts.
 
-This guide corresponds to Octop Enterprise **1.0.0**, Harness **1.0.3**, main database schema **25**, device protocol **2** and company runtime protocol **1**. Server images and client tool environments must be built from matching source and protocol versions.
+This guide corresponds to Octop Enterprise **1.0.1b2**, Harness **1.0.3**, main database schema **30**, device protocol **2** and company runtime protocol **1**. Server images and client tool environments must be built from matching source and protocol versions.
 
 ## Before you deploy
 
@@ -35,7 +35,7 @@ If the Docker daemon is unreachable, fix Docker startup or socket permissions fi
 
 ## First installation
 
-Use this project's source archive or a specific release commit and run the steps from the repository root. For a source archive, record `PUBLIC_SOURCE.json` and the archive checksum; for Git, record the commit and local changes. The `enterprise-1.0.0` tags below are local image tags used by this guide; each deployment should use unique tags traceable to its source.
+Use this project's source archive or a specific release commit and run the steps from the repository root. For a source archive, record `PUBLIC_SOURCE.json` and the archive checksum; for Git, record the commit and local changes. The `enterprise-1.0.1b2` tags below are local image tags used by this guide; each deployment should use unique tags traceable to its source.
 
 ### 1. Generate a new private configuration
 
@@ -52,9 +52,9 @@ This script must not be used to upgrade or repair an existing instance; existing
 Edit `/etc/octop.env` with the administrator's editor, keep the generated passwords and keys, and change the three image values in place:
 
 ```dotenv
-OCTOP_BASE_IMAGE="octop:enterprise-1.0.0"
-OCTOP_APP_IMAGE="octop-enterprise:enterprise-1.0.0"
-OCTOP_IM_IMAGE="octop-im:enterprise-1.0.0"
+OCTOP_BASE_IMAGE="octop:enterprise-1.0.1b2"
+OCTOP_APP_IMAGE="octop-enterprise:enterprise-1.0.1b2"
+OCTOP_IM_IMAGE="octop-im:enterprise-1.0.1b2"
 ```
 
 The default `OCTOP_BIND_ADDRESS="127.0.0.1"` means port 8088 is reachable only from the server itself or a local reverse proxy; employee computers cannot connect directly. Choose according to the deployment scenario:
@@ -69,7 +69,7 @@ When the client omits the scheme it uses HTTPS and does not fall back to HTTP. C
 ### 3. Build, initialize and start
 
 ```sh
-sudo docker build -f docker/Dockerfile -t octop:enterprise-1.0.0 .
+sudo docker build -f docker/Dockerfile -t octop:enterprise-1.0.1b2 .
 sudo docker compose --env-file /etc/octop.env -f docker/enterprise/compose.yml config -q
 sudo docker compose --env-file /etc/octop.env -f docker/enterprise/compose.yml build
 sudo docker compose --env-file /etc/octop.env -f docker/enterprise/compose.yml up -d --wait postgres
@@ -83,6 +83,10 @@ Confirm each step succeeds before continuing. `config -q` only validates the con
 `octop init` prompts for the administrator username and password in the terminal and does not put the password on the command line. Run it only on first install; upgrades must not initialize again and must not use `--force`. PostgreSQL runs `init-databases.sh` only when the data directory is first created, creating `octop_app/octop` and `im_app/octop_im`; application roles are not allowed to access each other's database.
 
 The first build downloads and compiles dependencies; later builds can reuse the cache. A successful container start does not mean employees can work yet; complete the next step.
+
+The base application image preinstalls the locked local embedding runtime (`local-embedding`). The enterprise image build checks that these dependencies can be imported as UID 1000. Model weights are downloaded when an administrator requests them and are stored under `embedding_models/` in the persistent application directory. If an older image reports missing prerequisites or a non-writable Python environment, follow the upgrade procedure to rebuild both application images and replace the application container. Updating source files or restarting the old container does not install the missing image dependencies.
+
+Downloading only stores model files; model tests, knowledge indexing and retrieval load inference sessions on demand. Budget large-model memory separately for each worker's container limit and the host as a whole. A successful download does not establish that the runtime memory limit is sufficient. If `OOMKilled` is followed by `executor_fenced`, check the memory limits and follow the [role recovery procedure](ROLES.md#任务补读与故障核对) instead of directly restarting the old worker.
 
 ### 4. Check services and complete the first employee flow
 
@@ -149,6 +153,21 @@ When migrating an existing deployment, first map the existing environment variab
 
 ## Upgrade and rollback
 
+The enterprise image includes Chromium and its system libraries for the workbench, installed at `/opt/octop-browser`. Each build launches the browser and captures a screenshot offline as UID 1000, and imports the knowledge embedding dependencies. Service readiness does not replace this check. To repeat it against a candidate image:
+
+```sh
+docker run --rm --network none --read-only --cap-drop ALL --tmpfs /tmp --tmpfs /data:uid=1000,gid=1000 \
+  --entrypoint python octop-enterprise:enterprise-1.0.1b2 /usr/local/libexec/octop/verify_runtime.py
+```
+
+Use `Dockerfile.runtime-reuse` for offline assembly from existing local images. `APP_IMAGE` must contain the complete current application, dashboard and Python environment; `RUNTIME_IMAGE` must contain a working browser and its system libraries. Both must have matching OS base layers and Python ABIs. Do not select a runtime based only on application readiness. Supply both local images explicitly with `--pull=false --network=none`:
+
+```sh
+docker build --pull=false --network=none -f docker/enterprise/Dockerfile.runtime-reuse \
+  --build-arg APP_IMAGE=octop:current-application --build-arg RUNTIME_IMAGE=octop-enterprise:verified-runtime \
+  -t octop-enterprise:next-candidate .
+```
+
 1. Save the old commit, image IDs, configuration and four-architecture client release manifest; check both database versions. Main database: `SELECT version FROM _schema_version`; the communication service checks its own migration table at startup. Upgrade commands always use the new communication image's `--migrate`.
 2. Stop accepting new tasks and wait for local task reporting to finish or mark results unknown. Unknown results must not be retried automatically.
 3. Take a complete backup covering the same no-write window as described in the next section; preserve the original projects on employee computers.
@@ -213,3 +232,6 @@ Build the enterprise payload for the current architecture from the same source w
 After unpacking the four architectures, use `make check-enterprise ARGS='--section packaging --manifest-dir /path/to/unpacked'` to check the version matrix. Supported build targets are macOS arm64/amd64 and Windows amd64/arm64. Each release should record build and manifest results, native tool smoke tests, install/upgrade/uninstall, signing/notarization, and sign-in/disconnect/revocation, with dates. Matrix checks and in-package target smoke tests are not real installation or signing acceptance; actual status follows the corresponding release record.
 
 For employee operations and feature scope, see the [employee guide](../../docs/enterprise-client_EN.md).
+
+
+The separate `compose.roles.yml` entry uses one initialization role, two web processes and one runtime worker. It enforces stop evidence before runtime replacement and does not support scaling full runtime workers yet. Use `backup.py --roles --profile 4g` for this topology; it leaves writers stopped, including on failure. See [role deployment and recovery (Chinese)](ROLES.md). Hardware capacity and native-client fault acceptance remain unverified.

@@ -23,15 +23,15 @@ class SecretRepo:
             return existing
         value = factory()
         with self._db.transaction() as conn:
-            # Check again inside transaction to avoid race
-            r = conn.execute("SELECT v FROM secrets WHERE k = ?", (k,)).fetchone()
-            if r is not None:
-                return bytes(r["v"])
+            # Concurrent PostgreSQL workers may both observe an absent row.
+            # Only the winning insert selects the shared identity.
             conn.execute(
-                "INSERT INTO secrets(k, v, created_at) VALUES (?, ?, ?)",
+                "INSERT INTO secrets(k, v, created_at) VALUES (?, ?, ?) ON CONFLICT(k) DO NOTHING",
                 (k, value, now_ts()),
             )
-        return value
+            r = conn.execute("SELECT v FROM secrets WHERE k = ?", (k,)).fetchone()
+            assert r is not None
+            return bytes(r["v"])
 
     def rotate(self, k: str, new_value: bytes) -> None:
         with self._db.transaction() as conn:

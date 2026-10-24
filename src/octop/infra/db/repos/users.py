@@ -113,7 +113,7 @@ class UserRepo:
     ) -> int:
         perms_json = json.dumps(permissions or [], ensure_ascii=False)
         with self._db.transaction() as conn:
-            return insert_returning_id(
+            user_id = insert_returning_id(
                 conn,
                 "INSERT INTO users(username, password_hash, role, display_name, locale, "
                 "email, sso_provider_id, sso_subject, disabled, created_at, permissions, "
@@ -133,6 +133,15 @@ class UserRepo:
                     role_name,
                 ),
             )
+            # Once a source is explicitly configured, new employees wait for assignments.
+            if role != "admin":
+                conn.execute(
+                    "UPDATE users SET expert_access_mode='assigned_only' WHERE id=? "
+                    "AND EXISTS (SELECT 1 FROM expert_assignment_source "
+                    "WHERE id=1 AND revision>0)",
+                    (user_id,),
+                )
+            return user_id
 
     def get(self, user_id: int) -> UserRow | None:
         with self._db.connect() as conn:
@@ -271,6 +280,30 @@ class UserRepo:
         with self._db.connect() as conn:
             rows = conn.execute(sql).fetchall()
         return map_rows(rows, UserRow)
+
+    def page(
+        self, *, page: int, page_size: int, search: str = ""
+    ) -> tuple[builtins.list[UserRow], int]:
+        """Include disabled accounts and search literal text, with stable ordering."""
+        where = ""
+        params: builtins.list[object] = []
+        search = search.strip().lower()
+        if search:
+            pattern = "%" + search.replace("!", "!!").replace("%", "!%").replace("_", "!_") + "%"
+            columns = ("username", "display_name", "email", "role_name")
+            where = " WHERE " + " OR ".join(
+                f"LOWER(COALESCE({column}, '')) LIKE ? ESCAPE '!'" for column in columns
+            )
+            params = [pattern] * len(columns)
+        with self._db.connect() as conn:
+            total = int(
+                conn.execute("SELECT COUNT(*) AS c FROM users" + where, params).fetchone()["c"]
+            )
+            rows = conn.execute(
+                "SELECT * FROM users" + where + " ORDER BY username, id LIMIT ? OFFSET ?",
+                [*params, page_size, (page - 1) * page_size],
+            ).fetchall()
+        return map_rows(rows, UserRow), total
 
     def set_disabled(self, user_id: int, disabled: bool) -> None:
         with self._db.transaction() as conn:
