@@ -96,7 +96,7 @@ GitHub 下载较慢时，可使用[夸克网盘下载](https://pan.quark.cn/s/6d
 
 <div align="center">
 
-<img src="docs/assets/community/octop-group-20261026.jpg" alt="Octop 企业版交流群二维码" width="300">
+<img src="docs/assets/community/octop-group-20261103.jpg" alt="Octop 企业版交流群二维码" width="300">
 
 </div>
 

@@ -94,7 +94,7 @@ For client builds see the [desktop instructions](desktop/README.md); for detaile
 
 <div align="center">
 
-<img src="docs/assets/community/octop-group-20261026.jpg" alt="Octop Enterprise community group QR code" width="300">
+<img src="docs/assets/community/octop-group-20261103.jpg" alt="Octop Enterprise community group QR code" width="300">
 
 </div>
 
