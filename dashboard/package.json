@@ -1,7 +1,7 @@
 {
   "name": "octop-dashboard",
   "private": true,
-  "version": "1.0.1b2",
+  "version": "1.0.1b3",
   "type": "module",
   "scripts": {
     "dev": "vite --host",
