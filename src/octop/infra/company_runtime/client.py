@@ -63,7 +63,9 @@ class CompanyClient:
             verify=tls_context,
         )
 
-    async def request(self, path: str, body: dict[str, Any] | None = None) -> Any:
+    async def request(
+        self, path: str, body: dict[str, Any] | None = None, *, method: str | None = None
+    ) -> Any:
         timeout = (
             httpx.Timeout(900, connect=10)
             if path.endswith(("/images", "/videos", "/speech"))
@@ -72,7 +74,7 @@ class CompanyClient:
         for attempt in range(3):
             try:
                 response = await self.http.request(
-                    "GET" if body is None else "POST", path, json=body, timeout=timeout
+                    method or ("GET" if body is None else "POST"), path, json=body, timeout=timeout
                 )
                 break
             except httpx.TransportError:

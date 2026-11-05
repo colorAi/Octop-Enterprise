@@ -37,6 +37,8 @@ import { dockFileBasename } from "../utils/dockFilePath";
 import styles from "../index.module.less";
 import WorkspaceDrawer from "../../Agent/Workspace/components/WorkspaceDrawer";
 import ChatDockFileList from "./ChatDockFileList";
+import LocalProjectFiles from "./LocalProjectFiles";
+import { useDesktopProjects } from "../../../context/DesktopProjectsContext";
 import FilePanelContent from "./FilePanelContent";
 import KnowledgeCitationPanelContent from "./KnowledgeCitationPanelContent";
 import ChatDockToolUiContent from "./ChatDockToolUiContent";
@@ -210,6 +212,8 @@ const ChatDockPanel: React.FC<ChatDockPanelProps> = ({
 }) => {
   const { t } = useTranslation();
   const currentUser = useCurrentUser();
+  const projects = useDesktopProjects();
+  const localFiles = projects.available && projects.state?.supported !== false;
   const [addTabMenuOpen, setAddTabMenuOpen] = useState(false);
   const [workspaceMounted, setWorkspaceMounted] = useState(
     openTabs.some((tab) => tab.kind === "workspace"),
@@ -535,12 +539,16 @@ const ChatDockPanel: React.FC<ChatDockPanelProps> = ({
               display: activeTab?.kind === "files" ? "flex" : "none",
             }}
           >
-            <ChatDockFileList
-              agentId={agentId}
-              filePaths={filePaths}
-              agentNameById={agentNameById}
-              onOpenFile={onOpenFile}
-            />
+            {localFiles ? (
+              <LocalProjectFiles threadId={threadId} />
+            ) : (
+              <ChatDockFileList
+                agentId={agentId}
+                filePaths={filePaths}
+                agentNameById={agentNameById}
+                onOpenFile={onOpenFile}
+              />
+            )}
           </div>
         )}
 
@@ -555,11 +563,15 @@ const ChatDockPanel: React.FC<ChatDockPanelProps> = ({
               hidden={!isActive}
               style={{ display: isActive ? "flex" : "none" }}
             >
-              <FilePanelContent
-                agentId={fileAgent}
-                filePath={tab.path}
-                onActionsChange={getFileActionsHandler(tab.id)}
-              />
+              {localFiles ? (
+                <LocalProjectFiles threadId={threadId} filePath={tab.path} />
+              ) : (
+                <FilePanelContent
+                  agentId={fileAgent}
+                  filePath={tab.path}
+                  onActionsChange={getFileActionsHandler(tab.id)}
+                />
+              )}
             </div>
           );
         })}
@@ -590,12 +602,16 @@ const ChatDockPanel: React.FC<ChatDockPanelProps> = ({
               display: activeTab?.kind === "workspace" ? "flex" : "none",
             }}
           >
-            <WorkspaceDrawer
-              agentId={agentId}
-              open
-              onClose={() => onCloseTab("workspace")}
-              embedded
-            />
+            {localFiles ? (
+              <LocalProjectFiles threadId={threadId} />
+            ) : (
+              <WorkspaceDrawer
+                agentId={agentId}
+                open
+                onClose={() => onCloseTab("workspace")}
+                embedded
+              />
+            )}
           </div>
         )}
 

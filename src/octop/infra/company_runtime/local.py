@@ -20,7 +20,7 @@ from contextvars import ContextVar
 from pathlib import Path
 from typing import Any
 
-from deepagents.backends.protocol import ExecuteResponse
+from deepagents.backends.protocol import EditResult, ExecuteResponse, WriteResult
 from langchain.agents.middleware import AgentMiddleware
 from octop_harness.backends.local_shell import HarnessLocalShellBackend
 
@@ -229,6 +229,7 @@ class ProjectBackend(HarnessLocalShellBackend):
         self.tool_path = tool_path
         self.packages = os.environ.get("OCTOP_COMPANY_PACKAGES", "")
         self.processes: set[asyncio.subprocess.Process] = set()
+        self.written_files: set[str] = set()
 
     def _resolve_path(self, key: str) -> Path:
         # File tools accept both project-relative paths and the native absolute
@@ -237,6 +238,29 @@ class ProjectBackend(HarnessLocalShellBackend):
         if native.is_absolute() and native.is_relative_to(self.project):
             key = native.relative_to(self.project).as_posix()
         return super()._resolve_path(key)
+
+    def write(self, file_path: str, content: str) -> WriteResult:
+        result = super().write(file_path, content)
+        if not result.error:
+            self.written_files.add(file_path)
+        return result
+
+    def edit(
+        self, file_path: str, old_string: str, new_string: str, replace_all: bool = False
+    ) -> EditResult:
+        result = super().edit(file_path, old_string, new_string, replace_all)
+        if not result.error:
+            self.written_files.add(file_path)
+        return result
+
+    def written_artifacts(self) -> list[dict[str, Any]]:
+        # Only paths actually written by this task; never hash unrelated project
+        # files or claim edits made by the employee as this conversation's output.
+        result = []
+        for path in sorted(self.written_files)[:1000]:
+            with contextlib.suppress(OSError, ValueError):
+                result.append(self.artifact_metadata(path))
+        return result
 
     def artifact_metadata(self, file_path: str) -> dict[str, Any]:
         """Describe an existing project file for the native preview/reveal bridge."""

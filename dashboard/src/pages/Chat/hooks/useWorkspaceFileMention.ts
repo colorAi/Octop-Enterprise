@@ -1,3 +1,5 @@
+import { useDesktopProjects } from "../../../context/DesktopProjectsContext";
+import { rankWorkspaceMentionFiles } from "../utils/fileMention";
 import { useEffect, useState } from "react";
 import {
   searchWorkspaceMentionFiles,
@@ -16,11 +18,17 @@ export function useWorkspaceFileMention(
   agentId: string | null | undefined,
   mentionMenuOpen: boolean,
   mentionQuery: string,
+  threadId?: string | null,
 ): {
   files: WorkspaceMentionFile[];
   loading: boolean;
   error: "need_agent" | "failed" | null;
 } {
+  const projects = useDesktopProjects();
+  const projectId = threadId
+    ? projects.state?.threads?.[threadId]
+    : projects.state?.current_project_id;
+  const local = projects.available && projects.state?.supported !== false;
   const [files, setFiles] = useState<WorkspaceMentionFile[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<"need_agent" | "failed" | null>(null);
@@ -50,7 +58,23 @@ export function useWorkspaceFileMention(
       setFiles([]);
       setLoading(true);
       setError(null);
-      void searchWorkspaceMentionFiles(agentId, mentionQuery, controller.signal)
+      const search =
+        local && window.__octopRuntime?.projects
+          ? window.__octopRuntime.projects
+              .files({
+                project_id: projectId,
+                thread_id: threadId || undefined,
+                query: mentionQuery,
+              })
+              .then((result) =>
+                rankWorkspaceMentionFiles(result.items, mentionQuery),
+              )
+          : searchWorkspaceMentionFiles(
+              agentId,
+              mentionQuery,
+              controller.signal,
+            );
+      void search
         .then((hits) => {
           if (controller.signal.aborted) return;
           setFiles(hits);
@@ -69,7 +93,7 @@ export function useWorkspaceFileMention(
       controller.abort();
       window.clearTimeout(timer);
     };
-  }, [mentionMenuOpen, mentionQuery, agentId]);
+  }, [mentionMenuOpen, mentionQuery, agentId, threadId, projectId, local]);
 
   return { files, loading, error };
 }

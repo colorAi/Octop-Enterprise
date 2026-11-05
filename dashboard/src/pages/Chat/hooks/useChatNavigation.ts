@@ -163,6 +163,7 @@ export function useChatNavigation({
       preferEmptyChatRef.current = false;
       return;
     }
+    if (window.__octopRuntime?.projects) return;
     if (sessions.length > 0) {
       const preferred = pickPreferredSession(sessions);
       if (preferred) {

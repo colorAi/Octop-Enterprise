@@ -10,7 +10,7 @@
 <p><strong>AI runs on employee devices. Accounts, models and permissions stay with IT.</strong></p>
 
 <p>
-  <a href="https://github.com/colorAi/Octop-Enterprise/releases"><img alt="Version 1.0.1b2" src="https://img.shields.io/badge/version-1.0.1b2-F5453A?style=flat-square"></a>
+  <a href="https://github.com/colorAi/Octop-Enterprise/releases"><img alt="Version 1.0.1b3" src="https://img.shields.io/badge/version-1.0.1b3-F5453A?style=flat-square"></a>
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-17996B?style=flat-square"></a>
   <a href="docker/enterprise/README_EN.md"><img alt="Self-hosted" src="https://img.shields.io/badge/self--hosted-121417?style=flat-square"></a>
   <a href="docker/enterprise/README_EN.md"><img alt="Server: Linux + Docker" src="https://img.shields.io/badge/server-Linux%20%2B%20Docker-3B5BDB?style=flat-square"></a>
@@ -65,13 +65,13 @@ Server extensions (scheduled tasks, multi-platform IM channels, connectors, plug
 
 ## Getting started
 
-Current version: **1.0.1b2**. Build the server from this repository and download matching Windows/macOS employee clients from [Releases](https://github.com/colorAi/Octop-Enterprise/releases).
+Source version: **1.0.1b3**. Build the server from this repository; published Windows/macOS employee clients are available from [Releases](https://github.com/colorAi/Octop-Enterprise/releases).
 
 If GitHub downloads are slow, use the [Quark Drive mirror](https://pan.quark.cn/s/6da75d82a576) and choose the client version matching your server.
 
 | Administrator: deploy and configure                                                                                                                                                                                                                  | Employee: sign in and work                                                                                                                                                                     |
 | :--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1. Prepare a **Linux + Docker Engine + Docker Compose** host.<br>2. Follow the [deployment guide](docker/enterprise/README_EN.md) to initialize the deployment and configure models and company services.<br>3. Create accounts and departments, assign experts, skills, available models and knowledge bases, and enable company capabilities as needed.<br>4. Distribute matching clients and validate one employee end to end. | 1. Install the company client and enter the server address from your administrator.<br>2. Sign in with your company account and confirm the local working folder.<br>3. Choose an assigned expert and model, then describe the file or project task.<br>4. Review the result and share it with colleagues, groups or another expert. |
+| 1. Prepare a **Linux + Docker Engine + Docker Compose** host.<br>2. Follow the [deployment guide](docker/enterprise/README_EN.md) to initialize the deployment and configure models and company services.<br>3. Create accounts and departments, assign experts, skills, available models and knowledge bases, and enable company capabilities as needed.<br>4. Distribute matching clients and validate one employee end to end. | 1. Install the company client and enter the server address from your administrator.<br>2. Sign in with your company account and select a local project folder.<br>3. Choose an assigned expert and model, then describe the file or project task.<br>4. Review the result and share it with colleagues, groups or another expert. |
 
 Employees have no model access by default. An administrator must assign at least one available chat model before first use; adding a provider alone does not grant access.
 

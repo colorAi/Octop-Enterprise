@@ -13,6 +13,7 @@ from octop.infra.db.repos.bridge_connections import BridgeConnectionRepo
 from octop.infra.db.repos.care_push import CarePushRepo
 from octop.infra.db.repos.channels import ChannelRepo
 from octop.infra.db.repos.communication_identity import CommunicationIdentityRepo
+from octop.infra.db.repos.company_projects import CompanyProjectRepo
 from octop.infra.db.repos.company_runtime import CompanyRuntimeRepo
 from octop.infra.db.repos.connectors import ConnectorRepo
 from octop.infra.db.repos.cron import CronJobRepo
@@ -45,6 +46,10 @@ from octop.infra.utils.paths import PathLayout
 @dataclass(frozen=True)
 class RepoBundle:
     db: DatabasePool
+
+    @property
+    def company_project_repo(self) -> CompanyProjectRepo:
+        return CompanyProjectRepo(self.db)
 
     @property
     def execution_repo(self) -> ExecutionRepo:
@@ -129,6 +134,10 @@ class SharedServices:
     paths: PathLayout
     config: OctopConfig
     repos: RepoBundle
+
+    @property
+    def company_project_repo(self) -> CompanyProjectRepo:
+        return self.repos.company_project_repo
 
     @property
     def db(self) -> DatabasePool:

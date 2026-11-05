@@ -1,0 +1,153 @@
+package main
+
+import (
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"octop.desktop/internal/companyprojects"
+)
+
+func TestProjectMigrationUsesLatestReceiptAndOriginalConsent(t *testing.T) {
+	state := t.TempDir()
+	original := t.TempDir()
+	outside := t.TempDir()
+	first := filepath.Join(original, "old")
+	latest := filepath.Join(original, "latest")
+	for _, p := range []string{first, latest} {
+		if err := os.Mkdir(p, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	store, err := companyprojects.Open(filepath.Join(state, "projects.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	write := func(task, thread, path string, started int) {
+		dir := filepath.Join(state, "tasks", task)
+		_ = os.MkdirAll(dir, 0700)
+		data, _ := json.Marshal(map[string]any{"thread_id": thread, "project_path": path, "started_at_ns": started})
+		if err := os.WriteFile(filepath.Join(dir, "task.json"), data, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("z-old", "chat", first, 1)
+	write("a-new", "chat", latest, 2)
+	write("other", "outside", outside, 3)
+	for i := 0; i < 2; i++ {
+		if err := migrateProjectReceipts(store, state, original, true); err != nil {
+			t.Fatal(err)
+		}
+	}
+	p, err := store.ForThread("chat")
+	if err != nil || p.Path != func() string { value, _ := filepath.EvalSymlinks(latest); return value }() {
+		t.Fatal(p, err)
+	}
+	if _, err := store.ForThread("outside"); err == nil {
+		t.Fatal("migration expanded old consent")
+	}
+	if store.Snapshot().Current != "" {
+		t.Fatal("migration selected a default project")
+	}
+	if len(store.Snapshot().Projects) != 2 {
+		t.Fatal("duplicate migration")
+	}
+	if err := store.Update(p.ID, "", false, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := migrateProjectReceipts(store, state, original, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.ForThread("chat"); err == nil {
+		t.Fatal("migration restored an explicitly revoked grant")
+	}
+}
+
+func TestProjectNativeStartAndFilesRemainBoundAfterSelection(t *testing.T) {
+	app := startupTestApp(t)
+	app.projectSupported = true
+	store, err := app.projectStoreLocked(app.companyURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, err := store.Register(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := store.Register(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = store.Bind("thread-a", a.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err = store.Bind("thr_target", b.ID); err != nil {
+		t.Fatal(err)
+	}
+	epoch := app.runtimeEpoch
+	data, err := app.projectStartParamsLocked("nonce", app.companyURL, json.RawMessage(`{"thread_id":"thread-a","project_id":"forged","project_root":"/arbitrary"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var params map[string]any
+	_ = json.Unmarshal(data, &params)
+	if params["project_id"] != a.ID || params["project_root"] != a.Path || app.runtimeEpoch != epoch {
+		t.Fatal(params)
+	}
+	if _, err = app.projectStartParamsLocked("nonce", app.companyURL, json.RawMessage(`{"thread_id":"missing"}`)); err == nil {
+		t.Fatal("unbound thread used current project")
+	}
+	original := filepath.Join(a.Path, "source.txt")
+	_ = os.WriteFile(original, []byte("source"), 0600)
+	content, err := companyprojects.ReadFile(a.Path, "source.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	scope, err := app.artifactRootLocked(original)
+	if err != nil || scope != a.Path {
+		t.Fatal(scope, err)
+	}
+	result, err := app.transferRuntimeArtifact("nonce", app.companyURL, "import_attachment", forwardParams(t, map[string]string{"path": original, "sha256": content.SHA256}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := result.(runtimeForwardFile)
+	if !strings.HasPrefix(file.Path, filepath.Join(b.Path, "inbound")+string(os.PathSeparator)) {
+		t.Fatal("attachment copied to wrong root", file.Path)
+	}
+	if _, err = os.Stat(original); err != nil {
+		t.Fatal("source file moved", err)
+	}
+	if err = store.Update(a.ID, "", false, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = app.artifactRootLocked(original); err == nil {
+		t.Fatal("revoked project readable")
+	}
+	if app.runtimePreviewScopeCurrent("nonce", app.companyURL, a.Path, epoch) {
+		t.Fatal("stale authorization")
+	}
+	if !app.runtimePreviewScopeCurrent("nonce", app.companyURL, b.Path, epoch) {
+		t.Fatal("other project lost authorization")
+	}
+}
+
+func TestProjectRelocationAndRevocationRejectActiveOverlappingRoots(t *testing.T) {
+	root := t.TempDir()
+	child := filepath.Join(root, "child")
+	if err := os.Mkdir(child, 0700); err != nil {
+		t.Fatal(err)
+	}
+	catalog := companyprojects.Catalog{Projects: map[string]companyprojects.Project{"A": {ID: "A", Path: root}}, Threads: map[string]string{"thread-a": "A"}}
+	for _, status := range []string{"running", "cancel_requested", "unknown"} {
+		raw, _ := json.Marshal(map[string]any{"active_tasks": []map[string]string{{"thread_id": "thread-a", "status": status}}})
+		if err := checkProjectIdle(raw, catalog, child); err == nil {
+			t.Fatal("allowed relocation while", status)
+		}
+	}
+	if err := checkProjectIdle(json.RawMessage(`{"active_tasks":[{"thread_id":"thread-a","status":"completed"}]}`), catalog, child); err != nil {
+		t.Fatal(err)
+	}
+}

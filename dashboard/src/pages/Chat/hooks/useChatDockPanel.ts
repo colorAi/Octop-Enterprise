@@ -112,7 +112,11 @@ function fallbackActiveId(
 /**
  * Shared chat dock with tabbed file list / file viewers / browser / terminal.
  */
-export function useChatDockPanel(isMobile: boolean, agentId?: string | null) {
+export function useChatDockPanel(
+  isMobile: boolean,
+  agentId?: string | null,
+  projectId?: string | null,
+) {
   const [dockOpen, setDockOpen] = useState(false);
   const [dockMode, setDockMode] = useState<PanelMode>(loadPanelMode);
   const [openTabs, setOpenTabs] = useState<DockTab[]>([]);
@@ -124,6 +128,18 @@ export function useChatDockPanel(isMobile: boolean, agentId?: string | null) {
 
   // File paths and browser sessions are agent-scoped. Only wipe tabs when
   // switching between two real agents (ignore null ↔ id first-paint races).
+  const previousProject = useRef(projectId);
+  useEffect(() => {
+    if (previousProject.current !== projectId) {
+      setOpenTabs((tabs) =>
+        tabs.filter(
+          (tab) => !["file", "workspace", "files"].includes(tab.kind),
+        ),
+      );
+      setActiveTabId(null);
+    }
+    previousProject.current = projectId;
+  }, [projectId]);
   const prevAgentIdRef = useRef(agentId);
   useEffect(() => {
     const prev = prevAgentIdRef.current;

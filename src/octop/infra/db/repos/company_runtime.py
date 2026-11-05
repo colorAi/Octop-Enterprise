@@ -96,6 +96,22 @@ class CompanyRuntimeRepo:
             ).fetchone()
             if not thread or thread["user_id"] != owner or thread["agent_id"] != agent_id:
                 raise RuntimeConflict("thread_not_owned")
+            project = conn.execute(
+                "SELECT p.project_id,p.installation_hash,p.owner_user_id FROM company_project_threads t "
+                "JOIN company_projects p ON p.project_id=t.project_id WHERE t.thread_id=?",
+                (thread_id,),
+            ).fetchone()
+            if project:
+                if not request.get("project_id"):
+                    raise RuntimeConflict("project_runtime_required")
+                if (
+                    request["project_id"] != project["project_id"]
+                    or project["installation_hash"] != installation_hash
+                    or project["owner_user_id"] != owner
+                ):
+                    raise RuntimeConflict("thread_project_conflict")
+            elif request.get("project_id"):
+                raise RuntimeConflict("thread_project_missing")
             existing = conn.execute(
                 "SELECT * FROM company_runtime_tasks WHERE task_id=?", (task_id,)
             ).fetchone()
@@ -107,6 +123,15 @@ class CompanyRuntimeRepo:
                 ):
                     raise RuntimeConflict("task_identity_conflict")
                 return dict(existing)
+            if (
+                project
+                and conn.execute(
+                    "SELECT 1 FROM company_runtime_tasks t JOIN company_project_threads p ON p.thread_id=t.thread_id "
+                    "WHERE p.project_id=? AND t.status IN ('running','cancel_requested','unknown') LIMIT 1",
+                    (project["project_id"],),
+                ).fetchone()
+            ):
+                raise RuntimeConflict("project_already_running")
             if conn.execute(
                 "SELECT 1 FROM execution_sessions WHERE thread_id=?", (thread_id,)
             ).fetchone():
@@ -534,7 +559,9 @@ class CompanyRuntimeRepo:
     def thread_state(self, thread_id: str) -> dict[str, Any]:
         with self.db.connect() as conn:
             binding = conn.execute(
-                "SELECT device_id FROM company_runtime_threads WHERE thread_id=?", (thread_id,)
+                "SELECT r.device_id,p.project_id FROM company_runtime_threads r "
+                "LEFT JOIN company_project_threads p ON p.thread_id=r.thread_id WHERE r.thread_id=?",
+                (thread_id,),
             ).fetchone()
             if not binding:
                 return {"execution_location": "server"}
@@ -547,6 +574,7 @@ class CompanyRuntimeRepo:
             "local_device_id": binding["device_id"],
             "local_task_status": task["status"] if task else None,
             "local_task_id": task["task_id"] if task else None,
+            "project_id": binding["project_id"],
         }
 
     def recover(

@@ -511,6 +511,9 @@ async def fork_thread(
         )
     row = _require_thread(server, agent_id, thread_id, user, as_user)
     effective_uid = as_user if as_user is not None else user.id
+    local_repo = getattr(server.services, "company_runtime_repo", None)
+    if local_repo and await asyncio.to_thread(local_repo.binding, thread_id):
+        raise OctopError(ErrorCode.FORBIDDEN, "请通过原电脑的项目入口创建本机会话分支")
     harness = server.app_runtime.agent_registry.get_agent(agent_id)
     return await fork_dashboard_thread(
         thread_registry=server.app_runtime.gateway.thread_registry,

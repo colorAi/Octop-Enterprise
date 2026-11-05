@@ -57,6 +57,7 @@ interface UseSlashMentionInputParams {
   availableExperts: ChatAgentOption[];
   availableSubagents?: AgentSubagentSummary[];
   agentId?: string | null;
+  threadId?: string | null;
   selectedConnectors: string[];
   onConnectorsChange?: (names: string[]) => void;
   onSend: (text: string) => void;
@@ -80,6 +81,7 @@ export function useSlashMentionInput({
   availableExperts,
   availableSubagents = [],
   agentId,
+  threadId,
   selectedConnectors,
   onConnectorsChange,
   onSend,
@@ -115,7 +117,7 @@ export function useSlashMentionInput({
     files: mentionFiles,
     loading: filesLoading,
     error: filesError,
-  } = useWorkspaceFileMention(agentId, mentionMenuOpen, mentionQuery);
+  } = useWorkspaceFileMention(agentId, mentionMenuOpen, mentionQuery, threadId);
 
   const mentionItems = useMemo(
     () =>

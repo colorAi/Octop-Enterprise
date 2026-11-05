@@ -51,6 +51,7 @@ export interface RuntimeStart {
 }
 export interface DesktopRuntimeBridge {
   version: 1;
+  projects?: import("./desktopProjects").DesktopProjectsBridge;
   /** Read active work without starting tools or requiring project pairing. */
   refreshStatus?(): Promise<{
     active_tasks: { task_id: string; status?: string }[];

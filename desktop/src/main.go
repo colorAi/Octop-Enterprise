@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"octop.desktop/internal/company"
+	"octop.desktop/internal/companyprojects"
 	"octop.desktop/internal/companyruntime"
 	"octop.desktop/internal/companyui"
 
@@ -68,6 +69,10 @@ type App struct {
 	workspaceError   string
 	workspaceBusy    atomic.Bool
 	companyRuntime   *companyruntime.Process
+	projectStore     *companyprojects.Store
+	projectScope     string
+	projectTaskMu    sync.Mutex
+	projectSupported bool
 	runtimeArtifacts map[string]bool
 	runtimeEpoch     uint64
 

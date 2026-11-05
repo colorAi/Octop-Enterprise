@@ -184,5 +184,16 @@ func runtimeRasterFormat(format string) bool {
 
 // Caller holds companyMu. Both account nonce and directory generation must match.
 func (a *App) runtimePreviewScopeCurrent(nonce, base, workspace string, epoch uint64) bool {
-	return a.workspaceNonce == nonce && a.companyURL == base && a.workspacePath == workspace && a.runtimeEpoch == epoch && a.workspaceGrant != nil
+	if !a.runtimeAccountCurrent(nonce, base, epoch) {
+		return false
+	}
+	if a.projectStore != nil {
+		for _, p := range a.projectStore.Snapshot().Projects {
+			if p.Path == workspace {
+				_, err := a.projectStore.ForID(p.ID)
+				return err == nil
+			}
+		}
+	}
+	return a.workspacePath == workspace && a.workspaceGrant != nil
 }

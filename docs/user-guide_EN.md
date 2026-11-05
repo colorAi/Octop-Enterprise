@@ -30,11 +30,11 @@ To assign experts and skills, open **Admin → Users → Company structure**, se
 ## Employee quick start
 
 1. On the sign-in page, expand **Server address**, enter the address from the administrator, then enter your account and password. HTTPS is used when no scheme is given; intranet HTTP must explicitly use `http://`.
-2. After signing in, open **Settings → Local working folder** and confirm the automatically created default folder; choose **Change folder** for an existing project.
-3. From the **Agent** entry, choose an expert and create a task; describe the file or project you need.
+2. After signing in, open **Agent** and use the project sidebar to add a local folder or select a saved project.
+3. Choose an expert and start a conversation in the current project; describe the file or project you need. Other experts can start separate conversations sharing the same project files.
 4. Review the output and locate local results in the system file manager; forward them to colleagues, groups or another expert.
 
-Default folder rules, attachment import, permissions and data boundaries are in the [employee guide](enterprise-client_EN.md).
+Project switching, older folder compatibility, attachment import, permissions and data boundaries are in the [employee guide](enterprise-client_EN.md).
 
 ## Where to find common features
 

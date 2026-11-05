@@ -151,13 +151,21 @@ class EnterpriseRuntime:
         self.tool_path = ""
         self.installation_token = ""
         self.steering = CompanySteering(self.emit)
+        self.project_capable = False
+        self.start_lock = asyncio.Lock()
 
     async def initialize(self, params: dict[str, Any]) -> dict[str, Any]:
         if self.client:
             raise RuntimeError("runtime_already_initialized")
-        self.workspace = Path(params["workspace"]).expanduser().resolve(strict=True)
         self.state = Path(params["state_dir"]).expanduser().resolve()
-        if not self.workspace.is_dir() or self.state.is_relative_to(self.workspace):
+        self.workspace = (
+            Path(params["workspace"]).expanduser().resolve(strict=True)
+            if params.get("workspace")
+            else self.state / "unselected"
+        )
+        if params.get("workspace") and (
+            not self.workspace.is_dir() or self.state.is_relative_to(self.workspace)
+        ):
             raise RuntimeError("runtime_data_must_be_outside_project")
         await offload(self.state.mkdir, parents=True, exist_ok=True, mode=0o700)
         from octop_harness.observability.logging import setup_logging
@@ -172,6 +180,7 @@ class EnterpriseRuntime:
         self.authorized = params.get("execute_authorized") is True
         self.client = CompanyClient(params["company_url"], params["credential"])
         capabilities = await self.client.request("capabilities")
+        self.project_capable = "multi_project_v1" in capabilities.get("features", [])
         if capabilities["protocol_version"] != 1 or "checkpoint_batches" not in capabilities.get(
             "features", []
         ):
@@ -233,7 +242,8 @@ class EnterpriseRuntime:
     def status(self) -> dict[str, Any]:
         return {
             "protocol_version": 1,
-            "capabilities": ["edit_message", "local_approvals"],
+            "capabilities": ["edit_message", "local_approvals"]
+            + (["multi_project_v1"] if self.project_capable else []),
             "tools": self.tools,
             "execute_authorized": self.authorized,
             "active_tasks": [
@@ -241,7 +251,14 @@ class EnterpriseRuntime:
                     "pending_approval": self.steering.approvals.snapshot(value["thread_id"]),
                     **{
                         k: value[k]
-                        for k in ("task_id", "thread_id", "status", "recovery_state", "sync_state")
+                        for k in (
+                            "task_id",
+                            "thread_id",
+                            "project_id",
+                            "status",
+                            "recovery_state",
+                            "sync_state",
+                        )
                         if k in value
                     },
                 }
@@ -249,8 +266,61 @@ class EnterpriseRuntime:
             ],
         }
 
+    async def project_rpc(self, params: dict[str, Any]) -> Any:
+        if not self.client or not self.project_capable:
+            raise RuntimeError("project_runtime_required")
+        operation = params.get("operation")
+        pid = str(params.get("project_id") or "")
+        if not _IDENTIFIER.fullmatch(pid):
+            raise ValueError("invalid_project_identity")
+        identity = {"installation_token": self.installation_token}
+        if operation == "rename":
+            return await self.client.request(
+                "projects", {**identity, "project_id": pid, "name": params["name"]}, method="PATCH"
+            )
+        if operation == "register":
+            return await self.client.request(
+                "projects", {**identity, "project_id": pid, "name": params["name"]}
+            )
+        if operation == "create":
+            return await self.client.request(
+                f"projects/{pid}/threads",
+                {**identity, **{k: params[k] for k in ("thread_id", "agent_id")}},
+            )
+        if operation == "threads":
+            return await self.client.request(
+                f"projects/{pid}/threads/query",
+                {**identity, "limit": 50, "offset": params.get("offset", 0)},
+            )
+        if operation == "fork":
+            return await self.client.request(
+                f"projects/{pid}/fork",
+                {
+                    **identity,
+                    **{
+                        k: params[k]
+                        for k in (
+                            "source_thread_id",
+                            "thread_id",
+                            "message_id",
+                            "assistant_turns_from_end",
+                        )
+                        if k in params
+                    },
+                },
+            )
+        if operation == "adopt":
+            return await self.client.request(
+                f"projects/{pid}/adopt", {**identity, "thread_id": params["thread_id"]}
+            )
+        raise ValueError("invalid_project_operation")
+
     async def start(self, params: dict[str, Any]) -> dict[str, str]:
-        if not self.client or not self.authorized:
+        async with self.start_lock:
+            return await self._start(params)
+
+    async def _start(self, params: dict[str, Any]) -> dict[str, str]:
+        if not self.client or (not self.authorized and not params.get("project_id")):
             raise RuntimeError("请选择工作目录并授权本机终端执行")
         if "ffmpeg" not in self.tools or any(
             self.tools.get(k) == "unavailable" for k in ("openpyxl", "python-docx", "Pillow")
@@ -264,6 +334,26 @@ class EnterpriseRuntime:
             raise RuntimeError("已有任务正在本机执行")
         if self.tasks.get(thread, {}).get("status") == "unknown":
             raise RuntimeError("上次任务结果待核对，不能自动重放。请检查已有成果后新建任务")
+        project = self.workspace / thread
+        if params.get("project_id"):
+            if not self.project_capable:
+                raise RuntimeError("project_runtime_required")
+            selected = Path(params["project_root"])
+            project = selected.resolve(strict=True)
+            if os.path.normcase(str(project)) != os.path.normcase(str(selected)):
+                raise RuntimeError("project_directory_changed")
+            if (
+                not project.is_dir()
+                or self.state.is_relative_to(project)
+                or project.is_relative_to(self.state)
+            ):
+                raise RuntimeError("runtime_data_must_be_outside_project")
+        for other, running in self.tasks.items():
+            if other == thread or not (other in self.work or running.get("status") == "unknown"):
+                continue
+            root = Path(running["project_path"]).resolve() if running.get("project_path") else None
+            if root and (project.is_relative_to(root) or root.is_relative_to(project)):
+                raise RuntimeError("project_already_running")
         recovery = secrets.token_urlsafe(32)
         request = {
             key: params[key]
@@ -271,6 +361,7 @@ class EnterpriseRuntime:
                 "task_id",
                 "thread_id",
                 "agent_id",
+                "project_id",
                 "text",
                 "model",
                 "reasoning_mode",
@@ -290,11 +381,18 @@ class EnterpriseRuntime:
         if (
             previous
             and previous.get("project_path")
-            and Path(previous["project_path"]).parent != self.workspace
+            and Path(previous["project_path"]).resolve() != project.resolve()
+            and not (
+                params.get("project_id")
+                and int(params.get("project_revision", 1))
+                > int(previous.get("project_revision", 1))
+                and previous.get("status") in {"completed", "failed", "cancelled"}
+                and previous.get("sync_state") == "synced"
+            )
         ):
             raise RuntimeError("此任务绑定原工作目录，请恢复原目录或创建新任务")
         inbound = await offload(
-            local_attachment_metadata, self.workspace / thread, params.get("local_attachments", [])
+            local_attachment_metadata, project, params.get("local_attachments", [])
         )
         task = {
             "task_id": params["task_id"],
@@ -306,7 +404,9 @@ class EnterpriseRuntime:
             "recovery_token": recovery,
             "started_at_ns": time.time_ns(),
             "seq": 0,
-            "project_path": str(self.workspace / thread),
+            "project_path": str(project),
+            "project_id": params.get("project_id"),
+            "project_revision": int(params.get("project_revision", 1)),
         }
         task_dir = self.state / "tasks" / task["task_id"]
         if await offload((task_dir / "task.json").exists):
@@ -454,7 +554,7 @@ class EnterpriseRuntime:
         assert self.client
         client = self.client
         thread, task_id = task["thread_id"], task["task_id"]
-        project = self.workspace / acquired["project_name"]
+        project = Path(task["project_path"])
         backend = None
         saver = None
         agent = None
@@ -462,11 +562,20 @@ class EnterpriseRuntime:
         status, error, artifacts = "completed", "", []
         sent_files: dict[str, dict[str, Any]] = {}
         try:
-            if project.is_symlink() or not project.resolve().is_relative_to(self.workspace):
+            if (
+                project.is_symlink()
+                or project.resolve() != project
+                or (
+                    not task.get("project_id")
+                    and not project.resolve().is_relative_to(self.workspace)
+                )
+            ):
                 raise RuntimeError("project_path_invalid")
             await offload(project.mkdir, parents=True, exist_ok=True)
             # Unchanged files from earlier turns must never move into this turn.
-            before = await offload(artifact_index, project, limit=None)
+            before = (
+                [] if task.get("project_id") else await offload(artifact_index, project, limit=None)
+            )
             snapshot = acquired["expert"]
             if snapshot["harness_version"] != version("octop-harness"):
                 raise RuntimeError("公司引擎版本与客户端不兼容，请安装匹配的客户端")
@@ -569,6 +678,7 @@ class EnterpriseRuntime:
                         os.fsync(stream.fileno())
 
                 await offload(save_media)
+                backend.written_files.add(str(target))
                 return json.dumps(
                     {"path": str(target), "sha256": item["sha256"], "location": "desktop"}
                 )
@@ -724,11 +834,13 @@ class EnterpriseRuntime:
 
             instructions = (
                 snapshot["instructions"]
-                + f"\nEnterprise execution: project={project}; selected source folder={self.workspace}; Python={sys.executable}. Shell commands run with the current employee OS permissions. Preserve source files. Never overwrite or delete without user authorization. Do not upload raw media for local processing. Personal memory is provided by the company memory service through memory_search/memory_get/remember. Automatic recall contains durable saved memories; use memory_search and memory_get for details from earlier conversations. Historical assistant statements do not describe current tool availability or current task results. Project documents are project files and are not loaded as personal memory. Expert bootstrap is already complete. Company expert skills are cached at {cache}. Only this task's granted company tools are available. Team delegation and external connectors are unavailable."
+                + f"\nEnterprise execution: project={project}; selected source folder={project if task.get('project_id') else self.workspace}; Python={sys.executable}. Shell commands run with the current employee OS permissions. Preserve source files. Never overwrite or delete without user authorization. Do not upload raw media for local processing. Personal memory is provided by the company memory service through memory_search/memory_get/remember. Automatic recall contains durable saved memories; use memory_search and memory_get for details from earlier conversations. Historical assistant statements do not describe current tool availability or current task results. Project documents are project files and are not loaded as personal memory. Expert bootstrap is already complete. Company expert skills are cached at {cache}. Only this task's granted company tools are available. Team delegation and external connectors are unavailable."
             )
             instructions += (
                 "\nWhen the user asks to display, send or resend an existing local image "
-                "or file, call send_local_file with its project path. Do not merely return "
+                "or file, call send_local_file with its project path. Shell-generated files "
+                "must be delivered with send_local_file; the shared project is not scanned "
+                "to infer outputs. Do not merely return "
                 "a filename or file:// link. This delivers unchanged files in the current "
                 "reply without regenerating or modifying them."
             )
@@ -943,7 +1055,12 @@ class EnterpriseRuntime:
                 task, directory, {"kind": "messages", "messages": messages_to_dict(messages)}
             )
             artifacts_by_path = dict(sent_files)
-            for item in await offload(artifact_index, project, previous=before):
+            changed = (
+                await offload(backend.written_artifacts)
+                if task.get("project_id")
+                else await offload(artifact_index, project, previous=before)
+            )
+            for item in changed:
                 # Keep explicit delivery intent, using the latest bytes if edited.
                 artifacts_by_path[item["path"]] = {
                     **artifacts_by_path.get(item["path"], {}),

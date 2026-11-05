@@ -90,7 +90,27 @@ func (a *App) transferRuntimeArtifact(nonce, base, method string, raw json.RawMe
 	}
 	a.companyMu.Lock()
 	workspace, epoch := a.workspacePath, a.runtimeEpoch
+	projectBound := false
+	sourceRoot, sourceErr := a.artifactRootLocked(params.Path)
+	if method == "upload_artifact" {
+		workspace = sourceRoot
+	} else if a.projectSupported {
+		store, err := a.projectStoreLocked(base)
+		if err != nil {
+			a.companyMu.Unlock()
+			return nil, err
+		}
+		project, err := store.ForThread(params.ThreadID)
+		if err != nil {
+			a.companyMu.Unlock()
+			return nil, err
+		}
+		workspace, projectBound = project.Path, true
+	}
 	current := a.runtimePreviewScopeCurrent(nonce, base, workspace, epoch)
+	if params.Path != "" && sourceErr != nil {
+		current = false
+	}
 	a.companyMu.Unlock()
 	if !current || workspace == "" {
 		return nil, errors.New("请先授权当前账号的本地工作目录")
@@ -98,7 +118,7 @@ func (a *App) transferRuntimeArtifact(nonce, base, method string, raw json.RawMe
 	check := func() error {
 		a.companyMu.Lock()
 		defer a.companyMu.Unlock()
-		if !a.runtimePreviewScopeCurrent(nonce, base, workspace, epoch) {
+		if !a.runtimePreviewScopeCurrent(nonce, base, workspace, epoch) || (params.Path != "" && !a.runtimePreviewScopeCurrent(nonce, base, sourceRoot, epoch)) {
 			return errors.New("账号或工作目录已切换，文件转发已取消")
 		}
 		return nil
@@ -129,7 +149,7 @@ func (a *App) transferRuntimeArtifact(nonce, base, method string, raw json.RawMe
 		return response, nil
 	}
 	if method == "upload_artifact" {
-		data, err := readForwardArtifact(workspace, params.Path, params.SHA256)
+		data, err := readForwardArtifact(sourceRoot, params.Path, params.SHA256)
 		if err != nil {
 			return nil, err
 		}
@@ -191,16 +211,16 @@ func (a *App) transferRuntimeArtifact(nonce, base, method string, raw json.RawMe
 	}
 	defer root.Close()
 	if params.Path != "" {
-		data, err := readForwardArtifact(workspace, params.Path, params.SHA256)
+		data, err := readForwardArtifact(sourceRoot, params.Path, params.SHA256)
 		if err != nil {
 			return nil, err
 		}
 		a.companyMu.Lock()
 		defer a.companyMu.Unlock()
-		if !a.runtimePreviewScopeCurrent(nonce, base, workspace, epoch) {
+		if !a.runtimePreviewScopeCurrent(nonce, base, workspace, epoch) || !a.runtimePreviewScopeCurrent(nonce, base, sourceRoot, epoch) {
 			return nil, errors.New("账号或工作目录已切换，附件复制已取消")
 		}
-		return saveForwardAttachment(root, workspace, params.ThreadID, filepath.Base(params.Path), data)
+		return saveRuntimeAttachment(root, workspace, params.ThreadID, filepath.Base(params.Path), data, projectBound)
 	}
 	downloadPath := ""
 	if params.AgentID != "" {
@@ -246,10 +266,13 @@ func (a *App) transferRuntimeArtifact(nonce, base, method string, raw json.RawMe
 	if !a.runtimePreviewScopeCurrent(nonce, base, workspace, epoch) {
 		return nil, errors.New("账号或工作目录已切换，附件保存已取消")
 	}
-	return saveForwardAttachment(root, workspace, params.ThreadID, params.Filename, data)
+	return saveRuntimeAttachment(root, workspace, params.ThreadID, params.Filename, data, projectBound)
 }
 
 func saveForwardAttachment(root *os.Root, workspace, thread, name string, data []byte) (runtimeForwardFile, error) {
+	return saveRuntimeAttachment(root, workspace, thread, name, data, false)
+}
+func saveRuntimeAttachment(root *os.Root, workspace, thread, name string, data []byte, projectBound bool) (runtimeForwardFile, error) {
 	name = filepath.Base(strings.ReplaceAll(name, "\\", "/"))
 	name = strings.Map(func(r rune) rune {
 		if r < 32 || strings.ContainsRune(`<>:"/\|?*`, r) {
@@ -268,10 +291,13 @@ func saveForwardAttachment(root *os.Root, workspace, thread, name string, data [
 	if !forwardMediaID.MatchString(thread) {
 		return runtimeForwardFile{}, errors.New("目标 Agent 会话编号无效")
 	}
-	if info, err := root.Lstat(thread); err == nil && info.Mode()&os.ModeSymlink != 0 {
+	if info, err := root.Lstat(thread); !projectBound && err == nil && info.Mode()&os.ModeSymlink != 0 {
 		return runtimeForwardFile{}, errors.New("目标 Agent 任务目录不能是符号链接")
 	}
 	directory := filepath.Join(thread, "inbound")
+	if projectBound {
+		directory = "inbound"
+	}
 	if err := root.MkdirAll(directory, 0700); err != nil {
 		return runtimeForwardFile{}, errors.New("无法创建本地附件目录")
 	}

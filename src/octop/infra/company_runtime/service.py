@@ -305,6 +305,8 @@ class CompanyRuntimeService:
         request = {
             k: v for k, v in body.items() if k not in {"recovery_token", "installation_token"}
         }
+        if not request.get("project_id"):
+            request.pop("project_id", None)
         if not request.get("edit_message_id"):
             request.pop("edit_message_id", None)
         from octop.infra.agents.security.hitl_session import parse_hitl_session_policy

@@ -93,6 +93,8 @@ import {
   ChatToolDockProvider,
   dockTabIdForToolCall,
 } from "./ChatToolDockContext";
+import { ProjectBar } from "./components/ProjectNavigation";
+import { useDesktopProjects } from "../../context/DesktopProjectsContext";
 import ChatSidebarPanel from "./components/ChatSidebarPanel";
 import ChatTitleBar from "./components/ChatTitleBar";
 import TeamChatBadge from "./components/TeamChatBadge";
@@ -170,6 +172,7 @@ function ChatPageInner() {
   );
   // Imperative handle to push a new prefill into the already-mounted ChatInput.
   const chatInputRef = useRef<ChatInputHandle | null>(null);
+  const desktopProjects = useDesktopProjects();
 
   // Clear the router state after consuming prefillInput so it doesn't persist
   // on subsequent visits or page refreshes.
@@ -433,7 +436,15 @@ function ChatPageInner() {
     focusToolUiTab,
     closeTab: closeDockTab,
     setActiveTab: setDockActiveTab,
-  } = useChatDockPanel(isMobile, resolvedAgentId);
+  } = useChatDockPanel(
+    isMobile,
+    resolvedAgentId,
+    desktopProjects.state?.supported
+      ? activeThreadId
+        ? desktopProjects.state.threads[activeThreadId] || activeThreadId
+        : desktopProjects.state.current_project_id
+      : null,
+  );
 
   const chromeCheckInFlightRef = useRef(false);
   const bridgeConnectionId =
@@ -1355,6 +1366,12 @@ function ChatPageInner() {
       onAgentSelect={navigateToAgent}
       onNewChatWithAgent={(agentId) => {
         clearQueued();
+        const projectId = desktopProjects.state?.current_project_id;
+        if (projectId)
+          void desktopProjects.select({
+            project_id: projectId,
+            agent_id: agentId,
+          });
         handleNewChatWithAgent(agentId);
       }}
       onDeleteSession={handleDeleteSession}
@@ -1869,7 +1886,21 @@ function ChatPageInner() {
                 />
               </div>
             </div>
+            <ProjectBar
+              threadId={activeThreadId}
+              onChoose={() => {
+                void desktopProjects.choose().then((next) => {
+                  if (next?.current_project_id && !next.cancelled)
+                    handleNewChat();
+                });
+              }}
+            />
             <ChatInput
+              key={
+                activeThreadId ||
+                desktopProjects.state?.current_project_id ||
+                "draft"
+              }
               ref={chatInputRef}
               onSend={wrappedHandleSend}
               onQueue={(item) => enqueueQueued({ ...item, device })}
@@ -1884,6 +1915,12 @@ function ChatPageInner() {
               isTeam={isTeamChat}
               disabled={
                 companyHistoryReadOnly ||
+                (desktopProjects.available &&
+                  desktopProjects.state?.supported !== false &&
+                  (desktopProjects.busy ||
+                    !desktopProjects.state ||
+                    (!activeThreadId &&
+                      !desktopProjects.state.current_project_id))) ||
                 !agentChatReady ||
                 noAgents ||
                 memoryMaintBlocking ||

@@ -13,6 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from octop.api.deps import get_server
 from octop.infra.company_runtime import PROTOCOL_VERSION
+from octop.infra.company_runtime.projects import CompanyProjectService
 from octop.infra.company_runtime.service import (
     CompanyRuntimeService,
     authenticate_company_device,
@@ -41,6 +42,8 @@ class Capabilities(Document):
         "memory",
         "knowledge",
         "events",
+        "project_catalog_v1",
+        "multi_project_v1",
     ]
 
 
@@ -66,7 +69,163 @@ async def capabilities(svc: CompanyRuntimeService = Depends(service)) -> Capabil
     return Capabilities()
 
 
+class ProjectIdentity(Document):
+    installation_token: str = Field(min_length=32, max_length=256)
+
+
+class ProjectQuery(ProjectIdentity):
+    limit: int = Field(default=25, ge=1, le=100)
+    offset: int = Field(default=0, ge=0)
+
+
+class ProjectSave(ProjectIdentity):
+    project_id: str = Field(pattern=ID)
+    name: str = Field(min_length=1, max_length=200)
+
+
+class ProjectMetadata(Document):
+    project_id: str
+    name: str
+    created_at: int
+    updated_at: int
+
+
+class ProjectList(Document):
+    items: list[ProjectMetadata]
+    has_more: bool
+
+
+class ProjectThreadCreate(ProjectIdentity):
+    thread_id: str = Field(
+        pattern=ID, description="Stable client-generated ID for idempotent creation."
+    )
+    agent_id: str = Field(pattern=ID)
+    title: str = Field(default="", max_length=200)
+
+
+class ProjectThreadCreated(Document):
+    thread_id: str
+    agent_id: str
+    project_id: str
+    session_key: str
+
+
+class ProjectThreadSummary(Document):
+    task_status: str | None = None
+    thread_id: str
+    agent_id: str
+    project_id: str
+    title: str | None
+    last_active: int
+    created_at: int
+    pinned: bool
+
+
+class ProjectThreadList(Document):
+    items: list[ProjectThreadSummary]
+    has_more: bool
+
+
+@router.post(
+    "/projects",
+    response_model=ProjectMetadata,
+    summary="Register a native project without uploading its local path",
+)
+async def register_project(body: ProjectSave, svc: CompanyRuntimeService = Depends(service)) -> Any:
+    return await CompanyProjectService(svc, body.installation_token).save(
+        body.project_id, body.name
+    )
+
+
+@router.patch(
+    "/projects",
+    response_model=ProjectMetadata,
+    summary="Rename a project owned by this employee installation",
+)
+async def rename_project(body: ProjectSave, svc: CompanyRuntimeService = Depends(service)) -> Any:
+    return await CompanyProjectService(svc, body.installation_token).save(
+        body.project_id, body.name, rename=True
+    )
+
+
+@router.post(
+    "/projects/query",
+    response_model=ProjectList,
+    summary="List this installation's projects with bounded pagination",
+)
+async def query_projects(body: ProjectQuery, svc: CompanyRuntimeService = Depends(service)) -> Any:
+    return await CompanyProjectService(svc, body.installation_token).list(body.limit, body.offset)
+
+
+@router.post(
+    "/projects/{project_id}/threads",
+    response_model=ProjectThreadCreated,
+    summary="Create a project-bound employee conversation atomically",
+)
+async def create_project_thread(
+    project_id: str, body: ProjectThreadCreate, svc: CompanyRuntimeService = Depends(service)
+) -> Any:
+    return await CompanyProjectService(svc, body.installation_token).create_thread(
+        project_id, body.thread_id, body.agent_id, body.title
+    )
+
+
+@router.post(
+    "/projects/{project_id}/threads/query",
+    response_model=ProjectThreadList,
+    summary="List a project's conversations across the employee's experts",
+)
+async def query_project_threads(
+    project_id: str, body: ProjectQuery, svc: CompanyRuntimeService = Depends(service)
+) -> Any:
+    return await CompanyProjectService(svc, body.installation_token).threads(
+        project_id, body.limit, body.offset
+    )
+
+
+class ProjectFork(ProjectIdentity):
+    source_thread_id: str = Field(pattern=ID)
+    thread_id: str = Field(pattern=ID)
+    message_id: str | None = Field(default=None, max_length=256)
+    assistant_turns_from_end: int | None = Field(default=None, ge=1)
+
+
+@router.post(
+    "/projects/{project_id}/fork",
+    response_model=dict[str, Any],
+    summary="Fork a desktop conversation within its original project and expert",
+)
+async def fork_project_thread(
+    project_id: str, body: ProjectFork, svc: CompanyRuntimeService = Depends(service)
+) -> Any:
+    return await CompanyProjectService(svc, body.installation_token).fork(
+        project_id,
+        body.source_thread_id,
+        body.thread_id,
+        body.message_id,
+        body.assistant_turns_from_end,
+    )
+
+
+class ProjectAdopt(ProjectIdentity):
+    thread_id: str = Field(pattern=ID)
+
+
+@router.post(
+    "/projects/{project_id}/adopt",
+    response_model=dict[str, str],
+    summary="Preserve a legacy desktop conversation in its original project",
+)
+async def adopt_project_thread(
+    project_id: str, body: ProjectAdopt, svc: CompanyRuntimeService = Depends(service)
+) -> Any:
+    return await CompanyProjectService(svc, body.installation_token).adopt(
+        project_id, body.thread_id
+    )
+
+
 class StartTask(Document):
+    project_id: str | None = Field(default=None, pattern=ID)
     task_id: str = Field(pattern=ID)
     thread_id: str = Field(pattern=ID)
     agent_id: str = Field(pattern=ID)

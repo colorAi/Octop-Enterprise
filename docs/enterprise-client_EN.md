@@ -6,22 +6,28 @@
 
 1. Get the server address, account and a client build that matches the server from your administrator.
 2. Expand **Server address** under the sign-in button, enter the company server root URL, then sign in with your account and password. HTTPS is used when the scheme is omitted; use `http://` only when the deployment explicitly uses intranet HTTP.
-3. After signing in, open **Local working folder** in the left sidebar's **Settings** group and confirm the folder. To use an existing project, choose **Change folder**; if no folder is set, choose **Choose folder**.
-4. Choose an expert and create a task. Describe the file or project you need; when it finishes, open the result card to locate the output.
+3. After signing in, open agent chat and add a project folder from the project sidebar using the system folder picker.
+4. Choose an expert and start a conversation in that project. Describe the file or project you need; when it finishes, open the result card to locate the output.
 
 With **Remember me** selected, the client can restore the session while the login credential is still valid; passwords are not saved. Signing out ends the current device session.
 
-## Default folder and local tools
+## Projects, experts and local tools
 
-The first time a company account is used on this computer, the client creates and authorizes a default working folder. On Windows it prefers `Workspace` under the installation directory and falls back to `Octop Workspace` under the user profile when that is not writable; on macOS it uses `Octop Workspace` under the user profile. Each company account gets its own subfolder; the actual path is shown on the **Local working folder** page.
+Compatible clients save the projects selected on this computer for the company account. A new conversation defaults to the current project; select a saved project or add another folder to change it. The expert and history shortcut also starts new conversations in the current project. Return to a project to continue its conversations.
 
-To change the folder, choose and authorize one in the system folder picker. The client saves the folder per company address and employee account. **Remove folder** revokes the current grant and keeps project files; you can choose a folder again later. If a saved folder is unavailable, the page prompts you to choose another one.
+Each conversation keeps a fixed project and expert, and new tasks work directly in the selected folder. Different experts can have separate conversations sharing the same project files, with independent chat history. Switching projects does not change a running task's directory. A project, or projects with overlapping directories, permits one active task at a time, including tasks awaiting approval or reconciliation; separate projects retain the overall limit of four local tasks.
+
+The project menu supports renaming, hiding, revoking access and locating a moved folder. Hiding or revoking a project preserves files and history. Locating a moved folder preserves the project identity and conversations; active or unknown tasks must first be resolved, and historical results retain their original paths. Selecting the same folder again reuses its project.
+
+Older local conversations are associated with the original directories recorded by their tasks without moving files. History without a local directory record does not inherit the current project's access. Multiple projects require compatible client, runtime and server components. Older single-folder mode retains the folder controls in **Local working folder**; its default folder is not automatically assigned to all new conversations.
 
 On the **Local working folder** page, select **Check tools** to check the local execution engine; expand **Tool details** to see tool versions.
 
 ## Files, models and history
 
 Project files are stored in the authorized folder on this computer. The company server stores accounts, expert definitions, long-term memory, formal conversations and recovery records. The local computer stores execution checkpoints, operation receipts and pending synchronization records outside the project folder.
+
+The project file panel and `@` file mentions use the local directory bound to the current conversation. Text and images can be previewed, and other files can be located in the system file manager. Arbitrary changes in a shared folder are not automatically attributed to the current reply; files written by file tools or explicitly delivered are recorded as task results.
 
 Before each question, the client recalls relevant memory from the company server. Synchronized user messages and replies are indexed there, and explicit durable facts are saved through server memory tools. Memory is isolated by employee expert instance. Existing experts retain their server SQLite stores; new instances use the configured server backend. The native harness disables personal memory databases and expert bootstrap. Project documents are not automatically loaded as personal memory.
 
@@ -43,7 +49,7 @@ For an employee question, an agent reply or a generated result, **Forward** lets
 
 The forward dialog lets you select the original message text, each image and each file separately, or choose **Only images** / **Only files**. Images have thumbnails, and you can forward only selected images from a multi-image message. After choosing targets, add optional instructions, for example "organize this file and list action items"; the selected attachments and instructions are sent in the same agent request. Sending fixes the content and instructions for that attempt; retries do not resend successful deliveries, and changing the content requires closing and forwarding again.
 
-Local results sent to an employee or group are verified against the original file's SHA-256 from the message, then uploaded as company chat attachments; recipients view or download them according to company chat permissions. Attachments forwarded to a local agent are saved in the target conversation's task folder; forwarding results between local agents copies the files and keeps the originals. The per-file limit is 50 MiB; long text and multiple attachments are split according to chat limits.
+Local results sent to an employee or group are verified against the original file's SHA-256 from the message, then uploaded as company chat attachments; recipients view or download them according to company chat permissions. Forwarding to a local agent creates a conversation in the current project and saves attachments under that project's `inbound` directory. Forwarding results between local agents copies the files and keeps the originals. The per-file limit is 50 MiB; long text and multiple attachments are split according to chat limits.
 
 Local file transfer requires a client shell that includes the feature, the computer that holds the result and an authorized working folder. If only the web app has been updated but the client shell has not, local file forwarding reports that the feature is missing; plain text forwarding still works. Forwarding does not automatically enable group bots or synchronize the entire working folder.
 

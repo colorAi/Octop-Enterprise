@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"octop.desktop/internal/companyprojects"
 	"octop.desktop/internal/companyruntime"
 )
 
@@ -34,7 +35,7 @@ func parseRuntimeEvent(name, nonce string) (id, method string, params json.RawMe
 		return
 	}
 	switch p[2] {
-	case "status", "refresh_status", "start", "cancel", "reveal", "reconcile", "preview_image", "steer", "steer_remove", "hitl_resume", "upload_artifact", "import_attachment":
+	case "project_relocate", "project_fork", "project_update", "project_status", "project_choose", "project_select", "project_create", "project_threads", "project_files", "project_read", "status", "refresh_status", "start", "cancel", "reveal", "reconcile", "preview_image", "steer", "steer_remove", "hitl_resume", "upload_artifact", "import_attachment":
 	default:
 		return
 	}
@@ -49,6 +50,7 @@ func (a *App) stopCompanyRuntimeLocked() {
 		a.window.ExecJS(`(function(origin,nonce){if(location.origin===origin)window.__octopRuntimeEvent?.(nonce,{event:"runtime_exit",status:"unknown",error:"工作目录或账号已切换，本地任务已停止；请核对已生成文件。"});})(` + jsonString(a.companyPageOriginLocked()) + `,` + jsonString(a.workspaceNonce) + `)`)
 	}
 	a.runtimeEpoch++
+	a.projectStore, a.projectScope, a.projectSupported = nil, "", false
 	if a.companyRuntime != nil {
 		a.companyRuntime.Close()
 		a.companyRuntime = nil
@@ -67,7 +69,7 @@ func (a *App) dispatchRuntimeEvent(name string) {
 		result, err := a.performRuntimeAction(nonce, base, method, params)
 		a.companyMu.Lock()
 		defer a.companyMu.Unlock()
-		if a.workspaceNonce != nonce || a.companyURL != base || ((method == "preview_image" || method == "upload_artifact" || method == "import_attachment") && a.runtimeEpoch != epoch) {
+		if a.workspaceNonce != nonce || a.companyURL != base || ((strings.HasPrefix(method, "project_") || method == "preview_image" || method == "upload_artifact" || method == "import_attachment") && a.runtimeEpoch != epoch) {
 			return
 		}
 		payload := map[string]any{"id": id, "result": result}
@@ -83,6 +85,10 @@ func (a *App) performRuntimeAction(nonce, base, method string, params json.RawMe
 	if a.workspaceNonce != nonce || a.companyURL != base {
 		a.companyMu.Unlock()
 		return nil, errors.New("账号已切换，请重新打开当前会话")
+	}
+	if strings.HasPrefix(method, "project_") {
+		a.companyMu.Unlock()
+		return a.performProjectAction(nonce, base, method, params)
 	}
 	if method == "refresh_status" {
 		// A settings refresh must work before pairing a project and must never
@@ -109,7 +115,8 @@ func (a *App) performRuntimeAction(nonce, base, method string, params json.RawMe
 			a.companyMu.Unlock()
 			return nil, errors.New("图片预览请求无效")
 		}
-		workspace, epoch, granted := a.workspacePath, a.runtimeEpoch, a.workspaceGrant != nil
+		workspace, scopeErr := a.artifactRootLocked(p.Path)
+		epoch, granted := a.runtimeEpoch, scopeErr == nil
 		a.companyMu.Unlock()
 		if !granted {
 			return nil, errors.New("请先授权当前账号的本地工作目录")
@@ -131,7 +138,8 @@ func (a *App) performRuntimeAction(nonce, base, method string, params json.RawMe
 			SHA256 string `json:"sha256"`
 		}
 		_ = json.Unmarshal(params, &p)
-		workspace, granted := a.workspacePath, a.workspaceGrant != nil
+		workspace, scopeErr := a.artifactRootLocked(p.Path)
+		epoch, granted := a.runtimeEpoch, scopeErr == nil
 		currentReceipt := a.runtimeArtifacts[p.Path]
 		a.companyMu.Unlock()
 		if !granted {
@@ -143,7 +151,7 @@ func (a *App) performRuntimeAction(nonce, base, method string, params json.RawMe
 		}
 		a.companyMu.Lock()
 		defer a.companyMu.Unlock()
-		if a.workspaceNonce != nonce || a.companyURL != base || a.workspacePath != workspace {
+		if !a.runtimePreviewScopeCurrent(nonce, base, workspace, epoch) {
 			return nil, errors.New("账号或工作目录已切换，请重新打开当前账号文件")
 		}
 		if runtime.GOOS == "darwin" {
@@ -159,6 +167,10 @@ func (a *App) performRuntimeAction(nonce, base, method string, params json.RawMe
 		return nil, errors.New("当前系统不支持打开文件位置")
 	}
 	a.companyMu.Unlock()
+	if method == "start" {
+		a.projectTaskMu.Lock()
+		defer a.projectTaskMu.Unlock()
+	}
 	if method == "status" {
 		var options struct {
 			VerifyTools bool `json:"verify_tools"`
@@ -178,8 +190,40 @@ func (a *App) performRuntimeAction(nonce, base, method string, params json.RawMe
 	if err != nil {
 		return nil, err
 	}
+	if method == "start" {
+		a.companyMu.Lock()
+		params, err = a.projectStartParamsLocked(nonce, base, params)
+		a.companyMu.Unlock()
+		if err != nil {
+			return nil, err
+		}
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
+	if method == "start" {
+		var selected struct {
+			ProjectID string `json:"project_id"`
+			ThreadID  string `json:"thread_id"`
+		}
+		_ = json.Unmarshal(params, &selected)
+		if selected.ProjectID != "" {
+			a.companyMu.Lock()
+			store := a.projectStore
+			var project companyprojects.Project
+			if store != nil {
+				project = store.Snapshot().Projects[selected.ProjectID]
+			}
+			a.companyMu.Unlock()
+			if project.Legacy {
+				if _, err := projectRPC(ctx, process, "register", project, nil); err != nil {
+					return nil, err
+				}
+				if _, err := projectRPC(ctx, process, "adopt", project, map[string]any{"thread_id": selected.ThreadID}); err != nil {
+					return nil, err
+				}
+			}
+		}
+	}
 	return process.Request(ctx, method, params)
 }
 
@@ -198,7 +242,7 @@ func (a *App) ensureRuntimeProcess(nonce, base, method string, prepare func() (s
 		a.companyMu.Unlock()
 		return nil, err
 	}
-	if a.workspacePath == "" || a.workspaceGrant == nil || a.workspaceError != "" {
+	if (a.workspacePath == "" || a.workspaceGrant == nil || a.workspaceError != "") && method != "status" && !strings.HasPrefix(method, "project_") && a.companyRuntime == nil {
 		a.companyMu.Unlock()
 		return nil, errors.New("请先在设置中选择本地工作目录并授权；终端将使用当前系统用户权限，工作目录不是安全沙箱")
 	}
@@ -208,6 +252,10 @@ func (a *App) ensureRuntimeProcess(nonce, base, method string, prepare func() (s
 			return nil, errors.New("本地任务进程已退出；请核对文件和公司任务记录")
 		}
 		workspace, epoch := a.workspacePath, a.runtimeEpoch
+		authorized := a.workspaceGrant != nil && a.workspaceError == ""
+		if !authorized {
+			workspace = ""
+		}
 		a.companyMu.Unlock()
 		root, err := prepare()
 		if err != nil {
@@ -223,7 +271,7 @@ func (a *App) ensureRuntimeProcess(nonce, base, method string, prepare func() (s
 		}
 		env := companyruntime.Environment(stateDir, root, filepath.Dir(pythonExe(root))+string(os.PathListSeparator)+filepath.Join(root, "tools")+string(os.PathListSeparator)+os.Getenv("PATH"), cacheDir)
 		a.companyMu.Lock()
-		if !a.runtimePreviewScopeCurrent(nonce, base, workspace, epoch) {
+		if !a.runtimeAccountCurrent(nonce, base, epoch) {
 			a.companyMu.Unlock()
 			return nil, errors.New("账号或工作目录已切换，本地运行时启动已取消")
 		}
@@ -233,7 +281,7 @@ func (a *App) ensureRuntimeProcess(nonce, base, method string, prepare func() (s
 				a.deliverRuntimeEvent(nonce, base, epoch, m)
 			}
 		}()
-		process, err := companyruntime.Start(pythonExe(root), filepath.Join(root, "launch.py"), workspace, env, func(m companyruntime.Message) {
+		process, err := companyruntime.Start(pythonExe(root), filepath.Join(root, "launch.py"), stateDir, env, func(m companyruntime.Message) {
 			events <- m
 			if m.Event == "runtime_exit" {
 				close(events)
@@ -249,7 +297,7 @@ func (a *App) ensureRuntimeProcess(nonce, base, method string, prepare func() (s
 		go a.watchRuntimeIdentity(nonce, base, epoch, identity.ExpiresAt)
 		a.companyMu.Unlock()
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		_, err = process.Request(ctx, "initialize", map[string]any{"company_url": base, "credential": credential, "device_id": identity.DeviceID, "owner_user_id": identity.OwnerUserID, "workspace": workspace, "state_dir": stateDir, "execute_authorized": true})
+		initial, err := process.Request(ctx, "initialize", map[string]any{"company_url": base, "credential": credential, "device_id": identity.DeviceID, "owner_user_id": identity.OwnerUserID, "workspace": workspace, "state_dir": stateDir, "execute_authorized": authorized})
 		cancel()
 		a.companyMu.Lock()
 		if err != nil {
@@ -265,10 +313,21 @@ func (a *App) ensureRuntimeProcess(nonce, base, method string, prepare func() (s
 			}
 			return nil, err
 		}
-		if a.companyRuntime != process || !a.runtimePreviewScopeCurrent(nonce, base, workspace, epoch) {
+		if a.companyRuntime != process || !a.runtimeAccountCurrent(nonce, base, epoch) {
 			a.companyMu.Unlock()
 			process.Close()
 			return nil, errors.New("账号或工作目录已切换，本地运行时启动已取消")
+		}
+		var status struct {
+			Capabilities []string `json:"capabilities"`
+		}
+		if json.Unmarshal(initial, &status) == nil {
+			a.projectSupported = false
+			for _, capability := range status.Capabilities {
+				if capability == "multi_project_v1" {
+					a.projectSupported = true
+				}
+			}
 		}
 	}
 	process := a.companyRuntime
@@ -324,6 +383,14 @@ func (a *App) watchRuntimeIdentity(nonce, base string, epoch uint64, expires int
 
 func runtimeErrorText(code string) string {
 	messages := map[string]string{
+		"project_already_running":                "这个项目已有运行中或待核对的任务，请处理完成后再使用另一位专家。",
+		"thread_project_missing":                 "此会话尚未绑定本机项目，请从项目列表打开原会话，或选择文件夹新建对话。",
+		"project_directory_changed":              "原项目文件夹已移动或不可用，请恢复原目录；不会自动切换到其他目录。",
+		"project_authorization_required":         "请通过选择文件夹重新授权这个项目的原目录。",
+		"project_runtime_required":               "公司服务尚不支持多项目，请更新公司服务和客户端。",
+		"project_catalog_missing":                "本机项目记录缺失，请恢复当前账号的本地项目记录；不会猜测原目录。",
+		"project_catalog_invalid":                "本机项目记录损坏，请恢复本地项目记录后再试。",
+		"thread_project_conflict":                "会话的项目归属不一致，请重新打开原项目。",
 		"company_runtime_disabled":               "公司尚未启用本机执行服务，请联系管理员开启；通讯录和员工聊天仍可使用。",
 		"company_protocol_incompatible":          "公司服务与客户端运行协议不兼容，请安装匹配的企业客户端。",
 		"device_session_expired":                 "当前设备连接已过期，请重新登录公司账号。",

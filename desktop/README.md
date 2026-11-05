@@ -94,24 +94,35 @@ Remembered sessions use that company's stable loopback WebView origin. Upgrading
 The bootstrap commits a local HTML document before navigating to the login handoff page. Do not replace it with an HTTP redirect: macOS WebKit can retain the initial `wails://` navigation's cross-site context and omit the Strict cookie, showing `Forbidden` instead of restoring a valid saved session. The bootstrap preserves the handoff fragment and keeps the existing cookie, Host and Origin checks.
 
 After sign-in the dashboard automatically pairs this computer with the employee
-session. On first use of an account it creates and authorizes a default folder:
-Windows first tries `Workspace` under the executable directory, then falls back
-to `Octop Workspace` under the user home; macOS uses the latter. Each company
-account gets its own subdirectory.
+session. Compatible servers, native shells and Python workers negotiate
+`multi_project_v1`. Employees select a folder from the project sidebar, then choose
+an expert and start a conversation. Each conversation binds a stable project ID
+and expert; tasks use the selected directory directly. Separate conversations in
+one project share files but keep independent checkpoints and chat history.
 
-In the desktop client, open **Local working folder** in the left sidebar's
-**Settings** group to view the path or use **Change folder** / **Choose folder**
-and the native directory picker.
-Folder preferences and execution consent are saved under `~/.octop/workspaces/`,
-scoped to the company origin and employee ID. Device credentials remain in memory;
+Native project catalogs are stored as `projects.json` in the company account
+cache. Only the native picker can authorize or relocate a directory. Task receipts
+retain the project ID, root and path revision; changing the selected project does
+not restart the worker or retarget a task. One task at a time may use a project or
+overlapping directories, including tasks awaiting approval or reconciliation;
+independent projects share the existing four-task limit.
+
+The settings entry **Local working folder** also lists projects and provides
+runtime/tool diagnostics. Legacy single-folder preferences and execution consent
+remain under `~/.octop/workspaces/`, scoped to company origin and employee ID.
+Older task receipts import their original directories without moving files or
+restoring revoked grants. Older components retain the single-folder interface;
+unsupported project execution never silently falls back to another directory.
+Device credentials remain in memory;
 the separate **Remember me** login option can retain the account login token in
 the company's WebView storage. Passwords are never saved.
 
 Restarting with the same account creates a new device session and restores its
-folder. Switching accounts or servers does not inherit another identity's folder.
-**Remove folder** revokes its grant and saves an explicit empty preference;
-it does not delete project files or automatically recreate a default on restart.
-An unavailable saved folder is reported rather than silently replaced.
+project catalog. Switching accounts or servers does not inherit another identity's
+directories. Renaming, hiding or revoking a project preserves files and history.
+Relocation preserves the project identity and requires settled tasks; historical
+artifacts retain their original paths. An unavailable saved folder is reported
+rather than silently replaced.
 
 Company expert chat executes through `window.__octopRuntime` and the native
 stdio worker (`launch.py company-runtime`). Employees see the working folder,
@@ -128,8 +139,7 @@ attachments into the local task folder before starting a turn. Arbitrary externa
 attachment URLs are not accepted. Mid-task steering currently supports text only.
 Selected company knowledge bases are retrieved through the server.
 
-The automatically created default folder, or a folder selected through the native
-picker, authorizes terminal/Python execution using the current OS user's
+Selecting a project through the native picker authorizes terminal/Python execution using the current OS user's
 permissions: the working folder is **not a security sandbox**.
 Legacy folder-only preferences require a fresh native selection before execution.
 File names, relevant excerpts, tool output and results may reach company models
@@ -140,10 +150,15 @@ reveal for artifacts actually reported by the current account's worker.
 
 Native runtime IPC uses an explicit allowlist with the selected page nonce:
 `status`, `refresh_status`, `start`, `cancel`, `reveal`, `reconcile`,
-`preview_image`, `steer`, `steer_remove`, `upload_artifact` and `import_attachment`.
+`preview_image`, `steer`, `steer_remove`, `hitl_resume`, `upload_artifact`,
+`import_attachment`, `project_status`, `project_choose`, `project_select`,
+`project_create`, `project_threads`, `project_files`, `project_read`,
+`project_update`, `project_relocate` and `project_fork`.
 Device credentials are sent to the child only through stdin, never argv, URLs,
-page properties or logs. Account/server/folder changes terminate the worker
-process tree, clear artifact permissions and invalidate its queued events.
+page properties or logs. Account/server changes and legacy global-folder changes
+terminate the worker process tree, clear artifact permissions and invalidate queued
+events. Project selection alone leaves the worker running; revocation and relocation
+check for conflicting tasks and invalidate file access for that project.
 The local UI listener only serves packaged files and forwards company APIs; it exposes no native file or execution endpoints. A crash or lost result is never automatically
 replayed; receipts remain available for reconciliation.
 

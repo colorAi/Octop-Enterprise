@@ -1,13 +1,17 @@
 import { useEffect, useRef, useState } from "react";
 import { message } from "@/utils/antdMessage";
 import { requireDesktopRuntime } from "../api/desktopRuntime";
-import { Alert, Button, Input, Space, Tag, Typography } from "antd";
+import { useDesktopProjects } from "../context/DesktopProjectsContext";
+import { Alert, Button, Input, Select, Space, Tag, Typography } from "antd";
 import { useTranslation } from "react-i18next";
 import { useDesktopWorkspace } from "../context/DesktopWorkspaceContext";
 
 export default function LocalWorkspaceSettings() {
   const { t } = useTranslation();
   const desktop = useDesktopWorkspace();
+  const projects = useDesktopProjects();
+  const multiProject =
+    projects.available && projects.state?.supported !== false;
   const online = desktop.state?.state === "online";
   const [runtime, setRuntime] = useState<{
     tools?: Record<string, string>;
@@ -30,8 +34,7 @@ export default function LocalWorkspaceSettings() {
     if (
       !desktop.available ||
       !online ||
-      !desktop.state?.grant?.id ||
-      desktop.error
+      (!multiProject && (!desktop.state?.grant?.id || desktop.error))
     )
       return;
     let cancelled = false;
@@ -72,6 +75,7 @@ export default function LocalWorkspaceSettings() {
     desktop.state?.grant?.id,
     desktop.error,
     diagnosticRevision,
+    multiProject,
     t,
   ]);
   if (!desktop.available) return null;
@@ -84,45 +88,81 @@ export default function LocalWorkspaceSettings() {
         </Tag>
       </Space>
       <Typography.Paragraph type="secondary">
-        {t("devices.workspaceHint")}
+        {multiProject
+          ? "每个对话固定使用一个项目文件夹。在项目内可以选择不同专家，新对话默认沿用当前项目。"
+          : t("devices.workspaceHint")}
       </Typography.Paragraph>
-      <Input
-        readOnly
-        aria-label={t("devices.workspaceTitle")}
-        value={desktop.state?.path ?? ""}
-        placeholder={t("devices.workspaceEmpty")}
-      />
-      <Space wrap style={{ margin: "12px 0" }}>
-        <Button
-          type="primary"
-          disabled={!online || desktop.enabled === false}
-          loading={desktop.busy}
-          onClick={() => void desktop.choose()}
-        >
-          {t(
-            desktop.state?.path
-              ? "devices.workspaceChange"
-              : "devices.workspaceChoose",
-          )}
-        </Button>
-        {desktop.state?.path && (
+      {multiProject ? (
+        <>
+          <Select
+            aria-label="默认项目"
+            style={{ width: "100%" }}
+            placeholder="选择项目文件夹"
+            value={projects.state?.current_project_id || undefined}
+            disabled={projects.busy}
+            options={Object.values(projects.state?.projects ?? {}).map((p) => ({
+              value: p.id,
+              label: `${p.name} · ${p.path}`,
+            }))}
+            onChange={(id) => void projects.select({ project_id: id })}
+          />
           <Button
-            disabled={!online || desktop.busy}
-            onClick={() => void desktop.clear()}
+            style={{ margin: "12px 0" }}
+            disabled={!online}
+            loading={projects.busy}
+            onClick={() => void projects.choose()}
           >
-            {t("devices.workspaceClear")}
+            添加项目文件夹
           </Button>
-        )}
-        {!online && (
-          <Button disabled={desktop.busy} onClick={desktop.retry}>
-            {t("common.retry")}
-          </Button>
-        )}
-      </Space>
+          {projects.error && (
+            <Alert
+              type="warning"
+              message={projects.error}
+              action={<Button onClick={projects.refresh}>重试</Button>}
+            />
+          )}
+        </>
+      ) : (
+        <>
+          <Input
+            readOnly
+            aria-label={t("devices.workspaceTitle")}
+            value={desktop.state?.path ?? ""}
+            placeholder={t("devices.workspaceEmpty")}
+          />
+          <Space wrap style={{ margin: "12px 0" }}>
+            <Button
+              type="primary"
+              disabled={!online || desktop.enabled === false}
+              loading={desktop.busy}
+              onClick={() => void desktop.choose()}
+            >
+              {t(
+                desktop.state?.path
+                  ? "devices.workspaceChange"
+                  : "devices.workspaceChoose",
+              )}
+            </Button>
+            {desktop.state?.path && (
+              <Button
+                disabled={!online || desktop.busy}
+                onClick={() => void desktop.clear()}
+              >
+                {t("devices.workspaceClear")}
+              </Button>
+            )}
+            {!online && (
+              <Button disabled={desktop.busy} onClick={desktop.retry}>
+                {t("common.retry")}
+              </Button>
+            )}
+          </Space>
+        </>
+      )}
       <Typography.Paragraph type="secondary" style={{ fontSize: 12 }}>
         {t("devices.workspaceConsent")}
       </Typography.Paragraph>
-      {online && desktop.state?.grant && (
+      {online && (multiProject || desktop.state?.grant) && (
         <div style={{ marginBottom: 12 }}>
           <Space wrap>
             <Typography.Text strong>
@@ -224,7 +264,7 @@ export default function LocalWorkspaceSettings() {
       {desktop.enabled === false && (
         <Alert type="info" message={t("devices.disabled")} />
       )}
-      {desktop.error && (
+      {desktop.error && !multiProject && (
         <Alert
           type="warning"
           showIcon

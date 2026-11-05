@@ -1,5 +1,8 @@
 import type { HitlPendingPayload, HitlSessionPolicy } from "../types/hitl";
 import { request } from "../request";
+import { createRuntimeTaskId } from "../desktopRuntime";
+import { notifyProjectsChanged } from "../desktopProjects";
+import { createDesktopProjectThread } from "../desktopProjects";
 
 /** Workspace file produced in a thread; ``agent_id`` is the producer. */
 export type ThreadArtifact = {
@@ -166,11 +169,14 @@ export const octopThreadsApi = {
       `/agents/${encodeURIComponent(agentId)}/threads?limit=${limit}`,
     ),
 
-  create: (agentId: string) =>
-    request<{ thread_id: string; session_key: string }>(
+  create: async (agentId: string) => {
+    const local = await createDesktopProjectThread(agentId);
+    if (local) return local;
+    return request<{ thread_id: string; session_key: string }>(
       `/agents/${encodeURIComponent(agentId)}/threads`,
       { method: "POST" },
-    ),
+    );
+  },
 
   cancel: (agentId: string, threadId: string, signal?: AbortSignal) =>
     request<{ thread_id: string; requested: boolean }>(
@@ -267,7 +273,7 @@ export const octopThreadsApi = {
       { method: "DELETE" },
     ),
 
-  fork: (
+  fork: async (
     agentId: string,
     threadId: string,
     body: {
@@ -275,8 +281,22 @@ export const octopThreadsApi = {
       content?: string;
       assistant_turns_from_end?: number;
     },
-  ) =>
-    request<{
+  ) => {
+    const bridge = window.__octopRuntime?.projects;
+    if (bridge) {
+      const state = await bridge.status();
+      if (state.supported) {
+        const created = await bridge.fork({
+          source_thread_id: threadId,
+          thread_id: `thr_${createRuntimeTaskId()}`,
+          message_id: body.message_id,
+          assistant_turns_from_end: body.assistant_turns_from_end,
+        });
+        notifyProjectsChanged();
+        return created;
+      }
+    }
+    return request<{
       thread_id: string;
       session_key: string;
       source_thread_id: string;
@@ -289,7 +309,8 @@ export const octopThreadsApi = {
         threadId,
       )}/fork`,
       { method: "POST", body: JSON.stringify(body) },
-    ),
+    );
+  },
 
   markRead: (agentId: string, threadId: string) =>
     request<void>(

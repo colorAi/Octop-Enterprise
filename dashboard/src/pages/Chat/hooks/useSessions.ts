@@ -1,3 +1,4 @@
+import { message } from "@/utils/antdMessage";
 import { useCallback, useEffect, useSyncExternalStore } from "react";
 import {
   normalizeThreadArtifacts,
@@ -576,7 +577,10 @@ export function useSessions(agentId: string | null) {
         );
         return created.thread_id;
       })
-      .catch(() => {
+      .catch((error: unknown) => {
+        void message.error(
+          error instanceof Error ? error.message : "无法创建会话",
+        );
         setModuleSessions((prev) => prev.filter((s) => s.id !== "__pending__"));
         return "";
       });

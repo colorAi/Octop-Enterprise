@@ -36,7 +36,7 @@ function mountConnectionPanel(config) {
   function runtimeRequest(method, params = {}) {
     return new Promise((resolve, reject) => {
       const id = String(++sequence);
-      const timer = setTimeout(() => { runtimePending.delete(id); reject(new Error("本地运行时响应超时；请核对任务状态后重试")); }, 60000);
+      const timer = setTimeout(() => { runtimePending.delete(id); reject(new Error("本地运行时响应超时；请核对任务状态后重试")); }, (method === "project_choose" || method === "project_relocate") ? 300000 : 60000);
       runtimePending.set(id, { resolve, reject, timer });
       emit(`runtime:${config.nonce}:${id}:${method}:${encodeURIComponent(JSON.stringify(params))}`);
     });
@@ -53,6 +53,18 @@ function mountConnectionPanel(config) {
   };
   window.__octopRuntime = Object.freeze({
     version: 1,
+    projects: Object.freeze({
+      status: () => runtimeRequest("project_status"),
+      choose: () => runtimeRequest("project_choose"),
+      select: params => runtimeRequest("project_select", params),
+      create: params => runtimeRequest("project_create", params),
+      fork: params => runtimeRequest("project_fork", params),
+      threads: params => runtimeRequest("project_threads", params),
+      files: params => runtimeRequest("project_files", params),
+      read: params => runtimeRequest("project_read", params),
+      update: params => runtimeRequest("project_update", params),
+      relocate: params => runtimeRequest("project_relocate", params),
+    }),
     status: (options) => runtimeRequest("status", options),
     refreshStatus: () => runtimeRequest("refresh_status"),
     start: params => runtimeRequest("start", params),

@@ -25,6 +25,7 @@ import { AntdAppProvider } from "./components/AntdAppProvider";
 import GlobalErrorBoundary from "./components/ErrorBoundary";
 import { ThemeProvider, useTheme } from "./context/ThemeContext";
 import { AgentProvider } from "./context/AgentContext";
+import { DesktopProjectsProvider } from "./context/DesktopProjectsContext";
 import { DesktopWorkspaceProvider } from "./context/DesktopWorkspaceContext";
 import { LayoutModeProvider } from "./context/LayoutModeContext";
 import { VoiceOutputProvider } from "./context/VoiceOutputContext";
@@ -144,17 +145,19 @@ function ThemedApp() {
               element={
                 <AuthGuard>
                   <DesktopWorkspaceProvider>
-                    <AgentProvider>
-                      <LayoutModeProvider>
-                        <VoiceOutputProvider>
-                          <CommunicationProvider>
-                            <ConversationNavigationProvider>
-                              <MainLayout />
-                            </ConversationNavigationProvider>
-                          </CommunicationProvider>
-                        </VoiceOutputProvider>
-                      </LayoutModeProvider>
-                    </AgentProvider>
+                    <DesktopProjectsProvider>
+                      <AgentProvider>
+                        <LayoutModeProvider>
+                          <VoiceOutputProvider>
+                            <CommunicationProvider>
+                              <ConversationNavigationProvider>
+                                <MainLayout />
+                              </ConversationNavigationProvider>
+                            </CommunicationProvider>
+                          </VoiceOutputProvider>
+                        </LayoutModeProvider>
+                      </AgentProvider>
+                    </DesktopProjectsProvider>
                   </DesktopWorkspaceProvider>
                 </AuthGuard>
               }

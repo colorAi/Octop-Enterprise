@@ -62,6 +62,8 @@ def main() -> None:
                         result = await runtime.cancel(params)
                     elif method == "steer":
                         result = runtime.steering.send(params)
+                    elif method == "project_rpc":
+                        result = await runtime.project_rpc(params)
                     elif method == "steer_remove":
                         result = runtime.steering.remove(params)
                     elif method == "hitl_resume":

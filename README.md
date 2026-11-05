@@ -10,7 +10,7 @@
 <p><strong>AI 在员工电脑上工作，账号、模型与权限留在企业手里。</strong></p>
 
 <p>
-  <a href="https://github.com/colorAi/Octop-Enterprise/releases"><img alt="Version 1.0.1b2" src="https://img.shields.io/badge/version-1.0.1b2-F5453A?style=flat-square"></a>
+  <a href="https://github.com/colorAi/Octop-Enterprise/releases"><img alt="Version 1.0.1b3" src="https://img.shields.io/badge/version-1.0.1b3-F5453A?style=flat-square"></a>
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-17996B?style=flat-square"></a>
   <a href="docker/enterprise/README.md"><img alt="Self-hosted" src="https://img.shields.io/badge/self--hosted-121417?style=flat-square"></a>
   <a href="docker/enterprise/README.md"><img alt="Server: Linux + Docker" src="https://img.shields.io/badge/server-Linux%20%2B%20Docker-3B5BDB?style=flat-square"></a>
@@ -65,13 +65,13 @@
 
 ## 快速开始
 
-当前版本：**1.0.1b2**。服务端从本仓库源码构建，Windows/macOS 员工客户端可从 [Releases](https://github.com/colorAi/Octop-Enterprise/releases) 下载匹配的安装包。
+源码版本：**1.0.1b3**。服务端从本仓库源码构建，已发布的 Windows/macOS 员工客户端可从 [Releases](https://github.com/colorAi/Octop-Enterprise/releases) 下载匹配的安装包。
 
 GitHub 下载较慢时，可使用[夸克网盘下载](https://pan.quark.cn/s/6da75d82a576)，选择与服务器匹配的客户端版本。
 
 | 管理员：部署与配置                                                                                                                                                                    | 员工：登录与工作                                                                                                                              |
 | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | :-------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1. 准备 **Linux + Docker Engine + Docker Compose** 主机。<br>2. 按[部署指南](docker/enterprise/README.md)完成安装与初始化，配置模型及企业服务。<br>3. 创建账号与部门，分配专家、技能、可用模型和知识库，按需开通企业能力。<br>4. 分发匹配的客户端，先验证一名员工的完整流程。 | 1. 安装企业客户端，填写管理员提供的服务器地址。<br>2. 使用企业账号登录，确认“本地工作目录”。<br>3. 选择已获授权的专家与模型，描述要处理的文件或项目。<br>4. 查看成果，转发给同事、群组或其他专家。 |
+| 1. 准备 **Linux + Docker Engine + Docker Compose** 主机。<br>2. 按[部署指南](docker/enterprise/README.md)完成安装与初始化，配置模型及企业服务。<br>3. 创建账号与部门，分配专家、技能、可用模型和知识库，按需开通企业能力。<br>4. 分发匹配的客户端，先验证一名员工的完整流程。 | 1. 安装企业客户端，填写管理员提供的服务器地址。<br>2. 使用企业账号登录，选择本地项目文件夹。<br>3. 选择已获授权的专家与模型，描述要处理的文件或项目。<br>4. 查看成果，转发给同事、群组或其他专家。 |
 
 员工默认没有模型使用权限，首次使用前须由管理员分配至少一个可用对话模型；仅添加模型提供商不会自动授权。
 

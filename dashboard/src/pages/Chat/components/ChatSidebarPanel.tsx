@@ -1,6 +1,7 @@
 import { useCallback } from "react";
 import { useTranslation } from "react-i18next";
 import type { RefObject } from "react";
+import { ProjectNavigation } from "./ProjectNavigation";
 import SessionList from "./SessionList";
 import MinimalAgentSessionNav from "./MinimalAgentSessionNav";
 import type { Session } from "../hooks/useSessions";
@@ -86,7 +87,7 @@ export default function ChatSidebarPanel({
     onSidebarOpenChange(true);
   }, [sidebarOpen, onSidebarOpenChange]);
 
-  const sessionList = navEmbedded ? (
+  const legacySessions = navEmbedded ? (
     <MinimalAgentSessionNav
       agents={agents}
       activeId={activeThreadId}
@@ -124,6 +125,17 @@ export default function ChatSidebarPanel({
     />
   );
 
+  const sessionList = (
+    <ProjectNavigation
+      agents={agents}
+      agentId={resolvedAgentId}
+      threadId={activeThreadId}
+      onNewChat={onNewChatWithAgent}
+      onSelect={onSelectSession}
+    >
+      {legacySessions}
+    </ProjectNavigation>
+  );
   if (navEmbedded) {
     return (
       <div className={styles.sidebarNavEmbedded} data-testid="chat-nav-records">

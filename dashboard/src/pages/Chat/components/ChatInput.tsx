@@ -34,6 +34,7 @@ import ChatQueuedMessages from "./ChatQueuedMessages";
 import { useVoiceInput } from "../../../hooks/useVoiceInput";
 import { useChatAttachments } from "../hooks/useChatAttachments";
 import { onSteerRestore } from "../hooks/chatStore";
+import { useDesktopProjects } from "../../../context/DesktopProjectsContext";
 import { useSlashMentionInput } from "../hooks/useSlashMentionInput";
 import { stripThinkingTags } from "../utils/chatAttachments";
 import { isSlashCommandText } from "../utils/slashText";
@@ -214,8 +215,15 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
       !isPwaDisplay() &&
       (isMobile || needsComposerVisualViewportFix());
     useKeepInVisualViewport(shellRef, keepComposerInView);
+    const desktopProjects = useDesktopProjects();
+    const draftThreadId =
+      threadId ||
+      (desktopProjects.state?.supported &&
+      desktopProjects.state.current_project_id
+        ? `project:${desktopProjects.state.current_project_id}`
+        : null);
     const [text, setText] = useState(
-      () => initialText || readInputDraft(agentId, threadId),
+      () => initialText || readInputDraft(agentId, draftThreadId),
     );
     const [polishing, setPolishing] = useState(false);
     // Track whether the user has manually edited the text after a prefill.
@@ -318,7 +326,9 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
     // Only fires when initialText actually changes AND the user hasn't started
     // editing yet (prevents overwriting mid-edit content).
     const prevInitialTextRef = useRef(initialText);
-    const prevComposerKeyRef = useRef(`${agentId ?? ""}:${threadId ?? ""}`);
+    const prevComposerKeyRef = useRef(
+      `${agentId ?? ""}:${draftThreadId ?? ""}`,
+    );
     useEffect(() => {
       if (
         ignoreInitialTextRef.current !== null &&
@@ -353,20 +363,26 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
 
     // Restore per-thread draft when switching conversations or remounting.
     useEffect(() => {
-      const composerKey = `${agentId ?? ""}:${threadId ?? ""}`;
+      const composerKey = `${agentId ?? ""}:${draftThreadId ?? ""}`;
       if (composerKey === prevComposerKeyRef.current) return;
       prevComposerKeyRef.current = composerKey;
       userHasEditedRef.current = false;
       ignoreInitialTextRef.current = null;
       prevInitialTextRef.current = "";
-      setText(readInputDraft(agentId, threadId));
+      setText(readInputDraft(agentId, draftThreadId));
       const pendingAttachments = consumePendingPrefillAttachments();
       if (pendingAttachments.length > 0) {
         restoreAttachments(pendingAttachments);
       } else {
         clearAttachments();
       }
-    }, [agentId, threadId, initialText, clearAttachments, restoreAttachments]);
+    }, [
+      agentId,
+      draftThreadId,
+      initialText,
+      clearAttachments,
+      restoreAttachments,
+    ]);
 
     useEffect(() => {
       return onSteerRestore((event) => {
@@ -426,7 +442,7 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
     // Persist draft while typing so leaving /chat and returning keeps content.
     useEffect(() => {
       const beforeRefresh = (event: Event) => {
-        if (agentId) writeInputDraft(agentId, threadId, text);
+        if (agentId) writeInputDraft(agentId, draftThreadId, text);
         if (
           uploading ||
           attachments.length > 0 ||
@@ -449,7 +465,7 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
         );
     }, [
       agentId,
-      threadId,
+      draftThreadId,
       text,
       uploading,
       attachments.length,
@@ -463,10 +479,10 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
     useEffect(() => {
       if (!agentId) return;
       const timer = window.setTimeout(() => {
-        writeInputDraft(agentId, threadId, text);
+        writeInputDraft(agentId, draftThreadId, text);
       }, 250);
       return () => window.clearTimeout(timer);
-    }, [text, agentId, threadId]);
+    }, [text, agentId, draftThreadId]);
     const submitRef = useRef<() => void>(() => {});
 
     const MIN_TEXTAREA_HEIGHT = isMobile ? 42 : 78;
@@ -505,6 +521,7 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
       availableExperts,
       availableSubagents,
       agentId,
+      threadId,
       selectedConnectors,
       onConnectorsChange,
       onSend,
@@ -582,7 +599,7 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
     const resetComposerAfterSubmit = useCallback(
       (prevHeight: number, submittedText: string) => {
         setText("");
-        writeInputDraft(agentId, threadId, "");
+        writeInputDraft(agentId, draftThreadId, "");
         clearAttachments();
         userHasEditedRef.current = false;
         // Parent may re-pass the same prefill as initialText on the next render
