@@ -144,7 +144,8 @@ class GatewayExecution:
             cmd is None
             and message.text.strip()
             and hitl is not None
-            and hitl.resolve_ask_pending(session, agent_id=agent, user_id=user) is not None
+            and hitl.resolve_ask_pending(session, agent_id=agent, user_id=user, thread_id=thread)
+            is not None
         ):
             previous = await self.service.io.run(
                 self.service.repo.by_request,
@@ -204,7 +205,7 @@ class GatewayExecution:
                     yield MessageEvent.model_validate(frame)
 
     async def _control_events(self, message: InboundMessage) -> AsyncIterator[MessageEvent]:
-        agent, user, session, _ = await self._identity(message)
+        agent, user, session, thread = await self._identity(message)
         hitl = self.processor.hitl_coordinator
         ctx = await self.service.io.run(
             self.processor._slash_ctx,
@@ -254,7 +255,9 @@ class GatewayExecution:
                 persisted_resume=resume,
             )
         else:
-            record = hitl.resolve_ask_pending(session, agent_id=agent, user_id=user)
+            record = hitl.resolve_ask_pending(
+                session, agent_id=agent, user_id=user, thread_id=thread
+            )
             if record is None:
                 raise ExecutionConflict("approval_not_pending")
             events = hitl.iter_answer_resolution(

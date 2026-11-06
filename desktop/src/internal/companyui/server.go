@@ -37,8 +37,9 @@ type Server struct {
 }
 
 type savedOrigin struct {
-	Base string `json:"server"`
-	Port int    `json:"port"`
+	Base          string `json:"server"`
+	Port          int    `json:"port"`
+	PreviousPorts []int  `json:"previous_ports,omitempty"`
 }
 
 // Commit a loopback document before navigating with the Strict cookie. WebKit
@@ -57,7 +58,33 @@ if (locale === "zh" || locale === "en") {
 }
 location.replace("/desktop-login.html" + location.hash);</script></body></html>`
 
-// Start keeps a separate browser origin per company, including across restarts.
+// Prefer the saved origin, but recover when Windows reserves its port or another
+// application takes it. Never assign an existing company's browser storage to a
+// different company, including origins retired after a port change.
+func listenCompanyUI(port int, reserved map[int]bool, listen func(string, string) (net.Listener, error)) (net.Listener, error) {
+	for attempt := 0; attempt < 16; attempt++ {
+		if reserved[port] {
+			port = 0
+		}
+		listener, err := listen("tcp4", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
+		if err != nil {
+			if port != 0 {
+				port = 0
+				continue
+			}
+			return nil, fmt.Errorf("无法启动本地界面，请检查系统网络限制 / Unable to start the local UI; check local network restrictions: %w", err)
+		}
+		if !reserved[listener.Addr().(*net.TCPAddr).Port] {
+			return listener, nil
+		}
+		listener.Close()
+		port = 0
+	}
+	return nil, errors.New("无法分配独立的本地界面端口，请重试 / Unable to allocate a separate local UI port; try again")
+}
+
+// Start keeps a separate browser origin per company, including across restarts
+// while its saved port remains available.
 // The small local record contains only an address and port, never credentials.
 func Start(base string, bundle []byte, stateDir string) (*Server, error) {
 	target, err := url.Parse(base)
@@ -84,6 +111,9 @@ func Start(base string, bundle []byte, stateDir string) (*Server, error) {
 	// The OS can reuse a closed port. Reserve records for inactive companies too,
 	// otherwise switching servers could accidentally share their browser storage.
 	reserved := make(map[int]bool)
+	for _, port := range saved.PreviousPorts {
+		reserved[port] = true
+	}
 	records, err := filepath.Glob(filepath.Join(stateDir, "*.json"))
 	if err != nil {
 		return nil, err
@@ -98,30 +128,23 @@ func Start(base string, bundle []byte, stateDir string) (*Server, error) {
 			return nil, errors.New("invalid local UI origin record")
 		}
 		reserved[value.Port] = true
-	}
-	var listener net.Listener
-	for attempt := 0; attempt < 16; attempt++ {
-		listener, err = net.Listen("tcp4", net.JoinHostPort("127.0.0.1", strconv.Itoa(saved.Port)))
-		if err != nil {
-			return nil, errors.New("本地界面端口被占用，请退出其他 Octop 客户端后重试 / Local UI port is occupied; quit other Octop clients")
-		}
-		if !reserved[listener.Addr().(*net.TCPAddr).Port] {
-			break
-		}
-		listener.Close()
-		listener = nil
-		if saved.Port != 0 {
-			break
+		for _, port := range value.PreviousPorts {
+			reserved[port] = true
 		}
 	}
-	if listener == nil {
-		return nil, errors.New("company UI origins must remain separate")
+	listener, err := listenCompanyUI(saved.Port, reserved, net.Listen)
+	if err != nil {
+		return nil, err
 	}
 	if err = os.MkdirAll(stateDir, 0o700); err != nil {
 		listener.Close()
 		return nil, err
 	}
-	saved = savedOrigin{base, listener.Addr().(*net.TCPAddr).Port}
+	port := listener.Addr().(*net.TCPAddr).Port
+	if saved.Port != 0 && saved.Port != port {
+		saved.PreviousPorts = append(saved.PreviousPorts, saved.Port)
+	}
+	saved.Base, saved.Port = base, port
 	data, _ := json.Marshal(saved)
 	if err = os.WriteFile(record, data, 0o600); err != nil {
 		listener.Close()

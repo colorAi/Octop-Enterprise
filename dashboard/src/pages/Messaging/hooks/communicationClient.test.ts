@@ -255,7 +255,11 @@ describe("communication synchronization", () => {
         created_at: "2026-10-12T10:00:00Z",
         conversation_id: "c",
       });
-    const body = { client_message_id: "stable", text: "hello" };
+    const body = {
+      client_message_id: "stable",
+      text: "@B hello",
+      mention_user_ids: [peer],
+    };
     await expect(client.send("c", body)).rejects.toBeDefined();
     expect(client.state.pending.stable.status).toBe("failed");
     await client.send("c", client.state.pending.stable.body);
@@ -269,6 +273,10 @@ describe("communication synchronization", () => {
     expect(
       client.state.histories.c.filter((m) => m.message_id === "sent"),
     ).toHaveLength(1);
+    expect(
+      client.state.histories.c.find((m) => m.message_id === "sent")
+        ?.mention_user_ids,
+    ).toEqual([peer]);
   });
   it("bridges history gaps across multiple pages after reconnect", async () => {
     await boot();

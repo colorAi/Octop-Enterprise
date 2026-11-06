@@ -588,6 +588,8 @@ export class CommunicationClient {
         created_at: receipt.created_at,
         recalled: false,
         client_message_id: body.client_message_id,
+        mention_user_ids: body.mention_user_ids,
+        mention_all: body.mention_all,
         attachments: body.asset_ids?.map(
           (asset_id) =>
             this.state.assets[asset_id] ?? {

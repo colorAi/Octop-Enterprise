@@ -37,6 +37,12 @@ export interface ProjectFileScope {
   thread_id?: string;
 }
 export interface DesktopProjectsBridge {
+  continue?(params: {
+    project_id: string;
+    source_thread_id: string;
+    thread_id: string;
+    agent_id: string;
+  }): Promise<{ thread_id: string; agent_id: string; copied_messages: number }>;
   status(): Promise<DesktopProjectState>;
   relocate(params: { project_id: string }): Promise<DesktopProjectState>;
   fork(params: {

@@ -2,13 +2,16 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"embed"
 	"encoding/json"
 	"fmt"
 	"log"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -70,6 +73,7 @@ type App struct {
 	workspaceBusy    atomic.Bool
 	companyRuntime   *companyruntime.Process
 	projectStore     *companyprojects.Store
+	projectBrowser   *companyprojects.Browser
 	projectScope     string
 	projectTaskMu    sync.Mutex
 	projectSupported bool
@@ -384,11 +388,6 @@ func (a *App) requestQuit() {
 
 func main() {
 	store := &settingsStore{cur: loadSettings()}
-	if companyOnly {
-		// Tool verification needs no login or company credentials. Start it
-		// alongside the login window; the worker joins the same preparation.
-		go func() { _, _ = ensureCompanyPortable() }()
-	}
 	api := &App{
 		store:   store,
 		sleep:   &sleepGuard{},
@@ -397,10 +396,24 @@ func main() {
 	if companyOnly || store.get().ConnectionMode != "local" {
 		api.companyURL, _ = company.BaseURL(companyServerURL(store.get()))
 	}
+	var singleInstance *application.SingleInstanceOptions
+	if runtime.GOOS == "windows" {
+		// An installer launch or second shortcut should restore the existing
+		// window, not race the same account cache and saved loopback origin.
+		home, _ := filepath.Abs(octopHome())
+		identity := sha256.Sum256([]byte(strings.ToLower(filepath.Clean(home))))
+		singleInstance = &application.SingleInstanceOptions{
+			UniqueID: fmt.Sprintf("io.github.colorai.octop.enterprise.%x", identity[:16]),
+			OnSecondInstanceLaunch: func(application.SecondInstanceData) {
+				api.showWindow()
+			},
+		}
+	}
 
 	app := application.New(application.Options{
-		Name:        "Octop",
-		Description: "Octop desktop",
+		Name:           "Octop",
+		Description:    "Octop desktop",
+		SingleInstance: singleInstance,
 		Flags: map[string]any{
 			"octopNativeTitlebar": !mainWindowFrameless(runtime.GOOS),
 		},
@@ -421,6 +434,10 @@ func main() {
 		},
 	})
 	api.app = app
+	if companyOnly {
+		// Start preparation only after the single-instance check has succeeded.
+		go func() { _, _ = ensureCompanyPortable() }()
+	}
 	attachOpenURLEventListener(app, api.OpenExternal)
 	attachDesktopEventListener(app, &connectionEventListener{app: api})
 	app.Event.OnApplicationEvent(events.Common.ApplicationStarted, func(_ *application.ApplicationEvent) {

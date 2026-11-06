@@ -1,6 +1,6 @@
 import type { HitlPendingPayload, HitlSessionPolicy } from "../types/hitl";
 import { request } from "../request";
-import { createRuntimeTaskId } from "../desktopRuntime";
+import { createRuntimeTaskId, isCompanyDesktop } from "../desktopRuntime";
 import { notifyProjectsChanged } from "../desktopProjects";
 import { createDesktopProjectThread } from "../desktopProjects";
 
@@ -272,6 +272,40 @@ export const octopThreadsApi = {
       )}`,
       { method: "DELETE" },
     ),
+
+  continue: async (
+    agentId: string,
+    threadId: string,
+    targetId: string,
+    projectId?: string,
+  ) => {
+    const bridge = window.__octopRuntime?.projects;
+    if (isCompanyDesktop() && !bridge)
+      throw new Error("history_continuation_client_required");
+    if (bridge) {
+      if (!bridge.continue)
+        throw new Error("history_continuation_client_required");
+      if (!projectId) throw new Error("thread_project_missing");
+      const created = await bridge.continue({
+        project_id: projectId,
+        source_thread_id: threadId,
+        thread_id: `thr_${createRuntimeTaskId()}`,
+        agent_id: targetId,
+      });
+      notifyProjectsChanged();
+      return created;
+    }
+    return request<{
+      thread_id: string;
+      agent_id: string;
+      copied_messages: number;
+    }>(
+      `/agents/${encodeURIComponent(agentId)}/threads/${encodeURIComponent(
+        threadId,
+      )}/continue`,
+      { method: "POST", body: JSON.stringify({ agent_id: targetId }) },
+    );
+  },
 
   fork: async (
     agentId: string,

@@ -70,10 +70,32 @@ class CompanyProjectRepo:
         device_id: str,
         title: str,
         fork: dict[str, Any] | None = None,
+        continuation: dict[str, Any] | None = None,
     ) -> dict[str, str]:
         now = int(time.time())
         key = f"dashboard:{agent_id}:{owner}"
         with self.db.transaction() as conn:
+            if continuation:
+                conn.execute("UPDATE execution_control SET id=id WHERE id=1")
+                source = conn.execute(
+                    "SELECT t.agent_id FROM threads t JOIN agents a ON a.agent_id=t.agent_id "
+                    "WHERE t.thread_id=? AND t.user_id=? AND a.user_id=?",
+                    (continuation["source"], owner, owner),
+                ).fetchone()
+                if not source or source["agent_id"] != continuation["source_agent_id"]:
+                    raise RuntimeConflict("thread_not_owned")
+                if (
+                    conn.execute(
+                        "SELECT 1 FROM company_runtime_tasks WHERE thread_id=? AND status IN ('running','cancel_requested','unknown')",
+                        (continuation["source"],),
+                    ).fetchone()
+                    or conn.execute(
+                        "SELECT 1 FROM execution_sessions s JOIN execution_runs r ON r.run_id=s.run_id "
+                        "WHERE s.thread_id=? AND r.state IN ('running','cancel_requested','unknown')",
+                        (continuation["source"],),
+                    ).fetchone()
+                ):
+                    raise RuntimeConflict("thread_already_running")
             if fork:
                 conn.execute("UPDATE execution_control SET id=id WHERE id=1")
                 current = conn.execute(
@@ -140,8 +162,9 @@ class CompanyProjectRepo:
                     "INSERT INTO thread_history_projection(thread_id,status,updated_at,error) VALUES(?,'ready',?,NULL)",
                     (thread_id, now),
                 )
-                if fork:
-                    for index, message in enumerate(fork["messages"], 1):
+                seed = fork or continuation
+                if seed:
+                    for index, message in enumerate(seed["messages"], 1):
                         conn.execute(
                             "INSERT INTO thread_messages(thread_id,seq,message_id,role,message_json,created_at) VALUES(?,?,?,?,?,?)",
                             (
@@ -153,7 +176,7 @@ class CompanyProjectRepo:
                                 now,
                             ),
                         )
-                    checkpoint = fork["checkpoint"]
+                    checkpoint = seed["checkpoint"]
                     conn.execute(
                         "INSERT INTO company_runtime_checkpoints(thread_id,namespace,checkpoint_id,payload) VALUES(?,'',?,?)",
                         (

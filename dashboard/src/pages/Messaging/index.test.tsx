@@ -6,11 +6,13 @@ import {
   within,
 } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
-import { beforeEach, expect, it, vi } from "vitest";
+import userEvent from "@testing-library/user-event";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import MessagingPage from "../Contacts";
 import { communicationApi } from "../../api/modules/communication";
 import { emptyMessagingState } from "./hooks/communicationClient";
 import { ConversationPageVisibility } from "../../hooks/useConversationPageVisible";
+import type { GroupMember } from "../../api/types/communication";
 const mock = vi.hoisted(() => ({
   state: {} as unknown,
   client: {
@@ -41,6 +43,7 @@ vi.mock("../../hooks/useIsMobile", () => ({ useIsMobile: () => false }));
 vi.mock("../../hooks/useAuthImageSrc", () => ({
   useAuthImageSrc: (url: string) => ({ src: url, loadState: "ready" }),
 }));
+afterEach(() => vi.restoreAllMocks());
 beforeEach(() => {
   vi.clearAllMocks();
   mock.state = {
@@ -95,6 +98,238 @@ it("renders messages as text and sends through the independent communication cli
     }),
   );
   expect(mock.client.focus).toHaveBeenCalledWith("c");
+});
+
+function openMentionGroup(
+  members: GroupMember[] = [
+    { user_id: "a", nickname: "Alice" },
+    { user_id: "b", nickname: "李明", job_title: "设计" },
+    { user_id: "c", nickname: "李明", job_title: "研发" },
+    { user_id: "disabled", nickname: "Former colleague", archived: true },
+  ],
+) {
+  const state = mock.state as ReturnType<typeof emptyMessagingState>;
+  state.conversations.c = {
+    ...state.conversations.c,
+    type: "group",
+    membership_epochs: [
+      {
+        epoch: 1,
+        role: "member",
+        visible_from_seq: "0",
+        visible_through_seq: null,
+        left_at: null,
+        mute_until: null,
+      },
+    ],
+    group: {
+      name: "Project",
+      announcement: null,
+      owner_user_id: "a",
+      mute_all: false,
+    },
+  };
+  const roster = vi
+    .spyOn(communicationApi, "members")
+    .mockResolvedValue({ items: members });
+  const view = render(
+    <MemoryRouter initialEntries={["/messages/c"]}>
+      <Routes>
+        <Route path="/messages/:conversationId" element={<MessagingPage />} />
+      </Routes>
+    </MemoryRouter>,
+  );
+  const input = screen.getByPlaceholderText(
+    "communication.compose",
+  ) as HTMLTextAreaElement;
+  return { input, roster, ...view };
+}
+
+it("mentions only selected group members, distinguishes duplicate names and resets after sending", async () => {
+  const { input, roster } = openMentionGroup();
+  expect(roster).not.toHaveBeenCalled();
+  fireEvent.click(
+    screen.getByRole("button", { name: "communication.mentionColleague" }),
+  );
+  const option = await screen.findByRole("option", { name: /李明 研发/ });
+  expect(screen.getAllByRole("option")).toHaveLength(2);
+  expect(roster).toHaveBeenCalledWith("c", expect.any(AbortSignal));
+  fireEvent.click(option);
+  expect(input.value).toBe("@李明 ");
+  fireEvent.change(input, { target: { value: "@李明 请确认" } });
+  fireEvent.keyDown(input, { key: "Enter" });
+  expect(mock.client.send).toHaveBeenLastCalledWith(
+    "c",
+    expect.objectContaining({ text: "@李明 请确认", mention_user_ids: ["c"] }),
+  );
+  expect(input.value).toBe("");
+  fireEvent.change(input, { target: { value: "普通消息" } });
+  fireEvent.keyDown(input, { key: "Enter" });
+  expect(mock.client.send.mock.calls.at(-1)?.[1]).not.toHaveProperty(
+    "mention_user_ids",
+  );
+});
+
+it("mentions a sender from the avatar context menu at the current caret using their current group nickname", async () => {
+  const { input, roster } = openMentionGroup([
+    { user_id: "b", nickname: "Bob", my_nickname: "小李" },
+  ]);
+  fireEvent.change(input, {
+    target: { value: "请 保留后文", selectionStart: 2, selectionEnd: 2 },
+  });
+  const avatar = screen.getByLabelText("Bob", { selector: "div" });
+  fireEvent.click(avatar);
+  expect(screen.queryByRole("menuitem")).not.toBeInTheDocument();
+  expect(roster).not.toHaveBeenCalled();
+  fireEvent.contextMenu(avatar);
+  fireEvent.click(
+    await screen.findByRole("menuitem", {
+      name: "communication.mentionMember",
+    }),
+  );
+  await waitFor(() => expect(input.value).toBe("请 @小李 保留后文"));
+  fireEvent.keyDown(input, { key: "Enter" });
+  expect(mock.client.send).toHaveBeenCalledWith(
+    "c",
+    expect.objectContaining({
+      text: "请 @小李 保留后文",
+      mention_user_ids: ["b"],
+    }),
+  );
+});
+
+it("keeps the draft intact when a sender has left the group", async () => {
+  const { input } = openMentionGroup([]);
+  fireEvent.change(input, { target: { value: "还没写完" } });
+  fireEvent.contextMenu(screen.getByLabelText("Bob", { selector: "div" }));
+  fireEvent.click(
+    await screen.findByRole("menuitem", {
+      name: "communication.mentionMember",
+    }),
+  );
+  await screen.findByText("communication.mentionMemberUnavailable");
+  expect(input.value).toBe("还没写完");
+  expect(mock.client.send).not.toHaveBeenCalled();
+});
+
+it("filters mentions and uses Enter to select without sending or interfering with IME", async () => {
+  const { input } = openMentionGroup();
+  fireEvent.change(input, { target: { value: "请@研发", selectionStart: 4 } });
+  await screen.findByRole("option", { name: /李明 研发/ });
+  fireEvent.keyDown(input, { key: "Enter", isComposing: true });
+  expect(input.value).toBe("请@研发");
+  expect(mock.client.send).not.toHaveBeenCalled();
+  fireEvent.keyDown(input, { key: "Enter" });
+  expect(input.value).toBe("请@李明 ");
+  expect(mock.client.send).not.toHaveBeenCalled();
+  fireEvent.keyDown(input, { key: "Enter", shiftKey: true });
+  expect(mock.client.send).not.toHaveBeenCalled();
+  fireEvent.keyDown(input, { key: "Enter" });
+  expect(mock.client.send).toHaveBeenCalledWith(
+    "c",
+    expect.objectContaining({ mention_user_ids: ["c"] }),
+  );
+});
+
+it("keeps the keyboard selection when the browser reports an unchanged caret", async () => {
+  const user = userEvent.setup();
+  const { input } = openMentionGroup();
+  await user.click(input);
+  await user.type(input, "@");
+  await screen.findByRole("option", { name: /李明 研发/ });
+  await user.keyboard("{ArrowDown}{Enter}");
+  expect(mock.client.send).not.toHaveBeenCalled();
+  await user.keyboard("{Enter}");
+  expect(mock.client.send).toHaveBeenCalledWith(
+    "c",
+    expect.objectContaining({ mention_user_ids: ["c"] }),
+  );
+});
+
+it("removes the selected recipient after editing their mention and preserves the text after the caret", async () => {
+  const { input } = openMentionGroup();
+  fireEvent.change(input, {
+    target: { value: "请 @研 确认", selectionStart: 4 },
+  });
+  fireEvent.click(await screen.findByRole("option", { name: /李明 研发/ }));
+  expect(input.value).toBe("请 @李明  确认");
+  fireEvent.change(input, { target: { value: "请 @李华 确认" } });
+  fireEvent.keyDown(input, { key: "Enter" });
+  expect(mock.client.send.mock.calls.at(-1)?.[1]).not.toHaveProperty(
+    "mention_user_ids",
+  );
+});
+
+it("lets member loading fail and retry without losing the draft or sending it", async () => {
+  const { input, roster } = openMentionGroup();
+  roster.mockRejectedValueOnce(new Error("offline"));
+  fireEvent.change(input, { target: { value: "@" } });
+  await screen.findByRole("alert");
+  fireEvent.keyDown(input, { key: "Enter" });
+  expect(mock.client.send).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: "communication.retry" }));
+  await screen.findByRole("option", { name: /李明 研发/ });
+  expect(input.value).toBe("@");
+  fireEvent.keyDown(input, { key: "Escape" });
+  expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+});
+
+it("cancels an outdated member request when the mention menu closes", async () => {
+  const { input, roster } = openMentionGroup();
+  let complete: ((result: { items: GroupMember[] }) => void) | undefined;
+  roster.mockReturnValueOnce(
+    new Promise((resolve) => {
+      complete = resolve;
+    }),
+  );
+  fireEvent.change(input, { target: { value: "@" } });
+  await waitFor(() => expect(roster).toHaveBeenCalled());
+  const signal = roster.mock.calls[0][1];
+  fireEvent.keyDown(input, { key: "Escape" });
+  expect(signal?.aborted).toBe(true);
+  complete?.({ items: [{ user_id: "stale", nickname: "Stale member" }] });
+  fireEvent.click(
+    screen.getByRole("button", { name: "communication.mentionColleague" }),
+  );
+  await screen.findByRole("option", { name: /李明 研发/ });
+  expect(
+    screen.queryByRole("option", { name: /Stale member/ }),
+  ).not.toBeInTheDocument();
+});
+
+it("does not offer mentions or load members when the group cannot send", () => {
+  const state = mock.state as ReturnType<typeof emptyMessagingState>;
+  state.conversations.c.archived = true;
+  const { input, roster } = openMentionGroup();
+  expect(input).toBeDisabled();
+  const button = screen.getByRole("button", {
+    name: "communication.mentionColleague",
+  });
+  expect(button).toBeDisabled();
+  fireEvent.click(button);
+  expect(roster).not.toHaveBeenCalled();
+});
+
+it("marks a received mention for the current user but not for someone else or recalled messages", () => {
+  const state = mock.state as ReturnType<typeof emptyMessagingState>;
+  state.histories.c = [
+    { ...state.histories.c[0], mention_user_ids: ["a"] },
+    {
+      ...state.histories.c[0],
+      message_id: "other",
+      seq: "2",
+      mention_user_ids: ["c"],
+    },
+    {
+      ...state.histories.c[0],
+      message_id: "recalled",
+      seq: "3",
+      mention_user_ids: ["a"],
+      recalled: true,
+    },
+  ];
+  openMentionGroup();
+  expect(screen.getAllByText("communication.mentionedYou")).toHaveLength(1);
 });
 
 it("uses account portraits and job titles in recent chats, the header and message senders, including updates", () => {

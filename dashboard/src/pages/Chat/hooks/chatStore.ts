@@ -305,6 +305,26 @@ export function hasActiveChatWork(): boolean {
   );
 }
 const historyRevisions = new WeakMap<SessionStreamState, number>();
+const historyReads = new WeakMap<SessionStreamState, symbol>();
+
+export function beginHistoryRead(sessionId: string): symbol {
+  const token = Symbol();
+  const state = getOrCreate(sessionId);
+  historyReads.set(state, token);
+  if (state.historyLoadingMore) {
+    state.historyLoadingMore = false;
+    notify(state);
+  }
+  return token;
+}
+
+export function isHistoryReadCurrent(
+  sessionId: string,
+  token: symbol,
+): boolean {
+  const state = sessionStates.get(sessionId);
+  return !!state && historyReads.get(state) === token;
+}
 
 export function getHistoryRevision(sessionId: string): number {
   const state = sessionStates.get(sessionId);
@@ -840,7 +860,7 @@ export function setHistoryLoadingMore(sessionId: string, loading: boolean) {
 /** Append a user message to a session. */
 export function appendUserMessage(sessionId: string, msg: ChatMessage) {
   const state = getOrCreate(sessionId);
-  state.messages = [...state.messages, msg];
+  state.messages = [...state.messages, { ...msg, localPending: true }];
   notify(state);
 }
 
@@ -869,6 +889,7 @@ export function truncateAndReplaceUserMessage(
     {
       ...original,
       content: newContent,
+      localPending: true,
       timestamp: Date.now(),
       status: "done" as const,
     },
@@ -1008,6 +1029,7 @@ export function clearMessages(sessionId: string) {
   // the socket keeps streaming into this state and the UI needs it on return.
   // An idle listen socket (team follow-ups) must not block a clear.
   if (state.isStreaming) return;
+  historyReads.delete(state);
   const alreadyEmpty =
     state.messages.length === 0 &&
     !state.isStreaming &&
@@ -3392,6 +3414,7 @@ export async function sendTurn(
           {
             ...state.messages[index],
             content: localText,
+            localPending: true,
             ...(localAttachments.length
               ? { attachments: localAttachments }
               : {}),
@@ -3890,6 +3913,7 @@ function appendOptimisticSteerMessage(
       attachments:
         attachments && attachments.length > 0 ? attachments : undefined,
       steerPending: true,
+      localPending: true,
       status: "done",
       timestamp: Date.now(),
     },
@@ -4190,6 +4214,7 @@ function applySteerProtocolFrame(
           role: "user",
           content,
           attachments,
+          localPending: true,
           status: "done",
           timestamp: Date.now(),
         },

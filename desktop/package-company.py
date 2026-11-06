@@ -14,6 +14,7 @@ import json
 import os
 import plistlib
 import shutil
+import stat
 import struct
 import subprocess
 import sys
@@ -81,6 +82,16 @@ def native_binary_target(path: Path) -> tuple[str, str]:
                     struct.unpack("<H", pe[4:])[0], "unknown"
                 )
     raise ValueError(f"Not a supported native executable: {path}")
+
+
+def runtime_zip_entry(name: str, executable: bool = False) -> zipfile.ZipInfo:
+    # ZIP timestamps, host permission bits and creator OS are not payload
+    # identity. Normalize them so rebuilding unchanged tools reuses the cache.
+    entry = zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
+    entry.create_system = 3
+    entry.external_attr = (stat.S_IFREG | (0o755 if executable else 0o644)) << 16
+    entry.compress_type = zipfile.ZIP_DEFLATED
+    return entry
 
 
 def package_runtime(source: Path, destination: Path, platform: str, arch: str) -> Path:
@@ -176,10 +187,16 @@ def package_runtime(source: Path, destination: Path, platform: str, arch: str) -
     prefix = f"Octop-company-{platform}-{arch}"
     with zipfile.ZipFile(destination, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         for relative, item in entries:
-            # ZipFile.write follows file symlinks: installed packages have no links.
-            archive.write(item, f"{prefix}/{relative}")
+            # Materialize file symlinks and stream large dependencies without
+            # retaining their bytes in memory.
+            info = item.stat()
+            entry = runtime_zip_entry(f"{prefix}/{relative}", bool(info.st_mode & 0o111))
+            entry.file_size = info.st_size
+            with item.open("rb") as source_file, archive.open(entry, "w") as target:
+                shutil.copyfileobj(source_file, target, length=1024 * 1024)
         archive.writestr(
-            f"{prefix}/company-runtime-manifest.json", json.dumps(manifest, sort_keys=True)
+            runtime_zip_entry(f"{prefix}/company-runtime-manifest.json"),
+            json.dumps(manifest, sort_keys=True),
         )
     return destination
 
@@ -427,7 +444,9 @@ def main() -> None:
                 "protocol_version": 1,
                 "local_runtime_included": not args.legacy_shell_only,
                 "dashboard_included": True,
-                "dashboard_zip_sha256": hashlib.sha256((root / "desktop/src/assets/company-dashboard.zip").read_bytes()).hexdigest(),
+                "dashboard_zip_sha256": hashlib.sha256(
+                    (root / "desktop/src/assets/company-dashboard.zip").read_bytes()
+                ).hexdigest(),
                 "built": True,
                 "deployed": False,
                 "real_device_verified": False,

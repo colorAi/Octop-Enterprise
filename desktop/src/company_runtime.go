@@ -35,7 +35,7 @@ func parseRuntimeEvent(name, nonce string) (id, method string, params json.RawMe
 		return
 	}
 	switch p[2] {
-	case "project_relocate", "project_fork", "project_update", "project_status", "project_choose", "project_select", "project_create", "project_threads", "project_files", "project_read", "status", "refresh_status", "start", "cancel", "reveal", "reconcile", "preview_image", "steer", "steer_remove", "hitl_resume", "upload_artifact", "import_attachment":
+	case "project_continue", "project_relocate", "project_fork", "project_update", "project_status", "project_choose", "project_select", "project_create", "project_threads", "project_files", "project_read", "status", "refresh_status", "start", "cancel", "reveal", "reconcile", "preview_image", "steer", "steer_remove", "hitl_resume", "upload_artifact", "import_attachment":
 	default:
 		return
 	}
@@ -51,6 +51,10 @@ func (a *App) stopCompanyRuntimeLocked() {
 	}
 	a.runtimeEpoch++
 	a.projectStore, a.projectScope, a.projectSupported = nil, "", false
+	if a.projectBrowser != nil {
+		a.projectBrowser.Close()
+		a.projectBrowser = nil
+	}
 	if a.companyRuntime != nil {
 		a.companyRuntime.Close()
 		a.companyRuntime = nil
@@ -265,7 +269,7 @@ func (a *App) ensureRuntimeProcess(nonce, base, method string, prepare func() (s
 		if err = os.MkdirAll(stateDir, 0700); err != nil {
 			return nil, errors.New("无法创建当前账号的本地运行目录")
 		}
-		cacheDir := filepath.Join(octopHome(), "pyc")
+		cacheDir := companyBytecodeDir(octopHome(), root)
 		if os.MkdirAll(cacheDir, 0700) != nil {
 			cacheDir = ""
 		}
@@ -274,6 +278,12 @@ func (a *App) ensureRuntimeProcess(nonce, base, method string, prepare func() (s
 		if !a.runtimeAccountCurrent(nonce, base, epoch) {
 			a.companyMu.Unlock()
 			return nil, errors.New("账号或工作目录已切换，本地运行时启动已取消")
+		}
+		// Project browsing and the worker must share one installation identity,
+		// even when the browser is ready before Python finishes importing tools.
+		if _, err := companyprojects.InstallationToken(stateDir); err != nil {
+			a.companyMu.Unlock()
+			return nil, err
 		}
 		events := make(chan companyruntime.Message, 512)
 		go func() {

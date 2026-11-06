@@ -4,9 +4,9 @@
 
 本指南适用于 Linux Docker Engine + Compose v2。基础单机模式使用 `docker/docker-compose.yml`。企业模式包含 Octop 控制面、Go 通信服务、两个 PostgreSQL 数据库和员工隔离工作区。客户端在员工电脑执行项目工具，服务器保留账号、模型授权、记忆、历史和恢复回执。
 
-本指南对应 Octop Enterprise **1.0.1b2**，依赖 Harness **1.0.3**，主数据库 schema **30**，设备协议 **2**，公司运行时协议 **1**。服务端镜像与客户端工具环境需使用匹配的源码和协议版本构建。
+本指南对应 Octop Enterprise **1.0.1b3**，依赖 Harness **1.0.3**，主数据库 schema **31**，设备协议 **2**，公司运行时协议 **1**。服务端镜像与客户端工具环境需使用匹配的源码和协议版本构建。
 
-当前工作区的分角色入口及 schema 29 操作见[分角色部署、备份与恢复](ROLES.md)。下文 `compose.yml` 命令用于既有单体拓扑，不直接套用于分角色实例。
+分角色部署、资源档位及运行时恢复操作见[分角色部署、备份与恢复](ROLES.md)。下文 `compose.yml` 命令用于既有单体拓扑，不直接套用于分角色实例。
 
 ## 部署前先了解
 
@@ -37,7 +37,7 @@ Docker daemon 无法连接时，先处理 Docker 启动或 socket 权限。默�
 
 ## 首次安装
 
-使用本项目源码包或确定的发行提交，在仓库根目录逐步执行。采用源码包时记录 `PUBLIC_SOURCE.json` 与源码包校验值；采用 Git 时记录 commit 和本地改动。下列 `enterprise-1.0.1b2` 是本指南使用的本地镜像标签；每次部署使用可追溯到对应源码的唯一标签。
+使用本项目源码包或确定的发行提交，在仓库根目录逐步执行。采用源码包时记录 `PUBLIC_SOURCE.json` 与源码包校验值；采用 Git 时记录 commit 和本地改动。下列 `enterprise-1.0.1b3` 是本指南使用的本地镜像标签；每次部署使用可追溯到对应源码的唯一标签。
 
 ### 1. 生成新的私有配置
 
@@ -54,9 +54,9 @@ sudo python3 docker/enterprise/prepare.py --data /srv/octop --env /etc/octop.env
 使用管理员编辑器修改 `/etc/octop.env`，保留已生成的密码与密钥，在原文件内将三个镜像值改为：
 
 ```dotenv
-OCTOP_BASE_IMAGE="octop:enterprise-1.0.1b2"
-OCTOP_APP_IMAGE="octop-enterprise:enterprise-1.0.1b2"
-OCTOP_IM_IMAGE="octop-im:enterprise-1.0.1b2"
+OCTOP_BASE_IMAGE="octop:enterprise-1.0.1b3"
+OCTOP_APP_IMAGE="octop-enterprise:enterprise-1.0.1b3"
+OCTOP_IM_IMAGE="octop-im:enterprise-1.0.1b3"
 ```
 
 默认 `OCTOP_BIND_ADDRESS="127.0.0.1"`，8088 端口只供服务器本机或本机反向代理访问，员工电脑无法直接连接。按部署场景选择：
@@ -71,7 +71,7 @@ OCTOP_IM_IMAGE="octop-im:enterprise-1.0.1b2"
 ### 3. 构建、初始化并启动
 
 ```sh
-sudo docker build -f docker/Dockerfile -t octop:enterprise-1.0.1b2 .
+sudo docker build -f docker/Dockerfile -t octop:enterprise-1.0.1b3 .
 sudo docker compose --env-file /etc/octop.env -f docker/enterprise/compose.yml config -q
 sudo docker compose --env-file /etc/octop.env -f docker/enterprise/compose.yml build
 sudo docker compose --env-file /etc/octop.env -f docker/enterprise/compose.yml up -d --wait postgres
@@ -101,8 +101,8 @@ curl -sS http://127.0.0.1:8088/api/health/ready
 
 1. 浏览器打开已配置的员工访问地址，使用刚创建的管理员账号登录。
 2. 在左侧“管理 → 模型”配置至少一个可用模型服务；在“管理 → 用户”创建测试员工并授予所需权限，准备可供员工使用的专家。
-3. 给员工分发与服务器兼容的 Mac/Windows 企业客户端。只部署服务器不能自动生成完整的员工安装包，构建入口见[桌面说明](../../desktop/README.md)（English）。
-4. 员工在桌面客户端登录后，打开左侧“设置”分组的“本地工作目录”，确认默认目录或点击“更换文件夹”选择项目。让专家读取一份样例文件并输出摘要，确认成果和历史可查看。
+3. 给员工分发与服务器兼容的 Mac/Windows 企业客户端。只部署服务器不能自动生成完整的员工安装包，构建入口见[中文客户端构建指南](../../docs/client-build.md)。
+4. 员工在桌面客户端登录后，在聊天侧栏选择“添加项目文件夹”，再选择专家并创建对话。让专家读取项目中的样例文件并输出摘要，确认成果和历史可查看。旧单目录客户端的操作见对应版本指南。
 5. 检查同事消息、附件与实际需要的群聊，再修改测试员工权限并核对配置通知。手动发布配置通知的入口是左侧“管理 → 应用设置”的“应用更新”标签。完整企业备份与恢复还需另做演练。
 
 分发客户端前，核对安装包的平台、签名、公证和设备验证记录。
@@ -159,7 +159,7 @@ sudo docker compose --env-file /etc/octop.env -f docker/enterprise/compose.yml l
 
 ```sh
 docker run --rm --network none --read-only --cap-drop ALL --tmpfs /tmp --tmpfs /data:uid=1000,gid=1000 \
-  --entrypoint python octop-enterprise:enterprise-1.0.1b2 /usr/local/libexec/octop/verify_runtime.py
+  --entrypoint python octop-enterprise:enterprise-1.0.1b3 /usr/local/libexec/octop/verify_runtime.py
 ```
 
 已有本地应用镜像和验证通过的运行环境时，可用 `Dockerfile.runtime-reuse` 离线组装。`APP_IMAGE` 必须包含完整当前应用、前端和 Python 环境；`RUNTIME_IMAGE` 必须包含可用的浏览器和系统库，两者系统基础层及 Python ABI 必须一致。不要仅凭应用健康检查选择运行环境。使用 `--pull=false --network=none`，并明确传入两个本地镜像：
@@ -229,7 +229,7 @@ make check-enterprise ARGS='--section packaging'
 
 真实数据库测试通过 `OCTOP_IM_TEST_DATABASE_URL` 和 `OCTOP_IM_TEST_OWNER` 指向**专用临时 PostgreSQL**；测试创建/删除带测试前缀的数据库。不要使用生产地址。不配置时有跳过项，不能视作真实 PG 验收。
 
-企业 payload 先用 `desktop/portable/package.sh` 从同一源码构建当前架构，再准备同架构 Python、ffmpeg/ffprobe 和办公依赖。目标机器用包内解释器运行 `verify_company_runtime.py`。`package-company.py` 核对 Octop METADATA 版本与当前源码全部 Python 文件摘要，写入 shell/Octop/Harness/两个协议/commit/dirty/source SHA-256，拒绝旧版 payload，即使其版本号碰巧相同。生成登录资源的步骤在共享 Wails 构建中执行，Go embed 也要求 JS/CSS 同时存在。
+企业 payload 的准备步骤见[中文客户端构建指南](../../docs/client-build.md)。`desktop/portable/bootstrap-runtime.sh` 和 `desktop/portable/package.sh` 生成便携 Python 与基础依赖；还需补齐同架构 ffmpeg/ffprobe、pandas 等企业工具材料，基础便携包不能直接作为完整企业 payload。目标机器用包内解释器运行 `verify_company_runtime.py`。`package-company.py` 核对 Octop METADATA 版本与当前源码全部 Python 文件摘要，写入 shell/Octop/Harness/两个协议/commit/dirty/source SHA-256，拒绝旧版 payload，即使其版本号碰巧相同。生成登录资源的步骤在共享 Wails 构建中执行，Go embed 也要求 JS/CSS 同时存在。
 
 四架构解包后可用 `make check-enterprise ARGS='--section packaging --manifest-dir /path/to/unpacked'` 检查版本矩阵。支持的构建目标是 macOS arm64/amd64 和 Windows amd64/arm64；每次发行应分别记录构建与 manifest、原生工具烟测、安装/升级/卸载、签名/公证、登录/断线/撤销的结果和日期。矩阵检查与包内目标烟测不等于真实安装或签名验收，具体状态以对应发行记录为准。
 

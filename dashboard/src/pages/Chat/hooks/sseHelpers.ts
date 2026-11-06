@@ -77,6 +77,8 @@ export interface ChatMessage {
   attachments?: ChatAttachment[];
   /** Optimistic mid-turn steer that can still be withdrawn. */
   steerPending?: boolean;
+  /** Created by this client and not yet reconciled with persisted history. */
+  localPending?: boolean;
   composerContext?: UserComposerContext;
   toolData?: ToolCallData;
   hitlData?: HitlRequestData;

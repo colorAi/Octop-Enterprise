@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -14,6 +15,36 @@ import (
 	"github.com/coder/websocket/wsjson"
 	"octop.desktop/internal/company"
 )
+
+func TestDirectorySelectionTreatsNativeCancellationAsNoSelection(t *testing.T) {
+	selected := t.TempDir()
+	for _, tc := range []struct {
+		name string
+		path string
+		err  error
+		want string
+	}{
+		{name: "Windows cancel", err: errors.New("cancelled by user")},
+		{name: "empty selection"},
+		{name: "selected folder", path: selected, want: selected},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path, err := directorySelection(tc.path, tc.err)
+			if err != nil || path != tc.want {
+				t.Fatalf("selection = %q, %v; want %q without an error", path, err, tc.want)
+			}
+		})
+	}
+}
+
+func TestDirectorySelectionPreservesRealDialogFailures(t *testing.T) {
+	for _, failure := range []error{os.ErrPermission, errors.New("dialog unavailable"), context.Canceled} {
+		_, err := directorySelection("", failure)
+		if !errors.Is(err, failure) {
+			t.Fatalf("dialog failure was treated as a user cancellation: %v", failure)
+		}
+	}
+}
 
 func TestWorkspaceSettingsScopedToCompanyAndOwner(t *testing.T) {
 	t.Setenv("OCTOP_HOME", t.TempDir())

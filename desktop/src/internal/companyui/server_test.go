@@ -5,12 +5,18 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"mime/multipart"
+	"net"
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -239,6 +245,114 @@ func TestServerOriginsPersistAndCompaniesRemainSeparate(t *testing.T) {
 	defer b.Close()
 	if a.Origin == b.Origin {
 		t.Fatal("company browser storage is shared")
+	}
+}
+
+func TestOccupiedSavedPortRecoversAndKeepsNewOrigin(t *testing.T) {
+	dir := t.TempDir()
+	data := bundle(t)
+	base := "https://company.example"
+	occupied, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer occupied.Close()
+	oldOrigin := "http://" + occupied.Addr().String()
+	sum := sha256.Sum256([]byte(base))
+	recordPath := filepath.Join(dir, hex.EncodeToString(sum[:])+".json")
+	contents, _ := json.Marshal(savedOrigin{Base: base, Port: occupied.Addr().(*net.TCPAddr).Port})
+	if err := os.WriteFile(recordPath, contents, 0600); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Start(base, data, dir)
+	if err != nil {
+		t.Fatalf("an unavailable saved port must not prevent sign-in: %v", err)
+	}
+	defer s.Close()
+	if s.Origin == oldOrigin {
+		t.Fatal("reused an occupied origin")
+	}
+	if status, _ := read(t, connect(t, s), s.Origin+"/chat"); status != http.StatusOK {
+		t.Fatal("replacement origin did not serve the workspace")
+	}
+	newOrigin := s.Origin
+	s.Close()
+	occupied.Close()
+	s, err = Start("https://company.example", data, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if s.Origin != newOrigin {
+		t.Fatal("restart lost the replacement origin and its remembered session storage")
+	}
+	contents, err = os.ReadFile(recordPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var record struct {
+		PreviousPorts []int `json:"previous_ports"`
+	}
+	if err := json.Unmarshal(contents, &record); err != nil || len(record.PreviousPorts) != 1 || record.PreviousPorts[0] != occupied.Addr().(*net.TCPAddr).Port {
+		t.Fatal("old origin must remain reserved for this company")
+	}
+}
+
+func TestSavedPortDeniedBySystemFallsBackToAutomaticPort(t *testing.T) {
+	calls := 0
+	listener, err := listenCompanyUI(12000, nil, func(network, address string) (net.Listener, error) {
+		calls++
+		if calls == 1 {
+			if network != "tcp4" || address != "127.0.0.1:12000" {
+				t.Fatal("saved port was not preferred")
+			}
+			return nil, &net.OpError{Op: "listen", Net: network, Err: os.ErrPermission}
+		}
+		if network != "tcp4" || address != "127.0.0.1:0" {
+			t.Fatal("fallback must let the OS allocate a loopback port")
+		}
+		return net.Listen(network, address)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	if calls != 2 {
+		t.Fatal("did not recover from a system-reserved saved port")
+	}
+}
+
+func TestAutomaticPortSkipsCurrentAndRetiredCompanyOrigins(t *testing.T) {
+	var listeners []net.Listener
+	for range 3 {
+		listener, err := net.Listen("tcp4", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer listener.Close()
+		listeners = append(listeners, listener)
+	}
+	reserved := map[int]bool{
+		listeners[0].Addr().(*net.TCPAddr).Port: true,
+		listeners[1].Addr().(*net.TCPAddr).Port: true,
+	}
+	calls := 0
+	listener, err := listenCompanyUI(0, reserved, func(_, _ string) (net.Listener, error) {
+		result := listeners[calls]
+		calls++
+		return result, nil
+	})
+	if err != nil || listener != listeners[2] || calls != 3 {
+		t.Fatalf("assigned browser storage belonging to another company: %v", err)
+	}
+}
+
+func TestLocalNetworkFailureDoesNotBlameOtherClients(t *testing.T) {
+	_, err := listenCompanyUI(12000, nil, func(_, _ string) (net.Listener, error) {
+		return nil, os.ErrPermission
+	})
+	if !errors.Is(err, os.ErrPermission) || strings.Contains(err.Error(), "其他 Octop") {
+		t.Fatalf("lost the actual bind failure: %v", err)
 	}
 }
 

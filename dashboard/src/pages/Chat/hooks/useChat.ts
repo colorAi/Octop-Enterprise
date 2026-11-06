@@ -35,7 +35,10 @@ import {
   parseToolExecutionFeedback,
 } from "../../../utils/toolMediaBlocks";
 import { injectPendingHitlMessage } from "../../../utils/injectPendingHitlMessage";
-import { mergeHistoryWithLocalTail } from "../utils/mergeHistoryTail";
+import {
+  mergeHistoryWithLocalTail,
+  retainedHistoryPrefix,
+} from "../utils/mergeHistoryTail";
 import { promoteAskUserToolMessage } from "../utils/pendingHitl";
 import { rewritePeerSpeakerId } from "../../../utils/remoteExpert";
 import type {
@@ -903,8 +906,8 @@ export function useChat(
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyRefreshing, setHistoryRefreshing] = useState(false);
   const loadGenRef = useRef(0);
-  const loadMoreInFlightRef = useRef(false);
-  const refreshInFlightRef = useRef(false);
+  const loadMoreInFlightRef = useRef<symbol | null>(null);
+  const refreshInFlightRef = useRef<symbol | null>(null);
 
   const attachAfterHistory = useCallback(
     (key: string, targetThreadId: string) => {
@@ -1027,6 +1030,7 @@ export function useChat(
 
       const gen = ++loadGenRef.current;
       const revision = chatStore.getHistoryRevision(key);
+      const read = chatStore.beginHistoryRead(key);
       setHistoryLoading(true);
 
       try {
@@ -1040,13 +1044,18 @@ export function useChat(
               Math.max(500, Math.min(loaded.retryAfterMs, 5000)),
             ),
           );
-          if (loadGenRef.current !== gen) return;
+          if (
+            loadGenRef.current !== gen ||
+            !chatStore.isHistoryReadCurrent(key, read)
+          )
+            return;
           loaded = await loadThreadHistory(agentId, targetThreadId, {
             offset: 0,
           });
         }
         if (
           loadGenRef.current !== gen ||
+          !chatStore.isHistoryReadCurrent(key, read) ||
           chatStore.getHistoryRevision(key) !== revision
         )
           return;
@@ -1054,14 +1063,15 @@ export function useChat(
         // turn the server page does not have yet; replacing the list drops
         // that bubble while the websocket turn keeps running.
         const current = chatStore.getSnapshot(key);
-        const loadedIds = new Set(loaded.messages.map((message) => message.id));
-        const firstOverlap = current.messages.findIndex((message) =>
-          loadedIds.has(message.id),
-        );
-        const keptOlder = firstOverlap > 0;
+        const keptOlder =
+          retainedHistoryPrefix(loaded.messages, current.messages).length > 0;
         chatStore.setHistoryPage(
           key,
-          mergeHistoryWithLocalTail(loaded.messages, current.messages),
+          mergeHistoryWithLocalTail(
+            loaded.messages,
+            current.messages,
+            current.isStreaming,
+          ),
           {
             hasMore: keptOlder ? current.historyHasMore : loaded.hasMore,
             nextOffset: keptOlder
@@ -1075,7 +1085,10 @@ export function useChat(
         setHistoryError(false);
         attachAfterHistory(key, targetThreadId);
       } catch {
-        if (loadGenRef.current === gen) {
+        if (
+          loadGenRef.current === gen &&
+          chatStore.isHistoryReadCurrent(key, read)
+        ) {
           failedHistoryOperation.current = "initial";
           setHistoryError(true);
         }
@@ -1101,7 +1114,8 @@ export function useChat(
       return false;
     }
 
-    loadMoreInFlightRef.current = true;
+    const read = chatStore.beginHistoryRead(key);
+    loadMoreInFlightRef.current = read;
     chatStore.setHistoryLoadingMore(key, true);
     const offset = snap.historyNextOffset;
     const gen = loadGenRef.current;
@@ -1117,7 +1131,12 @@ export function useChat(
         offset,
         cursor: snap.historyNextCursor,
       });
-      if (chatStore.getHistoryRevision(key) !== revision) return false;
+      if (
+        loadGenRef.current !== gen ||
+        !chatStore.isHistoryReadCurrent(key, read) ||
+        chatStore.getHistoryRevision(key) !== revision
+      )
+        return false;
       chatStore.prependHistoryMessages(key, older, {
         hasMore,
         nextOffset,
@@ -1126,14 +1145,20 @@ export function useChat(
       if (loadGenRef.current === gen) setHistoryError(false);
       return true;
     } catch {
-      if (loadGenRef.current === gen) {
+      if (
+        loadGenRef.current === gen &&
+        chatStore.isHistoryReadCurrent(key, read)
+      ) {
         failedHistoryOperation.current = "older";
         setHistoryError(true);
       }
       return false;
     } finally {
-      loadMoreInFlightRef.current = false;
-      chatStore.setHistoryLoadingMore(key, false);
+      if (loadMoreInFlightRef.current === read) {
+        loadMoreInFlightRef.current = null;
+        if (chatStore.isHistoryReadCurrent(key, read))
+          chatStore.setHistoryLoadingMore(key, false);
+      }
     }
   }, [agentId, stableSessionId]);
 
@@ -1161,7 +1186,8 @@ export function useChat(
         return;
       }
 
-      refreshInFlightRef.current = true;
+      const read = chatStore.beginHistoryRead(key);
+      refreshInFlightRef.current = read;
       // Separate from loadGenRef: loadHistory may bump loadGen while we fetch.
       // Always clear the refreshing flag in finally so the footer cannot stick.
       const gen = ++loadGenRef.current;
@@ -1178,6 +1204,7 @@ export function useChat(
         // Stale after a concurrent loadHistory / newer refresh — drop apply only.
         if (
           loadGenRef.current !== gen ||
+          !chatStore.isHistoryReadCurrent(key, read) ||
           chatStore.getHistoryRevision(key) !== revision
         )
           return;
@@ -1186,14 +1213,15 @@ export function useChat(
         // in flight. `snap` is from before the await and must not be the
         // message source — a send during the fetch lives only on the store.
         const current = chatStore.getSnapshot(key);
-        const latestIds = new Set(latest.map((m) => m.id));
-        const firstOverlap = current.messages.findIndex((m) =>
-          latestIds.has(m.id),
-        );
-        const keptOlder = firstOverlap > 0;
+        const keptOlder =
+          retainedHistoryPrefix(latest, current.messages).length > 0;
         chatStore.setHistoryPage(
           key,
-          mergeHistoryWithLocalTail(latest, current.messages),
+          mergeHistoryWithLocalTail(
+            latest,
+            current.messages,
+            current.isStreaming,
+          ),
           {
             hasMore: keptOlder ? current.historyHasMore : hasMore,
             nextOffset: keptOlder ? current.historyNextOffset : nextOffset,
@@ -1202,13 +1230,18 @@ export function useChat(
         );
         setHistoryError(false);
       } catch {
-        if (loadGenRef.current === gen) {
+        if (
+          loadGenRef.current === gen &&
+          chatStore.isHistoryReadCurrent(key, read)
+        ) {
           failedHistoryOperation.current = "latest";
           setHistoryError(true);
         }
       } finally {
-        refreshInFlightRef.current = false;
-        setHistoryRefreshing(false);
+        if (refreshInFlightRef.current === read) {
+          refreshInFlightRef.current = null;
+          setHistoryRefreshing(false);
+        }
       }
     },
     [agentId, stableSessionId, historyRefreshing, historyLoading],

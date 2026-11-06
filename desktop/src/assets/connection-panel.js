@@ -59,6 +59,7 @@ function mountConnectionPanel(config) {
       select: params => runtimeRequest("project_select", params),
       create: params => runtimeRequest("project_create", params),
       fork: params => runtimeRequest("project_fork", params),
+      continue: params => runtimeRequest("project_continue", params),
       threads: params => runtimeRequest("project_threads", params),
       files: params => runtimeRequest("project_files", params),
       read: params => runtimeRequest("project_read", params),

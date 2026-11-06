@@ -57,27 +57,38 @@ it("ignores a late catalog reply after switching employees", async () => {
   unmount();
   expect(getDesktopProjectSnapshot()).toBeNull();
 });
-it("keeps the existing project when the native folder picker is cancelled", async () => {
-  const saved = {
-    supported: true,
-    current_project_id: "A",
-    projects: {},
-    threads: {},
-  };
-  window.__octopRuntime = {
-    projects: {
-      status: vi.fn().mockResolvedValue(saved),
-      choose: vi.fn().mockResolvedValue({ ...saved, cancelled: true }),
-    },
-  } as unknown as DesktopRuntimeBridge;
-  const { result } = renderHook(() => useDesktopProjects(), {
-    wrapper: DesktopProjectsProvider,
-  });
-  await waitFor(() =>
-    expect(result.current.state?.current_project_id).toBe("A"),
-  );
-  await act(async () => {
-    expect((await result.current.choose())?.cancelled).toBe(true);
-  });
-  expect(result.current.state?.current_project_id).toBe("A");
-});
+it.each(["choose", "relocate"] as const)(
+  "keeps the existing project when %s is cancelled",
+  async (action) => {
+    const saved = {
+      supported: true,
+      current_project_id: "A",
+      projects: {},
+      threads: {},
+    };
+    window.__octopRuntime = {
+      projects: {
+        status: vi.fn().mockResolvedValue(saved),
+        choose: vi.fn().mockResolvedValue({ ...saved, cancelled: true }),
+        relocate: vi.fn().mockResolvedValue({ ...saved, cancelled: true }),
+      },
+    } as unknown as DesktopRuntimeBridge;
+    const { result } = renderHook(() => useDesktopProjects(), {
+      wrapper: DesktopProjectsProvider,
+    });
+    await waitFor(() =>
+      expect(result.current.state?.current_project_id).toBe("A"),
+    );
+    await act(async () => {
+      const next =
+        action === "choose"
+          ? await result.current.choose()
+          : await result.current.relocate("A");
+      expect(next?.cancelled).toBe(true);
+    });
+    expect(result.current.state?.current_project_id).toBe("A");
+    expect(result.current.error).toBe("");
+    expect(result.current.busy).toBe(false);
+    expect(getDesktopProjectSnapshot()?.current_project_id).toBe("A");
+  },
+);

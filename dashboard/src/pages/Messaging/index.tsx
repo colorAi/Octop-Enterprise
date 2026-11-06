@@ -12,6 +12,7 @@ import {
   Spin,
 } from "antd";
 import {
+  AtSign,
   ArrowLeft,
   ImagePlus,
   MoreHorizontal,
@@ -51,6 +52,10 @@ import MessageSender from "../Chat/components/MessageSender";
 import chatStyles from "../Chat/index.module.less";
 import styles from "./index.module.less";
 import ForwardMessageButton from "./ForwardMessageButton";
+import ColleagueMentionInput, {
+  type ColleagueMentionInputRef,
+} from "./ColleagueMentionInput";
+import { mentionedUserIds, type MentionDraft } from "./colleagueMentions";
 
 export function ChatPane({
   conversation,
@@ -66,7 +71,9 @@ export function ChatPane({
   const timezone = useServerTimezone();
   const conv = conversation.conversation_id;
   const peer = state.contacts[conversation.peer_user_id ?? ""];
-  const [text, setText] = useState("");
+  const [draft, setDraft] = useState<MentionDraft>({ text: "", mentions: [] });
+  const text = draft.text;
+  const composer = useRef<ColleagueMentionInputRef>(null);
   const [assets, setAssets] = useState<string[]>([]);
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState("");
@@ -151,13 +158,20 @@ export function ChatPane({
       setError(t("communication.captionLimit"));
       return;
     }
+    const mentionIds =
+      conversation.type === "group" ? mentionedUserIds(draft) : [];
+    if (mentionIds.length > 50) {
+      setError(t("communication.mentionLimit"));
+      return;
+    }
     const body = {
       client_message_id: newClientMessageId(),
       text: text.trim(),
       ...(assets.length ? { asset_ids: assets } : {}),
       ...(reply ? { reply_to_message_id: reply.message_id } : {}),
+      ...(mentionIds.length ? { mention_user_ids: mentionIds } : {}),
     };
-    setText("");
+    setDraft({ text: "", mentions: [] });
     setAssets([]);
     setReply(undefined);
     nearBottom.current = true;
@@ -188,6 +202,28 @@ export function ChatPane({
   const mutate = (action: () => Promise<unknown>) => {
     setError("");
     void client.mutate(action).catch(report);
+  };
+  const mentionSender = async (userId: string) => {
+    if (!canSend || conversation.type !== "group") return;
+    setError("");
+    try {
+      const { items } = await communicationApi.members(conv);
+      if (!alive.current) return;
+      const member = items.find(
+        (item) =>
+          item.user_id === userId &&
+          !item.archived &&
+          item.status !== "disabled" &&
+          item.status !== "deleted",
+      );
+      if (!member) {
+        setError(t("communication.mentionMemberUnavailable"));
+        return;
+      }
+      composer.current?.mentionMember(member);
+    } catch (e) {
+      report(e);
+    }
   };
   const loadOlder = async () => {
     if (older) return;
@@ -389,21 +425,45 @@ export function ChatPane({
                   )}
                 </div>
               );
+            const avatar = (
+              <MessageSender
+                name={
+                  sender?.nickname ||
+                  t(own ? "communication.you" : "communication.colleague")
+                }
+                avatar={<PersonAvatar person={sender} size={36} />}
+              />
+            );
             return (
               <div
                 key={message.message_id}
-                className={`${chatStyles.messageBubble} ${
+                className={`${chatStyles.messageBubble} ${styles.messageRow} ${
                   own ? chatStyles.userBubble : chatStyles.assistantBubble
                 }`}
               >
                 <div className={chatStyles.avatarCol}>
-                  <MessageSender
-                    name={
-                      sender?.nickname ||
-                      t(own ? "communication.you" : "communication.colleague")
-                    }
-                    avatar={<PersonAvatar person={sender} size={36} />}
-                  />
+                  {conversation.type === "group" && !own && canSend ? (
+                    <Dropdown
+                      trigger={["contextMenu"]}
+                      menu={{
+                        items: [
+                          {
+                            key: "mention",
+                            label: t("communication.mentionMember", {
+                              name:
+                                sender?.nickname ||
+                                t("communication.colleague"),
+                            }),
+                          },
+                        ],
+                        onClick: () => void mentionSender(message.sender_id),
+                      }}
+                    >
+                      <span>{avatar}</span>
+                    </Dropdown>
+                  ) : (
+                    avatar
+                  )}
                 </div>
                 <div
                   className={`${chatStyles.bubbleContent} ${styles.message} ${
@@ -417,6 +477,17 @@ export function ChatPane({
                         : sender?.nickname || t("communication.colleague")}
                     </span>
                     <PersonJobTitle person={sender} />
+                    {!message.recalled &&
+                      !own &&
+                      state.profile &&
+                      (message.mention_all ||
+                        message.mention_user_ids?.includes(
+                          state.profile.user_id,
+                        )) && (
+                        <span className={styles.mentionBadge}>
+                          {t("communication.mentionedYou")}
+                        </span>
+                      )}
                     <time
                       title={formatServerIsoDateTime(
                         message.created_at,
@@ -587,28 +658,33 @@ export function ChatPane({
               ))}
             </div>
           )}
-          <Input.TextArea
-            className={chatStyles.textarea}
-            variant="borderless"
-            value={text}
+          <ColleagueMentionInput
+            ref={composer}
+            draft={draft}
+            onChange={setDraft}
+            onSend={send}
+            groupId={
+              conversation.type === "group" && pageVisible ? conv : undefined
+            }
+            userId={state.profile?.user_id}
             disabled={!canSend}
             maxLength={assets.length ? 2000 : 8000}
-            autoSize={{ minRows: 2, maxRows: 6 }}
-            placeholder={t("communication.compose")}
-            onChange={(e) => setText(e.target.value)}
-            onKeyDown={(e) => {
-              if (
-                e.key === "Enter" &&
-                !e.shiftKey &&
-                !e.nativeEvent.isComposing
-              ) {
-                e.preventDefault();
-                send();
-              }
-            }}
           />
           <div className={chatStyles.actionsRow}>
             <div className={chatStyles.secondaryActions}>
+              {conversation.type === "group" && (
+                <button
+                  type="button"
+                  className={chatStyles.secondaryBtn}
+                  disabled={!canSend}
+                  title={t("communication.mentionColleague")}
+                  aria-label={t("communication.mentionColleague")}
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={() => composer.current?.mention()}
+                >
+                  <AtSign size={18} />
+                </button>
+              )}
               <input
                 ref={picker}
                 type="file"

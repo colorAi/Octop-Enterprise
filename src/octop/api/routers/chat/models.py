@@ -22,6 +22,16 @@ class HitlSessionPolicyBody(BaseModel):
     tools: list[str] = Field(default_factory=list)
 
 
+class ContinueThreadBody(BaseModel):
+    agent_id: str = Field(min_length=1, max_length=200, description="Currently authorized expert")
+
+
+class ContinuedThread(BaseModel):
+    thread_id: str
+    agent_id: str
+    copied_messages: int
+
+
 class ChatTurnBody(BaseModel):
     """User turn payload — same fields for WebSocket ``user_turn`` and legacy HTTP bodies."""
 

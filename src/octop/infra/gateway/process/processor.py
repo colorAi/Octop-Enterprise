@@ -704,6 +704,7 @@ class GlobalProcessor:
                 session_key,
                 agent_id=agent_id,
                 user_id=user_id,
+                thread_id=str((msg.metadata or {}).get("thread_id") or ""),
             )
             if ask_record is not None:
                 usage_tracker = UsageTracker()
@@ -1024,6 +1025,7 @@ class GlobalProcessor:
                 session_key,
                 agent_id=agent_id,
                 user_id=user_id,
+                thread_id=str((msg.metadata or {}).get("thread_id") or ""),
             )
             if ask_record is not None:
                 usage_tracker = UsageTracker()

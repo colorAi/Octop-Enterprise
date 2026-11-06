@@ -115,6 +115,46 @@ type projectState struct {
 	Cancelled bool `json:"cancelled,omitempty"`
 }
 
+func (a *App) prepareProjectBrowser(nonce, base string) (*companyprojects.Browser, error) {
+	a.companyMu.Lock()
+	if a.workspaceNonce != nonce || a.companyURL != base {
+		a.companyMu.Unlock()
+		return nil, errors.New("session_changed")
+	}
+	identity, credential, err := a.company.RuntimeIdentity()
+	if err != nil {
+		a.companyMu.Unlock()
+		return nil, err
+	}
+	if a.projectBrowser == nil {
+		token, tokenErr := companyprojects.InstallationToken(companyStateDir(base, identity.OwnerUserID))
+		if tokenErr != nil {
+			a.companyMu.Unlock()
+			return nil, tokenErr
+		}
+		a.projectBrowser, err = companyprojects.NewBrowser(base, credential, token)
+		if err != nil {
+			a.companyMu.Unlock()
+			return nil, err
+		}
+	}
+	browser, epoch := a.projectBrowser, a.runtimeEpoch
+	a.companyMu.Unlock()
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	supported, err := browser.Supported(ctx)
+	a.companyMu.Lock()
+	defer a.companyMu.Unlock()
+	if !a.runtimeAccountCurrent(nonce, base, epoch) || a.projectBrowser != browser {
+		return nil, errors.New("session_changed")
+	}
+	if err != nil {
+		return nil, err
+	}
+	a.projectSupported = supported
+	return browser, nil
+}
+
 func (a *App) performProjectAction(nonce, base, method string, raw json.RawMessage) (any, error) {
 	var params struct {
 		ProjectID      string `json:"project_id"`
@@ -133,13 +173,21 @@ func (a *App) performProjectAction(nonce, base, method string, raw json.RawMessa
 	if json.Unmarshal(raw, &params) != nil {
 		return nil, errors.New("invalid_project_request")
 	}
-	process, err := a.ensureRuntimeProcess(nonce, base, method, ensureCompanyPortable)
+	var process *companyruntime.Process
+	var browser *companyprojects.Browser
+	var err error
+	switch method {
+	case "project_status", "project_select", "project_files", "project_read", "project_threads", "project_continue":
+		browser, err = a.prepareProjectBrowser(nonce, base)
+	default:
+		process, err = a.ensureRuntimeProcess(nonce, base, method, ensureCompanyPortable)
+	}
 	if err != nil {
 		return nil, err
 	}
 	a.companyMu.Lock()
 	epoch := a.runtimeEpoch
-	if a.workspaceNonce != nonce || a.companyURL != base || a.companyRuntime != process {
+	if a.workspaceNonce != nonce || a.companyURL != base || (browser != nil && a.projectBrowser != browser) || (process != nil && a.companyRuntime != process) {
 		a.companyMu.Unlock()
 		return nil, errors.New("session_changed")
 	}
@@ -163,6 +211,15 @@ func (a *App) performProjectAction(nonce, base, method string, raw json.RawMessa
 		}
 		return nil
 	}
+	rpc := func(ctx context.Context, operation string, project companyprojects.Project, extra map[string]any) (json.RawMessage, error) {
+		if err := check(); err != nil {
+			return nil, err
+		}
+		if browser != nil {
+			return browser.Project(ctx, operation, project, extra)
+		}
+		return projectRPC(ctx, process, operation, project, extra)
+	}
 	if method == "project_choose" || method == "project_relocate" {
 		if !a.workspaceBusy.CompareAndSwap(false, true) {
 			return nil, errors.New("请完成当前文件夹选择")
@@ -172,7 +229,7 @@ func (a *App) performProjectAction(nonce, base, method string, raw json.RawMessa
 		if method == "project_relocate" {
 			title = "重新定位这个项目的原文件夹 · 历史成果仍保留原路径"
 		}
-		path, err := a.app.Dialog.OpenFile().SetTitle(title).CanChooseFiles(false).CanChooseDirectories(true).ResolvesAliases(true).AttachToWindow(a.window).PromptForSingleSelection()
+		path, err := directorySelection(a.app.Dialog.OpenFile().SetTitle(title).CanChooseFiles(false).CanChooseDirectories(true).ResolvesAliases(true).AttachToWindow(a.window).PromptForSingleSelection())
 		if err != nil {
 			return nil, errors.New("directory_unavailable")
 		}
@@ -253,7 +310,7 @@ func (a *App) performProjectAction(nonce, base, method string, raw json.RawMessa
 		return projectState{Catalog: store.Snapshot(), Supported: true}, nil
 	}
 	snapshot := store.Snapshot()
-	if params.ThreadID != "" && method != "project_create" && method != "project_threads" && method != "project_fork" {
+	if params.ThreadID != "" && method != "project_create" && method != "project_threads" && method != "project_fork" && method != "project_continue" {
 		params.ProjectID = snapshot.Threads[params.ThreadID]
 	}
 	if method == "project_fork" {
@@ -286,11 +343,14 @@ func (a *App) performProjectAction(nonce, base, method string, raw json.RawMessa
 		}
 		return result, err
 	}
-	if method == "project_create" {
+	if method == "project_create" || method == "project_continue" {
 		if _, err = store.ForID(project.ID); err != nil {
 			return nil, err
 		}
 		if !forwardMediaID.MatchString(params.ThreadID) || !forwardMediaID.MatchString(params.AgentID) {
+			return nil, errors.New("invalid_project_request")
+		}
+		if method == "project_continue" && (!forwardMediaID.MatchString(params.SourceThreadID) || params.SourceThreadID == params.ThreadID) {
 			return nil, errors.New("invalid_project_request")
 		}
 	}
@@ -303,7 +363,7 @@ func (a *App) performProjectAction(nonce, base, method string, raw json.RawMessa
 	if err = check(); err != nil {
 		return nil, err
 	}
-	if _, err = projectRPC(ctx, process, "register", project, nil); err != nil {
+	if _, err = rpc(ctx, "register", project, nil); err != nil {
 		return nil, err
 	}
 	if method == "project_update" {
@@ -336,9 +396,13 @@ func (a *App) performProjectAction(nonce, base, method string, raw json.RawMessa
 		}
 		return projectState{Catalog: store.Snapshot(), Supported: true}, nil
 	}
-	if method == "project_create" || method == "project_fork" {
+	if method == "project_create" || method == "project_fork" || method == "project_continue" {
 		operation := "create"
 		extra := map[string]any{"thread_id": params.ThreadID, "agent_id": params.AgentID}
+		if method == "project_continue" {
+			operation = "continue"
+			extra["source_thread_id"] = params.SourceThreadID
+		}
 		if method == "project_fork" {
 			operation = "fork"
 			extra = map[string]any{"thread_id": params.ThreadID, "source_thread_id": params.SourceThreadID}
@@ -354,7 +418,7 @@ func (a *App) performProjectAction(nonce, base, method string, raw json.RawMessa
 				}
 			}
 		}
-		result, err := projectRPC(ctx, process, operation, project, extra)
+		result, err := rpc(ctx, operation, project, extra)
 		if err != nil {
 			return nil, err
 		}
@@ -362,6 +426,13 @@ func (a *App) performProjectAction(nonce, base, method string, raw json.RawMessa
 		defer a.companyMu.Unlock()
 		if !a.runtimeAccountCurrent(nonce, base, epoch) || a.projectStore != store {
 			return nil, errors.New("session_changed")
+		}
+		current, permissionErr := store.ForID(project.ID)
+		if permissionErr != nil {
+			return nil, permissionErr
+		}
+		if current.Path != project.Path || current.Revision != project.Revision {
+			return nil, errors.New("directory_changed")
 		}
 		if err = store.Bind(params.ThreadID, project.ID); err != nil {
 			return nil, err
@@ -395,12 +466,12 @@ func (a *App) performProjectAction(nonce, base, method string, raw json.RawMessa
 			}
 			sort.Strings(threads)
 			for _, thread := range threads {
-				if _, err = projectRPC(ctx, process, "adopt", project, map[string]any{"thread_id": thread}); err != nil {
+				if _, err = rpc(ctx, "adopt", project, map[string]any{"thread_id": thread}); err != nil {
 					return nil, err
 				}
 			}
 		}
-		result, err := projectRPC(ctx, process, "threads", project, map[string]any{"offset": params.Offset})
+		result, err := rpc(ctx, "threads", project, map[string]any{"offset": params.Offset})
 		if err != nil {
 			return nil, err
 		}

@@ -86,6 +86,7 @@ const virtuosoComponents: Components<MessageGroup, VirtuosoListContext> = {
 
 interface MessageListProps {
   messages: ChatMessage[];
+  footerContent?: ReactNode;
   agentId?: string | null;
   composerLookups?: ComposerTagLookups;
   loading?: boolean;
@@ -256,6 +257,7 @@ function renderMessageGroup(
 export default function MessageList(props: MessageListProps) {
   const {
     messages,
+    footerContent,
     agentId,
     composerLookups,
     loading,
@@ -801,6 +803,7 @@ export default function MessageList(props: MessageListProps) {
           </div>
         )}
         {refreshFooter}
+        {footerContent}
       </>
     ),
     [
@@ -811,10 +814,11 @@ export default function MessageList(props: MessageListProps) {
       generatingMembersOnly,
       liveSpeakerNames,
       refreshFooter,
+      footerContent,
     ],
   );
 
-  const hasFooter = showGenerating || Boolean(refreshFooter);
+  const hasFooter = showGenerating || Boolean(refreshFooter || footerContent);
 
   const virtuosoContext = useMemo<VirtuosoListContext>(
     () => ({

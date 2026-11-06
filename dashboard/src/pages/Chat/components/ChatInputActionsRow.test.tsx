@@ -47,11 +47,20 @@ describe("ChatInputActionsRow plus menu", () => {
   it("keeps approval, shortcuts, and attachments on the toolbar", () => {
     render(
       <MemoryRouter>
-        <ChatInputActionsRow {...baseProps} />
+        <ChatInputActionsRow
+          {...baseProps}
+          projectPicker={<button>产品官网</button>}
+        />
       </MemoryRouter>,
     );
 
     expect(screen.getByTestId("composer-plus")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "产品官网" }).parentElement).toBe(
+      screen.getByLabelText("Upload attachment").parentElement,
+    );
+    expect(screen.getByLabelText("Upload attachment").nextElementSibling).toBe(
+      screen.getByRole("button", { name: "产品官网" }),
+    );
     expect(screen.getByTestId("hitl-policy-picker")).toBeInTheDocument();
     expect(screen.getByLabelText("快捷指令")).toBeInTheDocument();
     expect(screen.getByLabelText("Upload attachment")).toBeInTheDocument();

@@ -30,6 +30,7 @@ export interface OctopAgent {
   isolated?: boolean;
   requires_private_instance?: boolean;
   history_only?: boolean;
+  continuation_agent_id?: string | null;
   /** Surrogate integer primary key from the database. */
   id: number;
   /** Public agent id used in API paths and ``X-Octop-Agent-Id``. */

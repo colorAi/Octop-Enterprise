@@ -40,7 +40,7 @@ python3 tools/check_public_source.py --root /absolute/new-directory/Octop-Enterp
 
 服务端支持目标是 Linux + Docker Engine + Compose，命令见[企业部署与恢复](../docker/enterprise/README.md)。构建网络需要能获取基础镜像与依赖；当前不提供完整离线服务器安装包。
 
-客户端构建见[桌面说明](../desktop/README.md)（English）。企业员工安装包面向 Windows amd64/arm64 与 macOS 13+ universal；具体支持状态以发行验证记录为准。`desktop/package-company.py` 读取 Git HEAD 和工作树状态，要求已有可解析 `HEAD` 的本地仓库。源码包不含 `.git`，需先建立源码提交，或使用对应发行的 Git 检出。服务端 Docker 构建没有这一 Git 前提。
+客户端构建见[中文指南](client-build.md)和[英文桌面说明](../desktop/README.md)。企业员工安装包面向 Windows amd64/arm64 与 macOS 13+ universal；具体支持状态以发行验证记录为准。`desktop/package-company.py` 读取 Git HEAD 和工作树状态，要求已有可解析 `HEAD` 的本地仓库。源码包不含 `.git`，需先建立源码提交，或使用对应发行的 Git 检出。服务端 Docker 构建没有这一 Git 前提。
 
 登录 bundle、`company-dashboard.zip` 和生成清单不随源码包分发。桌面完整打包器会从源码构建这些资源；单独构建桌面壳时，先按桌面文档生成资源。
 

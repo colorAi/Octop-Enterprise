@@ -274,6 +274,26 @@ def create_isolated_backend(
             if not self._container.put_archive(parent, buf.getvalue()):
                 raise OSError("cannot write sandbox file")
 
+        def _binds_match(self, actual: list[str]) -> bool:
+            expected = [
+                f"{source}:{mount['bind']}:{mount['mode']}" for source, mount in mounts.items()
+            ]
+            if sorted(actual) == sorted(expected):
+                return True
+            # Docker Desktop may expose host bind sources through its VM path.
+            # On a native daemon these are distinct directories, so only accept
+            # this alias after checking the daemon, not the control-plane OS.
+            if self._client.info().get("OperatingSystem") != "Docker Desktop":
+                return False
+            aliases = {
+                f"/host_mnt{source}:{mount['bind']}:{mount['mode']}": f"{source}:{mount['bind']}:{mount['mode']}"
+                for source, mount in mounts.items()
+                if source.startswith("/") and not source.startswith("/host_mnt/")
+            }
+            return sorted(
+                bind if bind in expected else aliases.get(bind, bind) for bind in actual
+            ) == sorted(expected)
+
         def _get_named_container(self, name: str) -> Any:
             existing = super()._get_named_container(name)
             if existing is None:
@@ -292,10 +312,7 @@ def create_isolated_backend(
                 or config.get("User") != "1000:1000"
                 or "ALL" not in host.get("CapDrop", [])
                 or "no-new-privileges:true" not in host.get("SecurityOpt", [])
-                or sorted(host.get("Binds") or [])
-                != sorted(
-                    f"{source}:{mount['bind']}:{mount['mode']}" for source, mount in mounts.items()
-                )
+                or not self._binds_match(host.get("Binds") or [])
             ):
                 raise RuntimeError(
                     "refusing an existing container with a different isolation policy"

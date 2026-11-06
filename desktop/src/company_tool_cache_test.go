@@ -239,7 +239,16 @@ func TestCompanyToolManualCheckFindsDamageOutsideStartupFiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { readyCompanyPortable.invalidate(root) })
+	t.Cleanup(func() {
+		readyCompanyPortable.maintenance.Wait()
+		readyCompanyPortable.invalidate(root)
+		readyCompanyPortable.Lock()
+		defer readyCompanyPortable.Unlock()
+		for path, lease := range readyCompanyPortable.leases {
+			lease.Close()
+			delete(readyCompanyPortable.leases, path)
+		}
+	})
 	if err := os.WriteFile(filepath.Join(root, filepath.FromSlash(name)), []byte("corrupt dependency!"), 0600); err != nil {
 		t.Fatal(err)
 	}

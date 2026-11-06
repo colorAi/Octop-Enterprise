@@ -75,7 +75,7 @@ GitHub 下载较慢时，可使用[夸克网盘下载](https://pan.quark.cn/s/6d
 
 员工默认没有模型使用权限，首次使用前须由管理员分配至少一个可用对话模型；仅添加模型提供商不会自动授权。
 
-客户端构建见[桌面说明](desktop/README.md)，详细操作见[企业客户端指南](docs/enterprise-client.md)。
+自行编译客户端见[中文构建指南](docs/client-build.md)，详细操作见[企业客户端指南](docs/enterprise-client.md)。
 
 ## 文档
 

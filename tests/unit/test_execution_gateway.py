@@ -11,6 +11,104 @@ from octop.infra.execution.service import ExecutionService
 from tests.unit.test_execution_service import setup as setup
 
 
+@pytest.fixture
+def pending_execution_gateway(monkeypatch):
+    from octop.infra.gateway.hitl.coordinator import HitlChannelCoordinator
+    from octop.infra.gateway.hitl.store import HitlPendingStore
+
+    hitl = HitlChannelCoordinator(HitlPendingStore())
+    record = hitl.store.register(
+        thread_id="paused",
+        agent_id="expert",
+        user_id=7,
+        session_key="expert:dashboard:7:dm",
+        channel_type="dashboard",
+        action_requests=[
+            {"name": "ask_user_question", "args": {"questions": [{"question": "choose"}]}}
+        ],
+        review_configs=None,
+    )
+    processor = SimpleNamespace(
+        hitl_coordinator=hitl, _slash_ctx=lambda **kwargs: SimpleNamespace(locale="en")
+    )
+    server = SimpleNamespace(
+        app_runtime=SimpleNamespace(
+            agent_registry=SimpleNamespace(cancel_stream=Mock()),
+            gateway=SimpleNamespace(processor=processor),
+        )
+    )
+
+    async def run(function, *args, **kwargs):
+        return function(*args, **kwargs)
+
+    service = SimpleNamespace(
+        io=SimpleNamespace(run=run),
+        repo=SimpleNamespace(
+            by_request=Mock(return_value=None),
+            submit=Mock(return_value={"run_id": "new"}),
+        ),
+    )
+    adapter = GatewayExecution(server, service)
+    monkeypatch.setattr(adapter, "_identity", AsyncMock())
+    return adapter, record
+
+
+@pytest.mark.parametrize("thread", ["paused", "another"])
+async def test_ask_admission_is_scoped_to_inbound_thread(pending_execution_gateway, thread):
+    from octop_gateway.models import InboundMessage, TextContent
+
+    adapter, record = pending_execution_gateway
+    adapter._identity.return_value = ("expert", 7, record.session_key, thread)
+    message = InboundMessage(
+        channel_id="dashboard",
+        channel_type="dashboard",
+        tenant_id="expert",
+        content=[TextContent(text="answer or new task")],
+        metadata={"thread_id": thread},
+    )
+    result = await adapter.admit(message, mode="dashboard")
+    if thread == "paused":
+        assert result is None
+        adapter.service.repo.submit.assert_not_called()
+    else:
+        assert result == {"run_id": "new"}
+        assert adapter.service.repo.submit.call_args.kwargs["thread"] == "another"
+    assert record.status == "pending"
+
+
+@pytest.mark.parametrize("thread", ["paused", "another"])
+async def test_ask_control_rechecks_thread_before_resuming(
+    pending_execution_gateway, monkeypatch, thread
+):
+    from octop_gateway.models import InboundMessage, MessageEvent, TextContent
+
+    from octop.infra.db.repos.execution import ExecutionConflict
+
+    adapter, record = pending_execution_gateway
+    adapter._identity.return_value = ("expert", 7, record.session_key, thread)
+    resumed = []
+
+    async def resolve(selected, *args, **kwargs):
+        resumed.append(selected)
+        yield MessageEvent.completed()
+
+    monkeypatch.setattr(adapter.processor.hitl_coordinator, "iter_answer_resolution", resolve)
+    message = InboundMessage(
+        channel_id="dashboard",
+        channel_type="dashboard",
+        tenant_id="expert",
+        content=[TextContent(text="answer")],
+        metadata={"thread_id": thread},
+    )
+    if thread == "paused":
+        assert [event async for event in adapter._control_events(message)]
+        assert resumed == [record]
+    else:
+        with pytest.raises(ExecutionConflict, match="approval_not_pending"):
+            _ = [event async for event in adapter._control_events(message)]
+        assert resumed == []
+
+
 async def test_sandbox_preflight_denial_has_failed_receipt_and_releases_thread(setup):
     from octop.infra.db.repos.execution import ExecutionConflict
     from octop.infra.db.repos.users import UserRepo

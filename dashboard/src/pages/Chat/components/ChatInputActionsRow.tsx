@@ -1,5 +1,12 @@
 import type { ContextUsageBreakdown } from "../../../api/modules/octopThreads";
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 import {
@@ -93,6 +100,7 @@ function resolveModelLogo(model: {
 const _sttAvailable = isSttAvailable();
 
 interface ChatInputActionsRowProps {
+  projectPicker?: ReactNode;
   isMobile: boolean;
   isStreaming: boolean;
   /** Team host room — stop control uses clearer wording. */
@@ -157,6 +165,7 @@ interface ChatInputActionsRowProps {
 }
 
 export default function ChatInputActionsRow({
+  projectPicker,
   isMobile,
   isStreaming,
   isTeam = false,
@@ -976,7 +985,10 @@ export default function ChatInputActionsRow({
 
   return (
     <div ref={actionsRowRef} className={styles.actionsRow}>
-      <div className={styles.secondaryActions}>{renderSecondaryActions()}</div>
+      <div className={styles.secondaryActions}>
+        {renderSecondaryActions()}
+        {projectPicker}
+      </div>
       <div className={styles.inputActions}>
         <ContextWindowRing
           usedTokens={contextUsedTokens}

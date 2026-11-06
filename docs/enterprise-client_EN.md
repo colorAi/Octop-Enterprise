@@ -11,9 +11,17 @@
 
 With **Remember me** selected, the client can restore the session while the login credential is still valid; passwords are not saved. Signing out ends the current device session.
 
+On Windows, opening the client again restores its existing window. If a saved local UI port is unavailable after an upgrade, the client selects an available port. This recovery may require signing in once; account settings and project files are preserved.
+
 ## Projects, experts and local tools
 
-Compatible clients save the projects selected on this computer for the company account. A new conversation defaults to the current project; select a saved project or add another folder to change it. The expert and history shortcut also starts new conversations in the current project. Return to a project to continue its conversations.
+Compatible clients save the projects selected on this computer for the company account. A new conversation defaults to the current project; select a saved project or add another folder to change it. Open both new and older local conversations from their projects. Return to a project to continue its conversations.
+
+The sidebar keeps **Add project folder** at the top and shows each project as a collapsible folder with its conversations underneath. Multiple folders can stay open at once. Select a conversation to continue it, use the folder's **+** to choose an expert and start a conversation there, or use **…** to manage that project. Expanding or collapsing a folder does not switch the current chat.
+
+Projects, authorized directories and project conversation lists can load while local tools are still preparing. Message history loads in pages from the company server; starting a new task requires the local tools to be ready.
+
+The folder button after **Upload attachment** in the composer toolbar shows only the folder name; hover to see its full path. For a new conversation, choose a saved project or another local folder here. Existing conversations keep their original folders; selecting another project starts a new conversation there.
 
 Each conversation keeps a fixed project and expert, and new tasks work directly in the selected folder. Different experts can have separate conversations sharing the same project files, with independent chat history. Switching projects does not change a running task's directory. A project, or projects with overlapping directories, permits one active task at a time, including tasks awaiting approval or reconciliation; separate projects retain the overall limit of four local tasks.
 
@@ -31,7 +39,7 @@ The project file panel and `@` file mentions use the local directory bound to th
 
 Before each question, the client recalls relevant memory from the company server. Synchronized user messages and replies are indexed there, and explicit durable facts are saved through server memory tools. Memory is isolated by employee expert instance. Existing experts retain their server SQLite stores; new instances use the configured server backend. The native harness disables personal memory databases and expert bootstrap. Project documents are not automatically loaded as personal memory.
 
-After switching to managed assignments, personal experts with earlier conversations remain visible with a **History** label and read-only chat access. An unambiguous earlier expert belonging to the same employee and template contributes its server memory and personal profile to the new instance. Ambiguous matches are not combined. Existing data stays in place; another employee's or administrator's personal data is never inherited.
+After switching to managed assignments, personal experts with earlier conversations remain visible with a **History** label. Open a conversation and select **Continue conversation**. The current instance of the same expert is selected when its identity can be matched; otherwise search for and select a currently assigned expert. Continuation copies the complete transcript and retains the original conversation without resuming its pending operations. An unambiguous earlier expert belonging to the same employee and template contributes its server memory and personal profile to the new instance. Ambiguous matches are not combined, and another employee's or administrator's personal data is never inherited.
 
 Local commands flagged by the tool guard, including removal and moves, display an approval card. Approval permits the operation; rejection or cancellation leaves it unexecuted. Parallel commands require individual decisions. You can enable automatic approval for the current conversation. Pending approvals return when you revisit the page; restarting the client does not automatically replay interrupted commands.
 
@@ -41,9 +49,11 @@ Local commands have a default fifteen-minute execution timeout, with a per-comma
 
 Model inference runs on company-configured services, and task execution requires a connection to the company server and model services. File names, excerpts needed to complete a task and tool results may be sent to those services; the whole project is not synchronized automatically. Images and files uploaded or forwarded through chat go to the company server; clients that support attachment import copy the selected attachments into the current local task folder before processing. The terminal and Python use the current OS account's permissions; choosing a folder does not restrict what other processes can access.
 
-Other devices can view history within your permissions, but they do not automatically receive files from the original computer or take over a running process. Older server-side tasks are read-only in the desktop client; start a new conversation to continue work locally.
+Other devices can view history within your permissions, but they do not automatically receive files from the original computer or take over a running process. To continue an older server conversation locally, select a project folder and **Continue conversation**; the complete transcript is included. Conversations already bound to a local project with an available expert accept new messages directly. History continuation requires support in both the company server and the desktop client.
 
 ## Forwarding messages and results
+
+In a group chat, type `@` or click **Mention a colleague** to select a current member. Search by name, group nickname or job title, or right-click a colleague’s message avatar and choose `@Name`. Mentioned members see **Mentioned you** on the message. Experts cannot join group chats yet.
 
 For an employee question, an agent reply or a generated result, **Forward** lets you choose company employees, groups you have joined and may post to, or agents you have enabled. Colleague chats and group messages use the same entry point, and you can select multiple targets. Forwarding to an agent starts a new conversation and begins processing; successful results can be opened directly, partial failures can be retried in the same dialog, and successful targets are not sent twice.
 

@@ -114,6 +114,38 @@ class CompanyProjectService:
             raise denied(str(exc), 409) from exc
         return {"thread_id": thread_id, "project_id": project_id}
 
+    async def continue_thread(
+        self, project_id: str, source_id: str, thread_id: str, agent_id: str
+    ) -> dict[str, Any]:
+        from octop.infra.company_runtime.history import edit_checkpoint
+        from octop.infra.history.continuation import owned_transcript
+
+        await self.runtime.authorize(agent_id)
+        # Validate the destination installation before reading an old transcript.
+        await self.threads(project_id, 1, 0)
+        source, wires = await owned_transcript(self.runtime.server, self.owner, source_id)
+        checkpoint = await offload(edit_checkpoint, thread_id, wires, None)
+        try:
+            created = await offload(
+                self.repo.create_thread,
+                project_id,
+                self.owner,
+                self.installation,
+                thread_id=thread_id,
+                agent_id=agent_id,
+                device_id=self.runtime.identity["device_id"],
+                title=source.title or "",
+                continuation={
+                    "source": source_id,
+                    "source_agent_id": source.agent_id,
+                    "messages": wires,
+                    "checkpoint": checkpoint,
+                },
+            )
+        except RuntimeConflict as exc:
+            raise denied(str(exc), 409) from exc
+        return {**created, "copied_messages": len(wires)}
+
     async def threads(self, project_id: str, limit: int, offset: int) -> dict[str, Any]:
         try:
             rows = await offload(

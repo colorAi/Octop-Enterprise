@@ -46,7 +46,7 @@
     display: flex;
     align-items: center;
     gap: 12px;
-    padding: 16px;
+    padding: 10px 12px;
     width: 100%;
     text-align: left;
     background: transparent;
@@ -122,6 +122,13 @@
 }
 .historyInner {
   min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+
+  > .messageRow {
+    margin-bottom: 0;
+  }
 }
 .loadEarlier {
   width: 100%;
@@ -133,7 +140,7 @@
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: 5px;
+  gap: 3px;
   > small {
     color: var(--fn-text-secondary);
   }
@@ -146,7 +153,7 @@
   color: var(--fn-text-secondary);
 }
 .messageContent {
-  padding: 11px 14px;
+  padding: 8px 12px;
   border-radius: 16px 16px 16px 6px;
   max-width: 100%;
   display: flex;
@@ -206,6 +213,67 @@
       opacity: 0.45;
       cursor: not-allowed;
     }
+  }
+}
+.mentionBadge {
+  color: var(--fn-text-brand);
+  font-weight: 500;
+}
+.mentionComposer {
+  position: relative;
+}
+.mentionPicker {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
+  z-index: 5;
+  width: 320px;
+  max-width: 100%;
+  border: 1px solid var(--fn-border-color);
+  border-radius: 10px;
+  background: var(--fn-bg-elevated);
+  box-shadow: 0 4px 18px rgb(0 0 0 / 12%);
+  overflow: hidden;
+}
+.mentionHeading,
+.mentionHint {
+  padding: 10px 12px;
+  color: var(--fn-text-secondary);
+  font-size: 12px;
+}
+.mentionHint {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.mentionOptions {
+  max-height: 240px;
+  overflow-y: auto;
+}
+.mentionOption {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 12px;
+  border: 0;
+  background: transparent;
+  color: var(--fn-text-primary);
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+  &[aria-selected="true"] {
+    background: var(--fn-bg-selected);
+  }
+  > span:nth-child(2) {
+    flex: 1;
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+  small {
+    display: block;
+    color: var(--fn-text-secondary);
+    font-size: 12px;
   }
 }
 .replyQuote {

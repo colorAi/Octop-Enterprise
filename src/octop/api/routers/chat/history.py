@@ -14,6 +14,8 @@ from octop.api.common.agent_workspace import resolve_agent_workspace_dir
 from octop.api.deps import current_user, get_server
 from octop.api.routers.chat.models import (
     CancelThreadResponse,
+    ContinuedThread,
+    ContinueThreadBody,
     ForkThreadBody,
     RebindSessionBody,
     RenameThreadBody,
@@ -528,6 +530,24 @@ async def fork_thread(
         history_archive=getattr(server.app_runtime, "history_archive", None),
         device_repo=server.services.device_repo,
     )
+
+
+@router.post(
+    "/agents/{agent_id}/threads/{thread_id}/continue",
+    response_model=ContinuedThread,
+    summary="Continue owned history with a currently authorized expert",
+)
+async def continue_thread(
+    agent_id: str,
+    thread_id: str,
+    body: ContinueThreadBody,
+    user: Any = Depends(current_user),
+    server: Any = Depends(get_server),
+) -> Any:
+    from octop.infra.history.continuation import continue_dashboard_thread
+
+    _require_thread(server, agent_id, thread_id, user, as_user=None)
+    return await continue_dashboard_thread(server, user.id, thread_id, body.agent_id)
 
 
 @router.patch("/agents/{agent_id}/session", summary="Rebind dashboard session")

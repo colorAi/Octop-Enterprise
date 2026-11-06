@@ -189,7 +189,7 @@ func (a *App) AddCompanyDirectory(ctx context.Context, writable, allowCompany bo
 	a.companyMu.Lock()
 	client := a.company
 	a.companyMu.Unlock()
-	path, err := a.app.Dialog.OpenFile().CanChooseFiles(false).CanChooseDirectories(true).ResolvesAliases(true).AttachToWindow(a.companyWindow).PromptForSingleSelection()
+	path, err := directorySelection(a.app.Dialog.OpenFile().CanChooseFiles(false).CanChooseDirectories(true).ResolvesAliases(true).AttachToWindow(a.companyWindow).PromptForSingleSelection())
 	if err != nil || path == "" {
 		return company.Grant{}, err
 	}

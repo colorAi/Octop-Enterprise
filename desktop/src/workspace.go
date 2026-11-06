@@ -19,6 +19,15 @@ import (
 
 const workspaceEventPrefix = "desktop:workspace:"
 
+// Wails v3.0.0-beta.13 returns this private CFD error on Windows cancellation;
+// other platforms return an empty path. Keep the same no-selection contract.
+func directorySelection(path string, err error) (string, error) {
+	if err != nil && err.Error() == "cancelled by user" {
+		return "", nil
+	}
+	return path, err
+}
+
 // Persist only the native folder choice, scoped to the authenticated server and
 // owner. Device credentials and grant IDs are freshly issued for every session.
 func workspaceSettingsPath(base string, owner int64) string {
@@ -232,7 +241,7 @@ func (a *App) performWorkspaceAction(nonce, base, action, code string) error {
 		if a.store.get().Locale == LocaleEN {
 			title = "Authorize local tasks · Terminal uses your OS account permissions (not sandboxed)"
 		}
-		path, err = a.app.Dialog.OpenFile().SetTitle(title).CanChooseFiles(false).CanChooseDirectories(true).ResolvesAliases(true).AttachToWindow(a.window).PromptForSingleSelection()
+		path, err = directorySelection(a.app.Dialog.OpenFile().SetTitle(title).CanChooseFiles(false).CanChooseDirectories(true).ResolvesAliases(true).AttachToWindow(a.window).PromptForSingleSelection())
 		if err != nil {
 			return errors.New("directory_unavailable")
 		}

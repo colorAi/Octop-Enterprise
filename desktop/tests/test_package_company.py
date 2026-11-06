@@ -3,6 +3,7 @@
 import hashlib
 import importlib.util
 import json
+import os
 import tempfile
 import unittest
 import zipfile
@@ -106,6 +107,29 @@ class CompanyPackageTest(unittest.TestCase):
                         ).hexdigest(),
                         digest,
                     )
+
+    def test_repack_is_identical_after_timestamp_and_permission_changes(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = self.payload(root)
+            python = source / "runtime/bin/python3"
+            python.chmod(0o755)
+            first = module.package_runtime(source, root / "first.zip", "darwin", "arm64")
+            for item in source.rglob("*"):
+                if item.is_file():
+                    info = item.stat()
+                    os.utime(item, (info.st_atime + 60, info.st_mtime + 60))
+            (source / "launch.py").chmod(0o600)
+            python.chmod(0o700)
+            second = module.package_runtime(source, root / "second.zip", "darwin", "arm64")
+            self.assertEqual(first.read_bytes(), second.read_bytes())
+            with zipfile.ZipFile(second) as bundle:
+                for entry in bundle.infolist():
+                    self.assertEqual(entry.date_time, (1980, 1, 1, 0, 0, 0))
+                executable = bundle.getinfo("Octop-company-darwin-arm64/runtime/bin/python3")
+                self.assertEqual((executable.external_attr >> 16) & 0o777, 0o755)
+                entry = bundle.getinfo("Octop-company-darwin-arm64/launch.py")
+                self.assertEqual((entry.external_attr >> 16) & 0o777, 0o644)
 
     def test_missing_tools_and_wrong_arch_are_rejected(self):
         with tempfile.TemporaryDirectory() as temp:

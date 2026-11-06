@@ -1,5 +1,7 @@
 # Octop Enterprise desktop (Wails v3 + green portable)
 
+[中文企业客户端构建指南](../docs/client-build.md)
+
 > For employee setup and everyday use, see [the employee guide](../docs/enterprise-client_EN.md). This document covers building the enterprise client and the base-mode desktop packages from source.
 
 All desktop-client code lives here. This is **not** `src/octop/infra/desktop`
@@ -20,6 +22,7 @@ The full local edition shares the Octop CLI/server defaults. Enterprise runtime 
 - Green runtime extract → `~/.octop/portable/`
 - Shell prefs → `~/.octop/desktop-settings.json`
 - Enterprise verified tool payloads → `~/.octop/company-runtime/tools/<payload-sha256>/`
+- Enterprise Python bytecode → `~/.octop/company-runtime/pyc/<payload-sha256>/`
 - Enterprise account cache/receipts → `~/.octop/company-runtime/accounts/<company-and-owner-sha256>/`
 - Company mode never boots an independent local Python backend or uses `~/.octop/portable/`; the loopback UI listener only serves the packaged dashboard and proxies company APIs.
 
@@ -89,9 +92,11 @@ Login errors stay on the same form. A successful sign-in transfers the session
 only to the selected origin and a one-use navigation nonce, then enters `/chat`.
 The complete dashboard, including lazy-loaded JS/CSS, fonts and public images, is embedded in `assets/company-dashboard.zip`. The native shell serves it on a company-specific `127.0.0.1` origin and forwards only `/api/` traffic (including WebSockets and streamed bodies) to the selected company server with normal TLS validation. No dashboard resources are fetched from R2 or the company server, and the desktop build does not register a Service Worker.
 
-Remembered sessions use that company's stable loopback WebView origin. Upgrading from the remote-page client requires signing in once because the browser origin changed; passwords are never saved. Origin/port records under `~/.octop/company-ui/` contain no account credentials. The listener binds only loopback, requires a native bootstrap capability cookie, rejects foreign Host/Origin requests, and is closed with its streaming connections on a server switch or exit. An offline saved server returns to the editable login page.
+Remembered sessions prefer that company's saved loopback WebView origin. If the saved port is unavailable, the client allocates a new loopback port and keeps previous ports reserved for the same company. A changed origin requires signing in once; the replacement origin is saved for later starts. Windows launches use one instance per local data directory, so opening another shortcut restores the existing window. Upgrading from the remote-page client requires signing in once because the browser origin changed; passwords are never saved. Origin/port records under `~/.octop/company-ui/` contain no account credentials. The listener binds only loopback, requires a native bootstrap capability cookie, rejects foreign Host/Origin requests, and is closed with its streaming connections on a server switch or exit. An offline saved server returns to the editable login page.
 
 The bootstrap commits a local HTML document before navigating to the login handoff page. Do not replace it with an HTTP redirect: macOS WebKit can retain the initial `wails://` navigation's cross-site context and omit the Strict cookie, showing `Forbidden` instead of restoring a valid saved session. The bootstrap preserves the handoff fragment and keeps the existing cookie, Host and Origin checks.
+
+Project browsing is independent of Python startup: the native shell reads the account catalog and authorized directories, and queries company conversation lists with native device and installation credentials. Concurrent identical list requests share one in-flight request; completed lists are fetched afresh. Browsing and the worker reuse the same private installation identity. Starting tasks still requires the verified tools and initialized worker.
 
 After sign-in the dashboard automatically pairs this computer with the employee
 session. Compatible servers, native shells and Python workers negotiate
@@ -178,6 +183,10 @@ Without WebView2 already installed or that full offline payload, the company
 installer stops and asks for IT assistance rather than downloading a bootstrapper.
 These options are explicit; the ordinary package task does not enable them.
 
+### Employee installer prerequisites
+
+The company packager consumes prepared offline runtimes. A source archive does not include Python binaries, dependency wheels, FFmpeg/FFprobe or WebView2 installers. `portable/bootstrap-runtime.sh` and `portable/package.sh` prepare the base Python/application environment; builders must add all enterprise tools before packaging. `package-release.sh` builds the base-mode desktop and is not a replacement for this company workflow. Missing architecture-specific wheels, particularly on Windows ARM64, require target-compatible builds.
+
 To produce company installers from macOS (Node with dashboard dependencies installed,
 Python 3.11+, Go, the pinned Wails CLI,
 NSIS and Xcode command-line tools):
@@ -187,13 +196,17 @@ the source commit and local changes. Build from a checkout of the target release
 For an exported source archive, initialize a local Git repository and commit the
 imported sources before packaging. Server Docker builds do not require Git history.
 
+Install dashboard dependencies with `npm ci --prefix dashboard` first. Use `--platform windows` for both Windows architectures, `--platform darwin` for the Mac universal package, or `--platform all` (the default) for all targets. Each selected platform requires both architecture payloads.
+
 ```bash
-python3 desktop/package-company.py \
+python3 desktop/package-company.py --platform all \
   --output /absolute/fresh-release/client \
   --webview2-dir /absolute/microsoft-offline-installers \
   --runtime-dir /absolute/verified-offline-payloads \
   --sign-identity 'Developer ID Application: Your Name (TEAMID)'
 ```
+
+Use a fresh output parent on each build: the script refuses an existing sibling `build-company/` directory. `--webview2-dir` is a required argument even for a Mac-only build, but its contents are read only for Windows targets.
 
 `--runtime-dir` contains `darwin-arm64/`, `darwin-amd64/`, `windows-amd64/`,
 and `windows-arm64/` (only requested platforms are needed). Each directory must
@@ -207,6 +220,9 @@ Excel/Word/PPT/PDF/images/FFmpeg/terminal, producing `company-runtime-build.json
 The packager refuses missing dependencies and mismatched verification records. Target smoke-test records are optional for cross-packaging; their absence is recorded as unverified, never as passed. It generates SHA-256 manifests; the shell verifies
 all listed files before first launch. Tool payload updates use content-addressed
 directories, preserving account receipts and project files during rollback.
+Runtime ZIP entries use fixed timestamps and normalized executable/file modes,
+so changing source-file timestamps or non-executable permission bits does not
+create another copy of an otherwise unchanged package.
 
 Successful tool checks are persisted under `~/.octop/company-runtime/tool-checks/`
 (or the configured `OCTOP_HOME`). Later launches reuse that result, reading only
@@ -217,6 +233,22 @@ that fails to start invalidates its receipt for the next attempt. Existing
 installations perform one complete check to create the receipt. The **Check
 tools** button in local workspace settings explicitly repeats the full check;
 ordinary startup and status refreshes reuse the cache.
+
+After successful preparation, background maintenance retains the current tool
+payload and one recently used rollback payload. Versions leased by another
+client, or used by a detected legacy worker, remain until a later launch after
+those clients exit. Install/repair and collection share a cross-process lock;
+repairing a leased payload requires closing the clients using it. Cleanup does
+not block the prepared worker from starting and never removes account receipts
+or project files.
+
+The tools directory may be a symlink to an external disk. Locks follow its real
+location, and cleanup covers both the new per-payload bytecode prefixes and old
+`~/.octop/pyc` subtrees for removed tools, including paths from before relocation.
+Unrelated Python caches are retained. Failed installation attempts remove their
+staging directory; abandoned `.new` directories older than 24 hours and interrupted
+collection directories are reclaimed on subsequent successful launches. If the
+process inventory is unavailable, maintenance is deferred.
 
 The runtime requires Harness 1.0.3 and Gateway 1.0.2 or later, as specified by
 the source dependencies. Rebuild the company runtime payload and native shell

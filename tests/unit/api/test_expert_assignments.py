@@ -119,6 +119,9 @@ async def test_assignments_keep_owned_legacy_history_visible_without_execution(a
         last_active=123,
     )
     env.actor["user"] = env.employee
+    env.server.services.agent_repo.update_config(
+        "old", config_json='{"shared_template_id":"source"}'
+    )
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=env.app), base_url="http://test"
     ) as client:
@@ -128,6 +131,7 @@ async def test_assignments_keep_owned_legacy_history_visible_without_execution(a
     payloads = {p["agent_id"]: p for p in response.json()}
     assert set(payloads) == {"old", "source"}
     assert payloads["old"]["history_only"] is True
+    assert payloads["old"]["continuation_agent_id"] == "source"
     assert payloads["old"]["requires_private_instance"] is False
     assert detail.status_code == 200
     assert detail.json()["history_only"] is True

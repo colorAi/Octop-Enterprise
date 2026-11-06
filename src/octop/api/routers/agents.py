@@ -231,8 +231,13 @@ def _row_dict(
                 else access.assigned_only(viewer_user_id)
             )
             if unavailable:
+                from octop.infra.users.personal_history import personal_successor
+
                 payload.update(
                     history_only=True,
+                    continuation_agent_id=personal_successor(
+                        services, viewer_user_id, row.agent_id
+                    ),
                     managed=False,
                     can_edit=False,
                     requires_private_instance=False,

@@ -102,4 +102,6 @@ OCTOP_GREEN_OFFLINE=1 bash desktop/portable/package.sh
 
 ## 桌面壳
 
+企业工具环境还需补齐同架构 FFmpeg/FFprobe、pandas 等材料；本目录脚本不自动完成企业运行时的全部准备。完整步骤、Git 前提及 Windows/Mac 命令见[中文客户端构建指南](../../docs/client-build.md)。
+
 当前桌面客户端使用 Wails，构建入口见[桌面说明](../README.md)。基础模式壳消费 `Octop-portable-<plat>-<version>.zip`；企业员工安装包使用单独验证的企业工具 payload，由 `desktop/package-company.py` 打包，不能以基础绿色包代替。

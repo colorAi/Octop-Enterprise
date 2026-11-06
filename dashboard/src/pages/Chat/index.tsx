@@ -93,7 +93,7 @@ import {
   ChatToolDockProvider,
   dockTabIdForToolCall,
 } from "./ChatToolDockContext";
-import { ProjectBar } from "./components/ProjectNavigation";
+import ComposerProjectPicker from "./components/ComposerProjectPicker";
 import { useDesktopProjects } from "../../context/DesktopProjectsContext";
 import ChatSidebarPanel from "./components/ChatSidebarPanel";
 import ChatTitleBar from "./components/ChatTitleBar";
@@ -110,6 +110,7 @@ import { useMemoryMaintenance } from "./hooks/useMemoryMaintenance";
 import MemoryMaintenanceBanner from "./components/MemoryMaintenanceBanner";
 import { useHistoryMigration } from "./hooks/useHistoryMigration";
 import HistoryMigrationBanner from "./components/HistoryMigrationBanner";
+import HistoryContinuation from "./components/HistoryContinuation";
 import { apiErrorMessage } from "../../utils/apiError";
 import PwaInstallPrompt from "../../components/PwaInstallPrompt";
 import { promptNeedsUserInput } from "../../utils/quickInputPrefill";
@@ -1364,10 +1365,11 @@ function ChatPageInner() {
         handleSelectSession(sessionId);
       }}
       onAgentSelect={navigateToAgent}
-      onNewChatWithAgent={(agentId) => {
+      onNewChatWithAgent={(agentId, selectedProjectId) => {
         clearQueued();
         const projectId = desktopProjects.state?.current_project_id;
-        if (projectId)
+        // Project rows already selected and remembered their explicit project.
+        if (projectId && !selectedProjectId)
           void desktopProjects.select({
             project_id: projectId,
             agent_id: agentId,
@@ -1580,6 +1582,26 @@ function ChatPageInner() {
                 >
                   <MessageList
                     messages={messages}
+                    footerContent={
+                      companyHistoryReadOnly &&
+                      activeThreadId &&
+                      resolvedAgentId ? (
+                        <HistoryContinuation
+                          key={`${resolvedAgentId}:${activeThreadId}`}
+                          agentId={resolvedAgentId}
+                          threadId={activeThreadId}
+                          recommendedAgentId={
+                            activeAgent?.continuation_agent_id
+                          }
+                          onContinued={(agent, thread) => {
+                            setActiveAgent(agent);
+                            navigate(`/chat/${agent}/${thread}`, {
+                              replace: true,
+                            });
+                          }}
+                        />
+                      ) : null
+                    }
                     agentId={resolvedAgentId}
                     composerLookups={composerLookups}
                     loading={awaitingThreadHistory}
@@ -1860,22 +1882,6 @@ function ChatPageInner() {
                 </div>
               </div>
             ) : null}
-            {companyHistoryReadOnly && (
-              <Alert
-                type="info"
-                showIcon
-                message={
-                  activeAgent?.history_only
-                    ? t("expertAccess.historyOnlyHint")
-                    : "此会话的历史由服务器执行，仅供查看。请新建会话开始本机任务。"
-                }
-                action={
-                  activeAgent?.history_only ? undefined : (
-                    <Button onClick={handleNewChat}>新建本机会话</Button>
-                  )
-                }
-              />
-            )}
             <div className={styles.todoProgressDock}>
               <div className={styles.todoProgressDockInner}>
                 <ComposerTodoProgress
@@ -1886,16 +1892,14 @@ function ChatPageInner() {
                 />
               </div>
             </div>
-            <ProjectBar
-              threadId={activeThreadId}
-              onChoose={() => {
-                void desktopProjects.choose().then((next) => {
-                  if (next?.current_project_id && !next.cancelled)
-                    handleNewChat();
-                });
-              }}
-            />
             <ChatInput
+              projectPicker={
+                <ComposerProjectPicker
+                  threadId={activeThreadId}
+                  agentId={resolvedAgentId}
+                  onProjectChange={handleNewChat}
+                />
+              }
               key={
                 activeThreadId ||
                 desktopProjects.state?.current_project_id ||

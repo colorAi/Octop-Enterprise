@@ -69,7 +69,7 @@ def check_manifests(root: Path) -> None:
                 "company_protocol_version",
             )
         )
-        if identity[0] != identity[1] or identity[4:] != ("1.0.2", 2, 1):
+        if identity[0] != identity[1] or identity[4:] != ("1.0.3", 2, 1):
             raise ValueError(f"Incompatible release manifest: {path}")
         for key in ("octop_version", "source_commit", "python_source_sha256"):
             if record[key] != expected_release[key]:

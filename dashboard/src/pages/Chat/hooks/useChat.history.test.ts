@@ -12,6 +12,124 @@ afterEach(() => {
 });
 
 describe("history failures", () => {
+  it("discards an older refresh from another hook after a newer read finishes", async () => {
+    chatStore.setHistoryPage(
+      thread,
+      [{ id: "cached", role: "user", content: "cached", timestamp: 1 }],
+      { hasMore: false, nextOffset: 1 },
+    );
+    const replies: Array<
+      (value: Awaited<ReturnType<typeof octopThreadsApi.history>>) => void
+    > = [];
+    vi.spyOn(octopThreadsApi, "history").mockImplementation(
+      () => new Promise((resolve) => replies.push(resolve)),
+    );
+    const first = renderHook(() => useChat(thread, "agent"));
+    const second = renderHook(() => useChat(thread, "agent"));
+    let oldRead!: Promise<void>;
+    let newRead!: Promise<void>;
+    await act(async () => {
+      oldRead = first.result.current.refreshHistory();
+    });
+    await act(async () => {
+      newRead = second.result.current.refreshHistory();
+    });
+    expect(replies).toHaveLength(2);
+    await act(async () => {
+      replies[1]({
+        thread_id: thread,
+        messages: [{ id: "new", role: "user", content: "new" }],
+        has_more: true,
+        next_cursor: "new-cursor",
+      });
+      await newRead;
+      replies[0]({
+        thread_id: thread,
+        messages: [{ id: "old", role: "user", content: "old" }],
+        has_more: false,
+      });
+      await oldRead;
+    });
+    expect(
+      chatStore.getSnapshot(thread).messages.map((m) => m.content),
+    ).toEqual(["new"]);
+    expect(chatStore.getSnapshot(thread).historyNextCursor).toBe("new-cursor");
+    expect(first.result.current.historyRefreshing).toBe(false);
+    expect(second.result.current.historyRefreshing).toBe(false);
+  });
+
+  it("discards pagination superseded by a refresh and keeps the new cursor", async () => {
+    chatStore.setHistoryPage(
+      thread,
+      [{ id: "anchor", role: "user", content: "anchor", timestamp: 1 }],
+      { hasMore: true, nextOffset: 25, nextCursor: "old-cursor" },
+    );
+    let completeOlder!: (
+      value: Awaited<ReturnType<typeof octopThreadsApi.history>>,
+    ) => void;
+    vi.spyOn(octopThreadsApi, "history")
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            completeOlder = resolve;
+          }),
+      )
+      .mockResolvedValueOnce({
+        thread_id: thread,
+        messages: [{ id: "latest", role: "user", content: "latest" }],
+        has_more: true,
+        next_cursor: "new-cursor",
+      });
+    const { result } = renderHook(() => useChat(thread, "agent"));
+    let paging!: Promise<boolean>;
+    await act(async () => {
+      paging = result.current.loadMoreHistory();
+    });
+    await act(async () => {
+      await result.current.refreshHistory();
+    });
+    await act(async () => {
+      completeOlder({
+        thread_id: thread,
+        messages: [{ id: "obsolete", role: "user", content: "obsolete" }],
+        has_more: false,
+      });
+      expect(await paging).toBe(false);
+    });
+    expect(result.current.messages.map((m) => m.content)).toEqual(["latest"]);
+    expect(chatStore.getSnapshot(thread).historyNextCursor).toBe("new-cursor");
+    expect(result.current.historyLoadingMore).toBe(false);
+  });
+
+  it("does not resurrect messages after the session is removed and recreated", async () => {
+    let complete!: (
+      value: Awaited<ReturnType<typeof octopThreadsApi.history>>,
+    ) => void;
+    vi.spyOn(octopThreadsApi, "history").mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          complete = resolve;
+        }),
+    );
+    const { result } = renderHook(() => useChat(thread, "agent"));
+    let pending!: Promise<void>;
+    await act(async () => {
+      pending = result.current.loadHistory(thread);
+    });
+    await act(async () => {
+      chatStore.removeSession(thread);
+      chatStore.setHistoryPage(thread, [], { hasMore: false, nextOffset: 0 });
+      complete({
+        thread_id: thread,
+        messages: [{ id: "removed", role: "user", content: "removed" }],
+        has_more: true,
+      });
+      await pending;
+    });
+    expect(chatStore.getSnapshot(thread).messages).toEqual([]);
+    expect(chatStore.getSnapshot(thread).historyHasMore).toBe(false);
+  });
+
   it("discards a history refresh started before an edited message replaces its branch", async () => {
     chatStore.setHistoryPage(
       thread,

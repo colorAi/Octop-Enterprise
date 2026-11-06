@@ -98,3 +98,28 @@ it("forks the source conversation even when another project is selected", async 
   );
   expect(request).not.toHaveBeenCalled();
 });
+
+it("continues with the selected expert and folder without sending transcript data from the UI", async () => {
+  const resume = vi
+    .fn()
+    .mockResolvedValue({ thread_id: "continued", agent_id: "new" });
+  window.__octopRuntime = {
+    projects: { continue: resume },
+  } as unknown as DesktopRuntimeBridge;
+  await octopThreadsApi.continue("old", "old-chat", "new", "A");
+  expect(resume).toHaveBeenCalledWith({
+    source_thread_id: "old-chat",
+    agent_id: "new",
+    project_id: "A",
+    thread_id: expect.stringMatching(/^thr_/),
+  });
+  expect(request).not.toHaveBeenCalled();
+});
+
+it("never falls back to server execution when an older desktop lacks continuation support", async () => {
+  window.__octopRuntime = { projects: {} } as unknown as DesktopRuntimeBridge;
+  await expect(
+    octopThreadsApi.continue("old", "old-chat", "new", "A"),
+  ).rejects.toThrow("history_continuation_client_required");
+  expect(request).not.toHaveBeenCalled();
+});

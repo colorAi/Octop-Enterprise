@@ -48,6 +48,7 @@ export interface GroupInfo {
   my_role?: "owner" | "admin" | "member";
 }
 export interface GroupMember extends CommunicationUser {
+  archived?: boolean;
   membership_source?: "automatic" | "invited";
   granted_by?: string | null;
   role?: "owner" | "admin" | "member";

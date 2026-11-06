@@ -8,7 +8,11 @@ from octop.infra.db.pool import SqlitePool
 from octop.infra.db.services import build_shared_services
 from octop.infra.errors import OctopError
 from octop.infra.users.expert_access import ExpertAccess
-from octop.infra.users.personal_history import legacy_personal_files, personal_predecessors
+from octop.infra.users.personal_history import (
+    legacy_personal_files,
+    personal_predecessors,
+    personal_successor,
+)
 from octop.infra.utils.paths import PathLayout
 
 
@@ -43,6 +47,37 @@ def test_old_accounts_stay_legacy_new_accounts_wait_for_assignment(access_env):
     with pytest.raises(OctopError, match="resource_not_assigned"):
         env.access.assert_use(fresh, "source")
     assert env.access.assert_create(env.employee) is False
+
+
+def test_history_successor_follows_identity_and_current_grants_without_restoring_old_access(
+    access_env,
+):
+    env = access_env
+    env.access.save(env.admin, env.employee, ["source"], "assigned_only", 0, 1)
+    env.services.agent_repo.update_config("old", config_json='{"shared_template_id":"source"}')
+    assert personal_successor(env.services, env.employee, "old") == "source"
+    assert personal_successor(env.services, env.other, "old") is None
+    identity = env.access.repo.reserve(env.employee, "source")["instance_agent_id"]
+    env.services.agent_repo.create(agent_id=identity, user_id=env.employee, name="managed")
+    env.access.repo.finish_instance(identity, ready=True)
+    assert personal_successor(env.services, env.employee, "old") == identity
+    with pytest.raises(OctopError):
+        env.access.assert_use(env.employee, "old")
+    env.access.save(env.admin, env.employee, ["source2"], "assigned_only", 1, 1)
+    assert personal_successor(env.services, env.employee, "old") is None
+    assert personal_successor(env.services, env.employee, identity) is None
+
+
+def test_history_successor_does_not_guess_display_names_or_ambiguous_templates(access_env):
+    env = access_env
+    env.access.save(env.admin, env.employee, ["source", "source2"], "assigned_only", 0, 1)
+    assert personal_successor(env.services, env.employee, "old") is None
+    with env.db.transaction() as conn:
+        conn.execute("UPDATE agents SET template_name='general' WHERE agent_id IN ('old','source')")
+    assert personal_successor(env.services, env.employee, "old") == "source"
+    with env.db.transaction() as conn:
+        conn.execute("UPDATE agents SET template_name='general' WHERE agent_id='source2'")
+    assert personal_successor(env.services, env.employee, "old") is None
 
 
 def test_personal_memory_continuity_requires_unique_same_owner_predecessor(access_env):

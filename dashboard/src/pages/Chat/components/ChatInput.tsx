@@ -7,6 +7,7 @@ import {
   useMemo,
   forwardRef,
   useImperativeHandle,
+  type ReactNode,
 } from "react";
 import { useTranslation } from "react-i18next";
 import { App } from "antd";
@@ -74,6 +75,7 @@ export interface ChatInputHandle {
 }
 
 interface ChatInputProps {
+  projectPicker?: ReactNode;
   onSend: (text: string, attachments?: ChatAttachment[]) => void;
   /** Queue a message while the current turn is still streaming. */
   onQueue?: (item: EnqueueChatItemInput) => "ok" | "empty" | "full";
@@ -149,6 +151,7 @@ interface ChatInputProps {
 const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
   function ChatInput(
     {
+      projectPicker,
       onSend,
       onQueue,
       queuedItems = [],
@@ -621,7 +624,7 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
       },
       [
         agentId,
-        threadId,
+        draftThreadId,
         clearAttachments,
         MIN_TEXTAREA_HEIGHT,
         initialText,
@@ -690,6 +693,7 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
       reasoningEffort,
       defaultModel,
       t,
+      antMessage,
     ]);
 
     submitRef.current = submitMessage;
@@ -761,6 +765,7 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
         onModelChange,
         onReasoningChange,
         availableAgents,
+        modal,
       ],
     );
 
@@ -859,6 +864,7 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
       disabled,
       selectedModel,
       t,
+      antMessage,
     ]);
 
     const canSend = Boolean(
@@ -1001,6 +1007,7 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
           )}
 
           <ChatInputActionsRow
+            projectPicker={projectPicker}
             isMobile={isMobile}
             isStreaming={isStreaming || holdSend}
             isTeam={isTeam}

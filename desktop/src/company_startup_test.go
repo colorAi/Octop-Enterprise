@@ -23,10 +23,14 @@ import (
 	"octop.desktop/internal/company"
 )
 
-func startupTestApp(t *testing.T) *App {
+func startupTestApp(t *testing.T, api ...http.Handler) *App {
 	t.Helper()
 	t.Setenv("OCTOP_HOME", t.TempDir())
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if len(api) > 0 && r.URL.Path != "/api/devices/ws" {
+			api[0].ServeHTTP(w, r)
+			return
+		}
 		conn, err := websocket.Accept(w, r, nil)
 		if err != nil {
 			return

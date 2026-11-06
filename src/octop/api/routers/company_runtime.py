@@ -44,6 +44,7 @@ class Capabilities(Document):
         "events",
         "project_catalog_v1",
         "multi_project_v1",
+        "history_continuation_v1",
     ]
 
 
@@ -209,6 +210,28 @@ async def fork_project_thread(
 
 class ProjectAdopt(ProjectIdentity):
     thread_id: str = Field(pattern=ID)
+
+
+class ProjectContinue(ProjectThreadCreate):
+    source_thread_id: str = Field(pattern=ID, description="Employee-owned history to continue")
+
+
+class ProjectContinued(ProjectThreadCreated):
+    copied_messages: int
+
+
+@router.post(
+    "/projects/{project_id}/continue",
+    response_model=ProjectContinued,
+    summary="Continue owned history with a currently assigned expert in this project",
+    description="Copies the complete transcript into a fresh desktop checkpoint; preserves the original conversation and never resumes its pending tools.",
+)
+async def continue_project_thread(
+    project_id: str, body: ProjectContinue, svc: CompanyRuntimeService = Depends(service)
+) -> Any:
+    return await CompanyProjectService(svc, body.installation_token).continue_thread(
+        project_id, body.source_thread_id, body.thread_id, body.agent_id
+    )
 
 
 @router.post(

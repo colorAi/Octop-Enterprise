@@ -4,41 +4,81 @@ function textOf(message: ChatMessage): string {
   return (message.content || "").trim();
 }
 
-function lastUserIndex(messages: ChatMessage[]): number {
-  for (let i = messages.length - 1; i >= 0; i--) {
-    if (messages[i].role === "user") return i;
+/** First locally created user message the server page has not acknowledged. */
+function newSendIndex(current: ChatMessage[], loadedIds: Set<string>): number {
+  return current.findIndex(
+    (message) =>
+      message.role === "user" &&
+      message.localPending &&
+      !loadedIds.has(message.id),
+  );
+}
+
+/** Retain older pages only when their persisted boundary overlaps the new page. */
+export function retainedHistoryPrefix(
+  loaded: ChatMessage[],
+  current: ChatMessage[],
+): ChatMessage[] {
+  const ids = new Set(loaded.map((message) => message.id));
+  const overlap = current.findIndex((message) => ids.has(message.id));
+  if (overlap <= 0 || current[overlap].localPending) return [];
+  const prefix = current.slice(0, overlap);
+  return prefix.every(
+    (message) => !message.localPending && message.status !== "streaming",
+  )
+    ? prefix
+    : [];
+}
+
+function assistantSize(messages: ChatMessage[]): number {
+  return messages.reduce(
+    (size, message) =>
+      message.role !== "assistant" || message.toolData
+        ? size
+        : size +
+          message.content.length +
+          (message.contentBlocks ?? []).reduce(
+            (sum, block) =>
+              sum + (block.type === "text" ? (block.content || "").length : 0),
+            0,
+          ),
+    0,
+  );
+}
+
+/** Reconcile optimistic users on servers that assign their own message IDs. */
+function reconcilePendingUsers(
+  loaded: ChatMessage[],
+  current: ChatMessage[],
+): ChatMessage[] {
+  const reconciled = [...current];
+  let before = loaded.length;
+  for (let i = current.length - 1; i >= 0; i--) {
+    const local = current[i];
+    if (local.role !== "user") continue;
+    let match = loaded.findIndex((message) => message.id === local.id);
+    if (match >= before) continue;
+    // Preserve the existing text/time fallback, restricted to explicit local
+    // sends. Consume each server turn once, in order, including partial saves.
+    if (match < 0 && local.localPending && textOf(local)) {
+      for (let j = before - 1; j >= 0; j--) {
+        const server = loaded[j];
+        if (
+          server.role === "user" &&
+          textOf(server) === textOf(local) &&
+          (!server.timestamp || local.timestamp <= server.timestamp + 1000)
+        ) {
+          match = j;
+          break;
+        }
+      }
+    }
+    if (match < 0) continue;
+    before = match;
+    if (local.localPending)
+      reconciled[i] = { ...local, id: loaded[match].id, localPending: false };
   }
-  return -1;
-}
-
-/** Local turn still on screen: from the latest user message through the end. */
-function inFlightTail(current: ChatMessage[]): ChatMessage[] {
-  const idx = lastUserIndex(current);
-  if (idx < 0) return current;
-  return current.slice(idx);
-}
-
-/**
- * True when `base` already ends with this local turn (server persisted it
- * under different ids). A later send of the same text is kept.
- */
-function sameTurnAlreadyLoaded(
-  base: ChatMessage[],
-  tail: ChatMessage[],
-): boolean {
-  const tailUserIdx = lastUserIndex(tail);
-  if (tailUserIdx < 0) return false;
-  const tailUser = tail[tailUserIdx];
-  const tailText = textOf(tailUser);
-  if (!tailText) return false;
-  const baseUserIdx = lastUserIndex(base);
-  if (baseUserIdx < 0) return false;
-  const baseUser = base[baseUserIdx];
-  if (textOf(baseUser) !== tailText) return false;
-  const baseTs = baseUser.timestamp || 0;
-  const tailTs = tailUser.timestamp || 0;
-  if (baseTs > 0 && tailTs > baseTs + 1000) return false;
-  return true;
+  return reconciled;
 }
 
 /**
@@ -46,25 +86,27 @@ function sameTurnAlreadyLoaded(
  *
  * Opening an old thread fetches history before the optimistic bubble exists.
  * The response then replaces the list and the bubble vanishes, while the
- * WebSocket turn keeps running. Messages after the last shared id are that
- * local turn and stay on screen until the server page already includes them.
+ * WebSocket turn keeps running. Explicit pending sends stay on screen until
+ * the server page includes them; unrelated cached turns do not append.
  */
 export function mergeHistoryWithLocalTail(
   loaded: ChatMessage[],
   current: ChatMessage[],
+  isStreaming = false,
 ): ChatMessage[] {
   if (current.length === 0) return loaded;
-  if (loaded.length === 0) return current;
 
+  const olderPrefix = retainedHistoryPrefix(loaded, current);
+  current = reconcilePendingUsers(loaded, current);
   const loadedIds = new Set(loaded.map((message) => message.id));
   const firstOverlap = current.findIndex((message) =>
     loadedIds.has(message.id),
   );
 
   if (firstOverlap < 0) {
-    const tail = inFlightTail(current);
-    if (sameTurnAlreadyLoaded(loaded, tail)) return loaded;
-    return [...loaded, ...tail];
+    const pending = newSendIndex(current, loadedIds);
+    if (pending < 0) return loaded;
+    return [...loaded, ...current.slice(pending)];
   }
 
   let lastOverlap = firstOverlap;
@@ -75,15 +117,29 @@ export function mergeHistoryWithLocalTail(
     }
   }
 
-  const olderPrefix = current.slice(0, firstOverlap);
   const localTail = current.slice(lastOverlap + 1);
   const base = [...olderPrefix, ...loaded];
   if (localTail.length === 0) return base;
+
+  const pending = newSendIndex(localTail, loadedIds);
+  if (pending >= 0) {
+    return [...base, ...localTail.slice(pending)];
+  }
+  // A cached user row absent from the page is not proof of a newer turn.
+  if (localTail.some((message) => message.role === "user")) return base;
 
   const overlapId = current[lastOverlap].id;
   const loadedOverlap = loaded.findIndex((message) => message.id === overlapId);
   const serverAfter = loadedOverlap >= 0 ? loaded.slice(loadedOverlap + 1) : [];
   if (serverAfter.length === 0) return [...base, ...localTail];
-  if (sameTurnAlreadyLoaded(serverAfter, localTail)) return base;
-  return [...base, ...localTail];
+  const live =
+    isStreaming || localTail.some((message) => message.status === "streaming");
+  if (
+    live &&
+    !serverAfter.some((message) => message.role === "user") &&
+    assistantSize(localTail) > assistantSize(serverAfter)
+  ) {
+    return [...base.slice(0, base.length - serverAfter.length), ...localTail];
+  }
+  return base;
 }

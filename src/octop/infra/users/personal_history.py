@@ -69,3 +69,42 @@ def legacy_personal_files(services: Any, user_id: int, agent_id: str) -> dict[st
             continue
         result[name] = path.read_text(encoding="utf-8")
     return result
+
+
+def personal_successor(services: Any, user_id: int, agent_id: str) -> str | None:
+    """Recommend the current instance only when the expert identity is unambiguous."""
+    repo = services.expert_assignment_repo
+    old = services.agent_repo.get(agent_id)
+    if old is None or old.user_id != user_id:
+        return None
+    previous = repo.instance(agent_id)
+    source_id = (
+        previous["source_agent_id"]
+        if previous
+        else json.loads(old.config_json or "{}").get("shared_template_id")
+    )
+    mappings = {m["source_agent_id"]: m for m in repo.instances(user_id)}
+    granted = [
+        source
+        for source in (repo.state(user_id) or {}).get("expert_ids", [])
+        if repo.granted(user_id, source)
+    ]
+    if source_id not in granted:
+        # Match template identity, never a display name. Ambiguity requires a choice.
+        if source_id or not old.template_name:
+            return None
+        sources = [services.agent_repo.get(source) for source in granted]
+        matches = [
+            row.agent_id for row in sources if row and row.template_name == old.template_name
+        ]
+        old_matches = [
+            row
+            for row in services.agent_repo.list_by_user(user_id)
+            if row.template_name == old.template_name and repo.instance(row.agent_id) is None
+        ]
+        if len(matches) != 1 or len(old_matches) != 1:
+            return None
+        source_id = matches[0]
+    mapping = mappings.get(source_id)
+    result = mapping["instance_agent_id"] if mapping and mapping["state"] == "ready" else source_id
+    return str(result) if result else None

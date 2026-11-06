@@ -6759,6 +6759,13 @@
     "sendBlocked": "当前无法发送消息，请检查部门、账号权限或群禁言状态。",
     "remove": "移除",
     "compose": "输入消息…",
+    "mentionColleague": "@同事",
+    "mentionMember": "@{{name}}",
+    "mentionMemberUnavailable": "这位同事已不在群中或账号不可用，无法艾特。",
+    "loadingMembers": "正在加载群成员…",
+    "noMatchingMembers": "没有匹配的群成员",
+    "mentionLimit": "每条消息最多 @ 50 位同事",
+    "mentionedYou": "@我",
     "enterHint": "Enter 发送，Shift + Enter 换行",
     "send": "发送",
     "chooseConversations": "选择目标会话",
@@ -6909,7 +6916,7 @@
   },
   "expertAccess": {
     "historyOnly": "历史",
-    "historyOnlyHint": "此专家保留了你以前的会话和记忆，仅供查看。继续工作请选择当前已分配的专家。",
+    "historyOnlyHint": "此会话保留了历史记录和记忆，可以选择当前已分配的专家继续对话。",
     "source": "专家资源来源",
     "selectSource": "选择提供专家的管理员",
     "sourceHint": "选择管理员已安装的专家供员工分配。新安装不会自动授权员工；设置来源后，新员工等待分配。更换来源前请先收回已有分配。",
@@ -7078,5 +7085,12 @@
     "noneAssigned": "尚未分配模型，该员工暂时无法使用模型。",
     "loadFailed": "加载模型分配失败",
     "partialSaveFailed": "部分员工设置已保存，但模型分配未完成。请重新打开设置，核对后重试。"
+  },
+  "historyContinue": {
+    "action": "用新专家继续对话",
+    "noExpert": "暂无可用专家，请联系管理员分配。",
+    "failed": "暂时无法继续，请确认当前专家可用、原任务已结束后重试。",
+    "updateClient": "请更新客户端后继续此对话。",
+    "updateServer": "请更新公司服务器后继续此对话。"
   }
 }

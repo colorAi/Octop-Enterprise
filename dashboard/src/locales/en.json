@@ -6759,6 +6759,13 @@
     "sendBlocked": "Sending is unavailable. Check department access, account permissions or group mute status.",
     "remove": "Remove",
     "compose": "Write a message…",
+    "mentionColleague": "Mention a colleague",
+    "mentionMember": "@{{name}}",
+    "mentionMemberUnavailable": "This colleague has left the group or their account is unavailable.",
+    "loadingMembers": "Loading group members…",
+    "noMatchingMembers": "No matching group members",
+    "mentionLimit": "You can mention up to 50 colleagues per message",
+    "mentionedYou": "Mentioned you",
     "enterHint": "Enter to send, Shift + Enter for a new line",
     "send": "Send",
     "chooseConversations": "Choose destination conversations",
@@ -6909,7 +6916,7 @@
   },
   "expertAccess": {
     "historyOnly": "History",
-    "historyOnlyHint": "Your earlier conversations and memories are retained here for viewing. Select a currently assigned expert to continue working.",
+    "historyOnlyHint": "Your conversations and memories are retained. Select a currently assigned expert to continue the conversation.",
     "source": "Expert resource source",
     "selectSource": "Select the source administrator",
     "sourceHint": "Assign experts installed by this administrator. New installations do not grant access automatically. New employees wait for assignment after a source is configured. Revoke existing assignments before changing the source.",
@@ -7078,5 +7085,12 @@
     "noneAssigned": "No models are assigned. This employee cannot use models yet.",
     "loadFailed": "Failed to load model assignments",
     "partialSaveFailed": "Some employee settings were saved, but model assignment failed. Reopen settings, review and retry."
+  },
+  "historyContinue": {
+    "action": "Continue with a new expert",
+    "noExpert": "No expert is available. Ask your administrator to assign one.",
+    "failed": "Unable to continue. Check that the expert is available and the original task has finished, then retry.",
+    "updateClient": "Update the client to continue this conversation.",
+    "updateServer": "Update the company server to continue this conversation."
   }
 }

@@ -15,6 +15,9 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"time"
+
+	"octop.desktop/internal/companytools"
 )
 
 type companyManifest struct {
@@ -172,8 +175,10 @@ type companyPortableKey struct {
 
 type companyPortableCache struct {
 	sync.Mutex
-	key  companyPortableKey
-	root string
+	key         companyPortableKey
+	root        string
+	leases      map[string]*os.File
+	maintenance sync.WaitGroup
 }
 
 var readyCompanyPortable companyPortableCache
@@ -202,7 +207,19 @@ func ensureCompanyPortable() (string, error) {
 	if err != nil {
 		return "", errors.New("此客户端未包含本地 Python、文档和 FFmpeg 工具包，请安装完整企业客户端；通讯录和员工聊天仍可使用")
 	}
-	return readyCompanyPortable.prepare(zipPath, octopHome(), prepareCompanyPortable)
+	return readyCompanyPortable.prepare(zipPath, octopHome(), func(zipPath, home string) (string, error) {
+		root, err := prepareCompanyPortableManaged(zipPath, home, validateCompanyRuntime, readyCompanyPortable.pin)
+		if err == nil {
+			// Large legacy caches can take time to remove, especially on external
+			// disks. The pinned current runtime is ready before collection starts.
+			readyCompanyPortable.maintenance.Add(1)
+			go func() {
+				defer readyCompanyPortable.maintenance.Done()
+				pruneCompanyTools(home, root)
+			}()
+		}
+		return root, err
+	})
 }
 
 func prepareCompanyPortable(zipPath, home string) (string, error) {
@@ -210,6 +227,36 @@ func prepareCompanyPortable(zipPath, home string) (string, error) {
 }
 
 func prepareCompanyPortableChecked(zipPath, home string, validate func(string) error) (string, error) {
+	return prepareCompanyPortableManaged(zipPath, home, validate, nil)
+}
+
+func prepareCompanyPortableManaged(zipPath, home string, validate func(string) error, pin func(string) error) (string, error) {
+	guard, tools, err := lockCompanyTools(home, 45*time.Second)
+	if err != nil {
+		return "", err
+	}
+	defer guard.Close()
+	root, err := prepareCompanyPortableLocked(zipPath, home, tools, validate)
+	if err != nil {
+		return "", err
+	}
+	if pin != nil {
+		if err = pin(root); err != nil {
+			return "", err
+		}
+	}
+	// Record use outside the verified payload: touching the runtime root would
+	// invalidate its fast startup stamp on every launch.
+	stamp := companyToolLock(tools, filepath.Base(root))
+	if file, err := os.OpenFile(stamp, os.O_CREATE|os.O_RDWR, 0600); err == nil {
+		file.Close()
+		now := time.Now()
+		_ = os.Chtimes(stamp, now, now)
+	}
+	return root, nil
+}
+
+func prepareCompanyPortableLocked(zipPath, home, tools string, validate func(string) error) (string, error) {
 	archive, err := companyArchiveStamp(zipPath)
 	if err != nil {
 		return "", err
@@ -240,18 +287,37 @@ func prepareCompanyPortableChecked(zipPath, home string, validate func(string) e
 	if err = verifyCompanyZip(zipPath); err != nil {
 		return "", err
 	}
+	lease, err := companytools.Lock(companyToolLock(tools, digest), true, 0)
+	if errors.Is(err, companytools.ErrBusy) {
+		return "", errors.New("工具包正在被其他客户端使用，请退出客户端后重试")
+	}
+	if err != nil {
+		return "", err
+	}
+	defer lease.Close()
+	if _, err := os.Stat(root); err == nil {
+		commands, err := companytools.Commands()
+		if err != nil {
+			return "", err
+		}
+		if companyActiveTools(home, tools, commands)[digest] {
+			return "", errors.New("工具包仍有任务在运行，请退出客户端后重试")
+		}
+	}
 	next := root + ".new"
+	defer os.RemoveAll(next)
 	if err = unzipGreen(zipPath, next); err != nil {
 		return "", err
 	}
 	if err = validate(next); err != nil {
-		_ = os.RemoveAll(next)
 		return "", err
 	}
 	if err = os.MkdirAll(filepath.Dir(root), 0700); err != nil {
 		return "", err
 	}
-	_ = os.RemoveAll(root)
+	if err = os.RemoveAll(root); err != nil {
+		return "", err
+	}
 	if err = os.Rename(next, root); err != nil {
 		return "", err
 	}
