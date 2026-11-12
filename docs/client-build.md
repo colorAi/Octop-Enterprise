@@ -1,6 +1,6 @@
 # Octop Enterprise 客户端构建
 
-本指南对应源码版本 **1.0.1b3**。企业安装包包含桌面程序、登录页、完整界面和本机工具环境。员工安装后填写企业服务器地址，无需自行安装 Python。
+本指南对应源码版本 **1.0.1b4**。企业安装包包含桌面程序、登录页、完整界面和本机工具环境。员工安装后填写企业服务器地址，无需自行安装 Python。
 
 服务端部署见[企业部署与恢复](../docker/enterprise/README.md)，员工操作见[企业客户端指南](enterprise-client.md)。英文及桌面开发细节见[桌面说明](../desktop/README.md)。
 
@@ -36,7 +36,7 @@ go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-beta.13
 ```sh
 git init
 git add .
-git commit -m "Import Octop Enterprise 1.0.1b3 source"
+git commit -m "Import Octop Enterprise 1.0.1b4 source"
 ```
 
 Git 用户名和邮箱使用构建者自己的配置；不需要推送。保存原源码包校验值和 `PUBLIC_SOURCE.json`，便于追溯。服务端 Docker 构建无需这一步。
@@ -98,7 +98,7 @@ python3 desktop/package-company.py --platform windows \
   --webview2-dir /absolute/webview2
 ```
 
-输出 `Octop-company-windows-amd64-1.0.1b3.exe`、`Octop-company-windows-arm64-1.0.1b3.exe`、`SHA256SUMS.txt` 和 `company-package-status.json`。x64 包供常见 Intel/AMD Windows 电脑使用，ARM64 包供 Windows ARM 电脑使用。
+输出 `Octop-company-windows-amd64-1.0.1b4.exe`、`Octop-company-windows-arm64-1.0.1b4.exe`、`SHA256SUMS.txt` 和 `company-package-status.json`。x64 包供常见 Intel/AMD Windows 电脑使用，ARM64 包供 Windows ARM 电脑使用。
 
 ## 生成 Mac 安装包
 

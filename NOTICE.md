@@ -6,7 +6,7 @@
 
 Octop Enterprise 基于 [TencentCloud/Octop](https://github.com/TencentCloud/Octop) 二次开发，保留上游 `Copyright (c) 2026 Octop` 及 MIT 许可正文。企业桌面本机执行、企业服务适配、内部通信等改造由 Octop Enterprise 贡献者维护；项目不代表腾讯官方企业发行。
 
-本项目基于上游 `eb280112`（1.0.2b6），并选择性移植了截至 `f79015b078c4d5d4c309a1bf6f3cd39ac06cc18f` 的部分变更。源码发行包中的 `PUBLIC_SOURCE.json` 记录导出时的源提交、工作树状态和逐文件摘要；上游提交用于标识来源范围，不表示完整合并。
+本项目基于上游 `eb280112`（1.0.2b6），并选择性移植了截至 `cd17e8d3551a22e6757f11e030879420243c089f`（1.0.3b5）的部分修复。源码发行包中的 `PUBLIC_SOURCE.json` 记录导出时的源提交、工作树状态和逐文件摘要。
 
 ## 自有通信服务
 

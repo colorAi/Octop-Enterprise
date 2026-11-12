@@ -315,19 +315,22 @@ class HitlChannelCoordinator:
         agent+user across many threads; without this guard a new chat's message
         would answer an ask still open on another thread.
         """
-        record = self._store.resolve_for_session(session_key, agent_id=agent_id)
-        if record is None or record.status != "pending":
+        inbound = (thread_id or "").strip()
+        pending = self._store.list_pending_for_session(session_key, agent_id=agent_id)
+        record = next(
+            (
+                row
+                for row in pending
+                if not inbound or inbound in (row.thread_id, row.resume_thread_id)
+            ),
+            None,
+        )
+        if record is None:
             return None
         if record.user_id != user_id:
             return None
         if not is_ask_action_requests(record.action_requests):
             return None
-        inbound = (thread_id or "").strip()
-        if inbound:
-            room_match = record.thread_id == inbound
-            member_match = bool(record.resume_thread_id) and record.resume_thread_id == inbound
-            if not room_match and not member_match:
-                return None
         return record
 
     @staticmethod

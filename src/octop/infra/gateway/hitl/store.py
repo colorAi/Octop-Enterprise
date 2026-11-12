@@ -17,9 +17,14 @@ def _same_pause_slot(
     existing: HitlPendingRecord,
     *,
     session_key: str,
+    thread_id: str,
     resume_agent_id: str | None,
 ) -> bool:
-    if existing.session_key != session_key or existing.status != "pending":
+    if (
+        existing.session_key != session_key
+        or existing.thread_id != thread_id
+        or existing.status != "pending"
+    ):
         return False
     if resume_agent_id:
         return existing.resume_agent_id == resume_agent_id
@@ -75,14 +80,15 @@ class HitlPendingStore:
         resume_agent_id: str | None = None,
     ) -> HitlPendingRecord:
         self._gc()
-        # A new pause replaces only the same slot. Two team members share the
-        # room session, so one member's card must not expire the other's.
+        # Dashboard threads share a session key. Team members also share the
+        # room thread, so a pause only replaces one in the same thread and member slot.
         # The same interrupt is often projected twice; reuse that pending id
         # so an automatic resume of the first frame is not already expired.
         for existing in list(self._records.values()):
             if not _same_pause_slot(
                 existing,
                 session_key=session_key,
+                thread_id=thread_id,
                 resume_agent_id=resume_agent_id,
             ):
                 continue
@@ -92,6 +98,7 @@ class HitlPendingStore:
             if not _same_pause_slot(
                 existing,
                 session_key=session_key,
+                thread_id=thread_id,
                 resume_agent_id=resume_agent_id,
             ):
                 continue

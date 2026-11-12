@@ -8,7 +8,7 @@
 
 Octop Enterprise is developed from [TencentCloud/Octop](https://github.com/TencentCloud/Octop), retaining upstream `Copyright (c) 2026 Octop` and the MIT license text. Enterprise desktop local execution, enterprise service adaptation, internal communication and other changes are maintained by Octop Enterprise contributors; the project is not an official Tencent enterprise release.
 
-This project is based on upstream `eb280112` (1.0.2b6), with selected changes up to `f79015b078c4d5d4c309a1bf6f3cd39ac06cc18f`. `PUBLIC_SOURCE.json` in the source release records the source commit, worktree state and per-file digests at export; upstream commits identify provenance, not a complete merge.
+This project is based on upstream `eb280112` (1.0.2b6), with selected fixes through `cd17e8d3551a22e6757f11e030879420243c089f` (1.0.3b5). `PUBLIC_SOURCE.json` in the source release records the source commit, worktree state and per-file digests at export.
 
 ## Own communication service
 

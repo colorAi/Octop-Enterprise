@@ -165,6 +165,59 @@ describe("mergeHistoryWithLocalTail", () => {
     );
   });
 
+  it.each([false, true])(
+    "puts a stored answer after its pending question (shared anchor: %s)",
+    (sharedAnchor) => {
+      const anchor = msg("anchor", "assistant", "previous answer", 1_000);
+      const older = msg("older", "assistant", "earlier history", 2_000);
+      const question = msg("local-user", "user", "question", 5_000);
+      const preamble = msg("local-a", "assistant", "working", 5_100);
+      const answer = msg("stored-a", "assistant", "answer", 5_200);
+      const loaded = sharedAnchor ? [anchor, older, answer] : [answer];
+      const current = sharedAnchor
+        ? [anchor, question, preamble]
+        : [question, preamble];
+
+      expect(mergeHistoryWithLocalTail(loaded, current, true)).toEqual(
+        sharedAnchor
+          ? [anchor, older, question, preamble, answer]
+          : [question, preamble, answer],
+      );
+    },
+  );
+
+  it("keeps a stored answer with its question when a later send is also pending", () => {
+    const older = msg("older", "assistant", "earlier history", 1_000);
+    const first = msg("local-first", "user", "first question", 5_000);
+    const answer = msg("stored-a", "assistant", "first answer", 5_200);
+    const second = msg("local-second", "user", "second question", 6_000);
+
+    expect(mergeHistoryWithLocalTail([older, answer], [first, second])).toEqual(
+      [older, first, answer, second],
+    );
+  });
+
+  it("keeps the pending question when the same incomplete page is refreshed again", () => {
+    const anchor = msg("anchor", "assistant", "previous answer", 1_000);
+    const question = msg("local-user", "user", "question", 5_000);
+    const answer = msg("stored-a", "assistant", "answer", 5_200);
+    const loaded = [anchor, answer];
+    const current = [anchor, question, answer];
+
+    expect(mergeHistoryWithLocalTail(loaded, current)).toEqual(current);
+  });
+
+  it("preserves timestamp-less rows on a page that includes earlier history", () => {
+    const older = msg("older", "assistant", "earlier history", 1_000);
+    const untimed = msg("untimed", "assistant", "earlier answer", 0);
+    const question = msg("local-user", "user", "question", 5_000);
+    const answer = msg("stored-a", "assistant", "answer", 5_200);
+
+    expect(
+      mergeHistoryWithLocalTail([older, untimed, answer], [question]),
+    ).toEqual([older, untimed, question, answer]);
+  });
+
   it("does not duplicate a turn the server already stored under new ids", () => {
     const loaded = [
       msg("old-a", "assistant", "之前的回复", 1_000),

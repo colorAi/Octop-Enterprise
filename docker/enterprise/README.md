@@ -4,7 +4,7 @@
 
 本指南适用于 Linux Docker Engine + Compose v2。基础单机模式使用 `docker/docker-compose.yml`。企业模式包含 Octop 控制面、Go 通信服务、两个 PostgreSQL 数据库和员工隔离工作区。客户端在员工电脑执行项目工具，服务器保留账号、模型授权、记忆、历史和恢复回执。
 
-本指南对应 Octop Enterprise **1.0.1b3**，依赖 Harness **1.0.3**，主数据库 schema **31**，设备协议 **2**，公司运行时协议 **1**。服务端镜像与客户端工具环境需使用匹配的源码和协议版本构建。
+本指南对应 Octop Enterprise **1.0.1b4**，依赖 Harness **1.0.3**，主数据库 schema **31**，设备协议 **2**，公司运行时协议 **1**。服务端镜像与客户端工具环境需使用匹配的源码和协议版本构建。
 
 分角色部署、资源档位及运行时恢复操作见[分角色部署、备份与恢复](ROLES.md)。下文 `compose.yml` 命令用于既有单体拓扑，不直接套用于分角色实例。
 
@@ -37,7 +37,7 @@ Docker daemon 无法连接时，先处理 Docker 启动或 socket 权限。默�
 
 ## 首次安装
 
-使用本项目源码包或确定的发行提交，在仓库根目录逐步执行。采用源码包时记录 `PUBLIC_SOURCE.json` 与源码包校验值；采用 Git 时记录 commit 和本地改动。下列 `enterprise-1.0.1b3` 是本指南使用的本地镜像标签；每次部署使用可追溯到对应源码的唯一标签。
+使用本项目源码包或确定的发行提交，在仓库根目录逐步执行。采用源码包时记录 `PUBLIC_SOURCE.json` 与源码包校验值；采用 Git 时记录 commit 和本地改动。下列 `enterprise-1.0.1b4` 是本指南使用的本地镜像标签；每次部署使用可追溯到对应源码的唯一标签。
 
 ### 1. 生成新的私有配置
 
@@ -54,9 +54,9 @@ sudo python3 docker/enterprise/prepare.py --data /srv/octop --env /etc/octop.env
 使用管理员编辑器修改 `/etc/octop.env`，保留已生成的密码与密钥，在原文件内将三个镜像值改为：
 
 ```dotenv
-OCTOP_BASE_IMAGE="octop:enterprise-1.0.1b3"
-OCTOP_APP_IMAGE="octop-enterprise:enterprise-1.0.1b3"
-OCTOP_IM_IMAGE="octop-im:enterprise-1.0.1b3"
+OCTOP_BASE_IMAGE="octop:enterprise-1.0.1b4"
+OCTOP_APP_IMAGE="octop-enterprise:enterprise-1.0.1b4"
+OCTOP_IM_IMAGE="octop-im:enterprise-1.0.1b4"
 ```
 
 默认 `OCTOP_BIND_ADDRESS="127.0.0.1"`，8088 端口只供服务器本机或本机反向代理访问，员工电脑无法直接连接。按部署场景选择：
@@ -71,7 +71,7 @@ OCTOP_IM_IMAGE="octop-im:enterprise-1.0.1b3"
 ### 3. 构建、初始化并启动
 
 ```sh
-sudo docker build -f docker/Dockerfile -t octop:enterprise-1.0.1b3 .
+sudo docker build -f docker/Dockerfile -t octop:enterprise-1.0.1b4 .
 sudo docker compose --env-file /etc/octop.env -f docker/enterprise/compose.yml config -q
 sudo docker compose --env-file /etc/octop.env -f docker/enterprise/compose.yml build
 sudo docker compose --env-file /etc/octop.env -f docker/enterprise/compose.yml up -d --wait postgres
@@ -159,7 +159,7 @@ sudo docker compose --env-file /etc/octop.env -f docker/enterprise/compose.yml l
 
 ```sh
 docker run --rm --network none --read-only --cap-drop ALL --tmpfs /tmp --tmpfs /data:uid=1000,gid=1000 \
-  --entrypoint python octop-enterprise:enterprise-1.0.1b3 /usr/local/libexec/octop/verify_runtime.py
+  --entrypoint python octop-enterprise:enterprise-1.0.1b4 /usr/local/libexec/octop/verify_runtime.py
 ```
 
 已有本地应用镜像和验证通过的运行环境时，可用 `Dockerfile.runtime-reuse` 离线组装。`APP_IMAGE` 必须包含完整当前应用、前端和 Python 环境；`RUNTIME_IMAGE` 必须包含可用的浏览器和系统库，两者系统基础层及 Python ABI 必须一致。不要仅凭应用健康检查选择运行环境。使用 `--pull=false --network=none`，并明确传入两个本地镜像：

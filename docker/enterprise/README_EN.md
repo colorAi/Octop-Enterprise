@@ -4,7 +4,7 @@
 
 This guide targets Linux with Docker Engine and Compose v2. Base single-host mode uses `docker/docker-compose.yml`. Enterprise mode includes the Octop control plane, the Go communication service, two PostgreSQL databases and isolated employee workspaces. Clients run project tools on employee computers; the server keeps accounts, model access, memory, history and recovery receipts.
 
-This guide corresponds to Octop Enterprise **1.0.1b3**, Harness **1.0.3**, main database schema **31**, device protocol **2** and company runtime protocol **1**. Server images and client tool environments must be built from matching source and protocol versions.
+This guide corresponds to Octop Enterprise **1.0.1b4**, Harness **1.0.3**, main database schema **31**, device protocol **2** and company runtime protocol **1**. Server images and client tool environments must be built from matching source and protocol versions.
 
 ## Before you deploy
 
@@ -35,7 +35,7 @@ If the Docker daemon is unreachable, fix Docker startup or socket permissions fi
 
 ## First installation
 
-Use this project's source archive or a specific release commit and run the steps from the repository root. For a source archive, record `PUBLIC_SOURCE.json` and the archive checksum; for Git, record the commit and local changes. The `enterprise-1.0.1b3` tags below are local image tags used by this guide; each deployment should use unique tags traceable to its source.
+Use this project's source archive or a specific release commit and run the steps from the repository root. For a source archive, record `PUBLIC_SOURCE.json` and the archive checksum; for Git, record the commit and local changes. The `enterprise-1.0.1b4` tags below are local image tags used by this guide; each deployment should use unique tags traceable to its source.
 
 ### 1. Generate a new private configuration
 
@@ -52,9 +52,9 @@ This script must not be used to upgrade or repair an existing instance; existing
 Edit `/etc/octop.env` with the administrator's editor, keep the generated passwords and keys, and change the three image values in place:
 
 ```dotenv
-OCTOP_BASE_IMAGE="octop:enterprise-1.0.1b3"
-OCTOP_APP_IMAGE="octop-enterprise:enterprise-1.0.1b3"
-OCTOP_IM_IMAGE="octop-im:enterprise-1.0.1b3"
+OCTOP_BASE_IMAGE="octop:enterprise-1.0.1b4"
+OCTOP_APP_IMAGE="octop-enterprise:enterprise-1.0.1b4"
+OCTOP_IM_IMAGE="octop-im:enterprise-1.0.1b4"
 ```
 
 The default `OCTOP_BIND_ADDRESS="127.0.0.1"` means port 8088 is reachable only from the server itself or a local reverse proxy; employee computers cannot connect directly. Choose according to the deployment scenario:
@@ -69,7 +69,7 @@ When the client omits the scheme it uses HTTPS and does not fall back to HTTP. C
 ### 3. Build, initialize and start
 
 ```sh
-sudo docker build -f docker/Dockerfile -t octop:enterprise-1.0.1b3 .
+sudo docker build -f docker/Dockerfile -t octop:enterprise-1.0.1b4 .
 sudo docker compose --env-file /etc/octop.env -f docker/enterprise/compose.yml config -q
 sudo docker compose --env-file /etc/octop.env -f docker/enterprise/compose.yml build
 sudo docker compose --env-file /etc/octop.env -f docker/enterprise/compose.yml up -d --wait postgres
@@ -157,7 +157,7 @@ The enterprise image includes Chromium and its system libraries for the workbenc
 
 ```sh
 docker run --rm --network none --read-only --cap-drop ALL --tmpfs /tmp --tmpfs /data:uid=1000,gid=1000 \
-  --entrypoint python octop-enterprise:enterprise-1.0.1b3 /usr/local/libexec/octop/verify_runtime.py
+  --entrypoint python octop-enterprise:enterprise-1.0.1b4 /usr/local/libexec/octop/verify_runtime.py
 ```
 
 Use `Dockerfile.runtime-reuse` for offline assembly from existing local images. `APP_IMAGE` must contain the complete current application, dashboard and Python environment; `RUNTIME_IMAGE` must contain a working browser and its system libraries. Both must have matching OS base layers and Python ABIs. Do not select a runtime based only on application readiness. Supply both local images explicitly with `--pull=false --network=none`:

@@ -10,7 +10,7 @@
 <p><strong>AI 在员工电脑上工作，账号、模型与权限留在企业手里。</strong></p>
 
 <p>
-  <a href="https://github.com/colorAi/Octop-Enterprise/releases"><img alt="Version 1.0.1b3" src="https://img.shields.io/badge/version-1.0.1b3-F5453A?style=flat-square"></a>
+  <a href="https://github.com/colorAi/Octop-Enterprise/releases"><img alt="Version 1.0.1b4" src="https://img.shields.io/badge/version-1.0.1b4-F5453A?style=flat-square"></a>
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-17996B?style=flat-square"></a>
   <a href="docker/enterprise/README.md"><img alt="Self-hosted" src="https://img.shields.io/badge/self--hosted-121417?style=flat-square"></a>
   <a href="docker/enterprise/README.md"><img alt="Server: Linux + Docker" src="https://img.shields.io/badge/server-Linux%20%2B%20Docker-3B5BDB?style=flat-square"></a>
@@ -65,7 +65,7 @@
 
 ## 快速开始
 
-源码版本：**1.0.1b3**。服务端从本仓库源码构建，已发布的 Windows/macOS 员工客户端可从 [Releases](https://github.com/colorAi/Octop-Enterprise/releases) 下载匹配的安装包。
+源码版本：**1.0.1b4**。服务端从本仓库源码构建，已发布的 Windows/macOS 员工客户端可从 [Releases](https://github.com/colorAi/Octop-Enterprise/releases) 下载匹配的安装包。
 
 GitHub 下载较慢时，可使用[夸克网盘下载](https://pan.quark.cn/s/6da75d82a576)，选择与服务器匹配的客户端版本。
 

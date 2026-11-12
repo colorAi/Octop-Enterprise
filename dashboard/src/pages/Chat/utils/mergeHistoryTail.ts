@@ -4,16 +4,6 @@ function textOf(message: ChatMessage): string {
   return (message.content || "").trim();
 }
 
-/** First locally created user message the server page has not acknowledged. */
-function newSendIndex(current: ChatMessage[], loadedIds: Set<string>): number {
-  return current.findIndex(
-    (message) =>
-      message.role === "user" &&
-      message.localPending &&
-      !loadedIds.has(message.id),
-  );
-}
-
 /** Retain older pages only when their persisted boundary overlaps the new page. */
 export function retainedHistoryPrefix(
   loaded: ChatMessage[],
@@ -81,6 +71,35 @@ function reconcilePendingUsers(
   return reconciled;
 }
 
+/** Interleave pending turns with history while preserving both message orders. */
+function mergePendingTail(
+  history: ChatMessage[],
+  tail: ChatMessage[],
+  afterAnchor: number,
+): ChatMessage[] {
+  const merged = history.slice(0, afterAnchor);
+  let next = afterAnchor;
+
+  for (const message of tail) {
+    if (message.role === "user") {
+      while (next < history.length) {
+        // Legacy history can be untimed. Only a newer timestamp establishes
+        // that a persisted row belongs after this pending question.
+        if (
+          message.timestamp > 0 &&
+          history[next].timestamp > message.timestamp
+        ) {
+          break;
+        }
+        merged.push(history[next]);
+        next += 1;
+      }
+    }
+    merged.push(message);
+  }
+  return [...merged, ...history.slice(next)];
+}
+
 /**
  * Apply a server history page without dropping a turn the user just sent.
  *
@@ -99,32 +118,37 @@ export function mergeHistoryWithLocalTail(
   const olderPrefix = retainedHistoryPrefix(loaded, current);
   current = reconcilePendingUsers(loaded, current);
   const loadedIds = new Set(loaded.map((message) => message.id));
-  const firstOverlap = current.findIndex((message) =>
-    loadedIds.has(message.id),
-  );
-
-  if (firstOverlap < 0) {
-    const pending = newSendIndex(current, loadedIds);
-    if (pending < 0) return loaded;
-    return [...loaded, ...current.slice(pending)];
-  }
-
-  let lastOverlap = firstOverlap;
-  for (let i = current.length - 1; i >= 0; i--) {
-    if (loadedIds.has(current[i].id)) {
+  let lastOverlap = -1;
+  let pending = -1;
+  let overlapBeforePending = -1;
+  for (let i = 0; i < current.length; i++) {
+    const message = current[i];
+    if (loadedIds.has(message.id)) {
       lastOverlap = i;
-      break;
+      // A refreshed page can include a reply while its user message is
+      // still pending. Only a stored user turn supersedes an earlier send.
+      if (message.role === "user") pending = -1;
+    } else if (pending < 0 && message.role === "user" && message.localPending) {
+      pending = i;
+      overlapBeforePending = lastOverlap;
     }
   }
 
-  const localTail = current.slice(lastOverlap + 1);
   const base = [...olderPrefix, ...loaded];
-  if (localTail.length === 0) return base;
-
-  const pending = newSendIndex(localTail, loadedIds);
   if (pending >= 0) {
-    return [...base, ...localTail.slice(pending)];
+    const anchor = current[overlapBeforePending];
+    const afterAnchor = anchor
+      ? base.findIndex(({ id }) => id === anchor.id) + 1
+      : 0;
+    const pendingTail = current
+      .slice(pending)
+      .filter(({ id }) => !loadedIds.has(id));
+    return mergePendingTail(base, pendingTail, afterAnchor);
   }
+  if (lastOverlap < 0) return loaded;
+
+  const localTail = current.slice(lastOverlap + 1);
+  if (localTail.length === 0) return base;
   // A cached user row absent from the page is not proof of a newer turn.
   if (localTail.some((message) => message.role === "user")) return base;
 

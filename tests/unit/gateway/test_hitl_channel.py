@@ -396,6 +396,44 @@ def test_hitl_store_resolve_pending_for_thread() -> None:
     assert store.pending_thread_ids(agent_id="agent1", user_id=2) == frozenset()
 
 
+@pytest.mark.parametrize("second_question", ["A?", "B?"])
+def test_hitl_store_keeps_waiting_questions_in_separate_dashboard_threads(
+    second_question: str,
+) -> None:
+    store = HitlPendingStore()
+    first, second = (
+        store.register(
+            thread_id=thread_id,
+            agent_id="agent1",
+            user_id=1,
+            session_key="dash:1:agent1",
+            channel_type="dashboard",
+            action_requests=[{"name": "ask_user_question", "args": {"question": question}}],
+            review_configs=None,
+        )
+        for thread_id, question in (("thr-a", "A?"), ("thr-b", second_question))
+    )
+
+    assert first.pending_id != second.pending_id
+    assert first.status == second.status == "pending"
+    assert store.resolve_pending_for_thread("thr-a", agent_id="agent1", user_id=1) is first
+    assert store.resolve_pending_for_thread("thr-b", agent_id="agent1", user_id=1) is second
+
+    coordinator = HitlChannelCoordinator(store)
+    assert (
+        coordinator.resolve_ask_pending(
+            "dash:1:agent1", agent_id="agent1", user_id=1, thread_id="thr-a"
+        )
+        is first
+    )
+    assert (
+        coordinator.resolve_ask_pending(
+            "dash:1:agent1", agent_id="agent1", user_id=1, thread_id="thr-b"
+        )
+        is second
+    )
+
+
 def test_hitl_store_reuses_equivalent_pending() -> None:
     store = HitlPendingStore()
     actions = [{"name": "execute", "args": {"command": "df"}}]

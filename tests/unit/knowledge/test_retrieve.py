@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from types import SimpleNamespace
 
 from octop.infra.db.migrate import run_migrations
@@ -11,8 +12,8 @@ from octop.infra.db.repos.knowledge import KnowledgeRepo
 from octop.infra.db.repos.settings import SettingsRepo
 from octop.infra.db.repos.users import UserRepo
 from octop.infra.knowledge import retrieve as retrieve_module
-from octop.infra.knowledge.citations import CITATIONS_MARKER_PREFIX
-from octop.infra.knowledge.index import KnowledgeIndex
+from octop.infra.knowledge.citations import CITATIONS_MARKER_PREFIX, CITATIONS_MARKER_SUFFIX
+from octop.infra.knowledge.index import Hit, KnowledgeIndex
 
 
 def test_retrieve_context_filters_unreadable_knowledge_base(tmp_path, monkeypatch) -> None:
@@ -79,3 +80,23 @@ def test_retrieve_context_skips_empty_non_text_turn() -> None:
     )
 
     assert context == ""
+
+
+def test_format_context_cites_only_documents_inside_the_budget() -> None:
+    base = SimpleNamespace(id="kb", name="KB")
+    included = SimpleNamespace(id="a", filename="a.md", path="a.md")
+    excluded = SimpleNamespace(id="b", filename="b.md", path="b.md")
+    hit_a = Hit("a-0", "a", 0, "alpha " * 40, 1.0, {})
+    hit_b = Hit("b-0", "b", 0, "beta " * 40, 0.5, {})
+
+    context = retrieve_module._format_context(
+        [(base, hit_a, included), (base, hit_b, excluded)],
+        char_budget=80,
+        locale="en",
+    )
+
+    body, marker = context.split(CITATIONS_MARKER_PREFIX, 1)
+    assert "alpha" in body
+    assert "beta" not in body
+    citations = json.loads(marker.removesuffix(CITATIONS_MARKER_SUFFIX))
+    assert [citation["doc_id"] for citation in citations] == ["a"]

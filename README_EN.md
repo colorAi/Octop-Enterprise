@@ -10,7 +10,7 @@
 <p><strong>AI runs on employee devices. Accounts, models and permissions stay with IT.</strong></p>
 
 <p>
-  <a href="https://github.com/colorAi/Octop-Enterprise/releases"><img alt="Version 1.0.1b3" src="https://img.shields.io/badge/version-1.0.1b3-F5453A?style=flat-square"></a>
+  <a href="https://github.com/colorAi/Octop-Enterprise/releases"><img alt="Version 1.0.1b4" src="https://img.shields.io/badge/version-1.0.1b4-F5453A?style=flat-square"></a>
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-17996B?style=flat-square"></a>
   <a href="docker/enterprise/README_EN.md"><img alt="Self-hosted" src="https://img.shields.io/badge/self--hosted-121417?style=flat-square"></a>
   <a href="docker/enterprise/README_EN.md"><img alt="Server: Linux + Docker" src="https://img.shields.io/badge/server-Linux%20%2B%20Docker-3B5BDB?style=flat-square"></a>
@@ -65,7 +65,7 @@ Server extensions (scheduled tasks, multi-platform IM channels, connectors, plug
 
 ## Getting started
 
-Source version: **1.0.1b3**. Build the server from this repository; published Windows/macOS employee clients are available from [Releases](https://github.com/colorAi/Octop-Enterprise/releases).
+Source version: **1.0.1b4**. Build the server from this repository; published Windows/macOS employee clients are available from [Releases](https://github.com/colorAi/Octop-Enterprise/releases).
 
 If GitHub downloads are slow, use the [Quark Drive mirror](https://pan.quark.cn/s/6da75d82a576) and choose the client version matching your server.
 

@@ -1,6 +1,6 @@
 # 分角色部署、备份与恢复
 
-`compose.roles.yml` 提供同一镜像的 `init`、`web` 和 `worker` 入口，使用 PostgreSQL schema 31。对应源码版本为 1.0.1b3。此入口需要在目标环境完成联调后再用于现有实例；本地容器链路验证不等于原生客户端、完整业务负载或容量验收。
+`compose.roles.yml` 提供同一镜像的 `init`、`web` 和 `worker` 入口，使用 PostgreSQL schema 31。对应源码版本为 1.0.1b4。此入口需要在目标环境完成联调后再用于现有实例；本地容器链路验证不等于原生客户端、完整业务负载或容量验收。
 
 拓扑为代理、2–3 个 web、1–3 个运行时 worker、1 个 Go 通信服务和 PostgreSQL。`4g` 启用 2 web + 1 worker，`8g` 启用 2 web + 2 worker，`16g` 启用 3 web + 3 worker。web 本地处理权限和执行状态读取，同事私聊、群聊及实时通知的 `/api/im/` 请求由 web 鉴权后直接转发到 Go 服务，不经过专家 worker。其他 HTTP、设备和专家 WebSocket 请求按数据库保存的用户归属转发；不依赖粘性会话，不自动重试 POST。
 
