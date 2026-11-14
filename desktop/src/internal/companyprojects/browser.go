@@ -74,9 +74,8 @@ type browserRequest struct {
 	err  error
 }
 
-// Browser reads project metadata without booting the execution engine. Both
-// credentials remain native-only; the server enforces the same installation
-// ownership as the Python worker. No task-execution endpoints are available.
+// Browser reads account project metadata without booting the execution engine.
+// Credentials remain native-only. The installation token proves legacy receipts.
 type Browser struct {
 	base, credential, installation string
 	http                           *http.Client
@@ -106,19 +105,133 @@ func (b *Browser) Close() {
 	b.http.CloseIdleConnections()
 }
 
-func (b *Browser) Supported(ctx context.Context) (bool, error) {
+func (b *Browser) features(ctx context.Context) ([]string, error) {
 	data, err := b.request(ctx, "capabilities", nil, true)
 	if err != nil {
-		return false, err
+		return nil, err
 	}
 	var capabilities struct {
 		Protocol int      `json:"protocol_version"`
 		Features []string `json:"features"`
 	}
 	if json.Unmarshal(data, &capabilities) != nil || capabilities.Protocol != 1 || !slices.Contains(capabilities.Features, "checkpoint_batches") {
-		return false, errors.New("company_protocol_incompatible")
+		return nil, errors.New("company_protocol_incompatible")
 	}
-	return slices.Contains(capabilities.Features, "multi_project_v1"), nil
+	return capabilities.Features, nil
+}
+
+func (b *Browser) Supported(ctx context.Context) (bool, error) {
+	features, err := b.features(ctx)
+	return slices.Contains(features, "multi_project_v1"), err
+}
+
+func (b *Browser) RequireAccountProjects(ctx context.Context) error {
+	features, err := b.features(ctx)
+	if err != nil {
+		return err
+	}
+	if !slices.Contains(features, "account_projects_v1") {
+		return errors.New("project_sync_server_required")
+	}
+	return nil
+}
+
+type AccountProject struct {
+	ID   string `json:"project_id"`
+	Name string `json:"name"`
+}
+
+func (b *Browser) AccountProjects(ctx context.Context) ([]AccountProject, error) {
+	if err := b.RequireAccountProjects(ctx); err != nil {
+		return nil, err
+	}
+	projects := []AccountProject{}
+	const limit = 100
+	for offset := 0; ; offset += limit {
+		body, err := json.Marshal(map[string]any{"installation_token": b.installation, "limit": limit, "offset": offset})
+		if err != nil {
+			return nil, err
+		}
+		raw, err := b.request(ctx, "projects/query", body, false)
+		if err != nil {
+			return nil, err
+		}
+		var page struct {
+			Items []AccountProject `json:"items"`
+			More  bool             `json:"has_more"`
+		}
+		if json.Unmarshal(raw, &page) != nil || (page.More && len(page.Items) != limit) {
+			return nil, errors.New("invalid_project_response")
+		}
+		projects = append(projects, page.Items...)
+		if !page.More {
+			return projects, nil
+		}
+	}
+}
+
+// AdoptLegacyConversations binds pre-project conversations recorded on this installation.
+func (b *Browser) AdoptLegacyConversations(ctx context.Context, project Project, bindings map[string]string) error {
+	if !project.Legacy {
+		return nil
+	}
+	var threads []string
+	for thread, id := range bindings {
+		if id == project.ID {
+			threads = append(threads, thread)
+		}
+	}
+	slices.Sort(threads)
+	for _, thread := range threads {
+		if _, err := b.Project(ctx, "adopt", project, map[string]any{"thread_id": thread}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (b *Browser) ProjectConversations(ctx context.Context, project Project, bindings map[string]string) (string, []string, error) {
+	raw, err := b.Project(ctx, "register", project, map[string]any{"refresh": true})
+	if err != nil {
+		return "", nil, err
+	}
+	var current AccountProject
+	if json.Unmarshal(raw, &current) != nil || current.ID != project.ID || current.Name == "" {
+		return "", nil, errors.New("invalid_project_response")
+	}
+	if err := b.AdoptLegacyConversations(ctx, project, bindings); err != nil {
+		return "", nil, err
+	}
+	var threads []string
+	for after := ""; ; {
+		raw, err := b.Project(ctx, "threads", project, map[string]any{"after_thread_id": after})
+		if err != nil {
+			return "", nil, err
+		}
+		var page struct {
+			Items []struct {
+				Thread  string `json:"thread_id"`
+				Project string `json:"project_id"`
+			} `json:"items"`
+			More bool `json:"has_more"`
+		}
+		if json.Unmarshal(raw, &page) != nil {
+			return "", nil, errors.New("invalid_project_response")
+		}
+		for _, item := range page.Items {
+			if !archiveID.MatchString(item.Thread) || item.Project != project.ID {
+				return "", nil, errors.New("invalid_project_response")
+			}
+			threads = append(threads, item.Thread)
+		}
+		if !page.More {
+			return current.Name, threads, nil
+		}
+		if len(page.Items) == 0 || page.Items[len(page.Items)-1].Thread == after {
+			return "", nil, errors.New("invalid_project_response")
+		}
+		after = page.Items[len(page.Items)-1].Thread
+	}
 }
 
 func (b *Browser) Project(ctx context.Context, operation string, project Project, extra map[string]any) (json.RawMessage, error) {
@@ -133,16 +246,18 @@ func (b *Browser) Project(ctx context.Context, operation string, project Project
 		body["thread_id"] = extra["thread_id"]
 	case "threads":
 		path += "/threads/query"
-		body["limit"], body["offset"] = 50, extra["offset"]
+		body["limit"] = 50
+		if after, ok := extra["after_thread_id"]; ok {
+			body["limit"], body["after_thread_id"] = 100, after
+		} else {
+			body["offset"] = extra["offset"]
+		}
 	case "continue":
-		capabilities, err := b.request(ctx, "capabilities", nil, true)
+		features, err := b.features(ctx)
 		if err != nil {
 			return nil, err
 		}
-		var support struct {
-			Features []string `json:"features"`
-		}
-		if json.Unmarshal(capabilities, &support) != nil || !slices.Contains(support.Features, "history_continuation_v1") {
+		if !slices.Contains(features, "history_continuation_v1") {
 			return nil, errors.New("history_continuation_server_required")
 		}
 		path += "/continue"
@@ -156,7 +271,7 @@ func (b *Browser) Project(ctx context.Context, operation string, project Project
 	if err != nil {
 		return nil, err
 	}
-	return b.request(ctx, path, data, operation == "register" || operation == "adopt")
+	return b.request(ctx, path, data, (operation == "register" && extra["refresh"] != true) || operation == "adopt")
 }
 
 // Join simultaneous startup queries. Cache successful capability negotiation and
@@ -167,7 +282,7 @@ func (b *Browser) request(ctx context.Context, path string, body []byte, remembe
 	}
 	key := path + "\x00" + string(body)
 	b.mu.Lock()
-	if result, ok := b.completed[key]; ok {
+	if result, ok := b.completed[key]; remember && ok {
 		b.mu.Unlock()
 		return result, nil
 	}

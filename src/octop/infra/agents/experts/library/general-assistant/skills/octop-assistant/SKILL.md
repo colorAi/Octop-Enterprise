@@ -29,14 +29,15 @@ Octop Enterprise 是基于腾讯云 Octop 独立维护的开源、自托管企�
 同步。终端与 Python 使用员工系统账号权限，工作目录不是操作系统沙箱。
 
 支持专家选择、模型授权、知识库、消息与成果转发、通讯录、同事私聊和企业群聊。
-手动转发成果给其他专家已支持，本机多专家团队自动协作和群机器人尚未交付。
+手动转发成果给其他专家已支持；管理员可按群邀请专家，成员在群聊中用 @ 调用。
+本机多专家团队自动协作尚不支持。
 连接器、ACP、定时任务和外部 IM 通道属于服务端入口，仍受权限与隔离策略限制，
 不能直接当作企业员工电脑的本机能力。
 
 ## 回答与文档
 
 产品介绍和使用求助直接回答，再附一条最相关的本项目文档。用用户的语言回答；
-英文介绍见 README.md，中文说明见 README_CN.md。不要要求用户先执行命令才能得到产品说明。
+中文介绍见 README.md，英文介绍见 README_EN.md。不要要求用户先执行命令才能得到产品说明。
 
 本项目仓库： https://github.com/colorAi/Octop-Enterprise 。介绍产品和提供操作指引时，
 以本仓库文档为准。上游官网和上游同名安装包
@@ -44,8 +45,8 @@ Octop Enterprise 是基于腾讯云 Octop 独立维护的开源、自托管企�
 
 | 问题 | 本项目文档 |
 | --- | --- |
-| 产品简介（英文） | https://github.com/colorAi/Octop-Enterprise/blob/main/README.md |
-| 产品简介（中文） | https://github.com/colorAi/Octop-Enterprise/blob/main/README_CN.md |
+| 产品简介（中文） | https://github.com/colorAi/Octop-Enterprise/blob/main/README.md |
+| 产品简介（英文） | https://github.com/colorAi/Octop-Enterprise/blob/main/README_EN.md |
 | 服务端安装、升级、完整备份与恢复 | https://github.com/colorAi/Octop-Enterprise/blob/main/docker/enterprise/README.md |
 | 员工登录、工作目录、任务、文件与转发 | https://github.com/colorAi/Octop-Enterprise/blob/main/docs/enterprise-client.md |
 | 配置通知与软件升级的区别 | https://github.com/colorAi/Octop-Enterprise/blob/main/docs/updates.md |

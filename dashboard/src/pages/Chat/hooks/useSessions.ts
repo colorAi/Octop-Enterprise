@@ -6,6 +6,8 @@ import {
   type ThreadArtifact,
 } from "../../../api/modules/octopThreads";
 import type { HitlSessionPolicy } from "../../../api/types/hitl";
+import { getAuthToken } from "../../../api/request";
+import { tokenSessionIdentity } from "../../../utils/authSession";
 import * as chatStore from "./chatStore";
 import { onSessionEvent } from "./chatStore";
 import { formatThreadTitle } from "../utils/threadTitle";
@@ -131,6 +133,7 @@ let _hasMore = false;
 let _loadingMore = false;
 export const SESSION_PAGE_SIZE = 10;
 let _storeAgentId: string | null = null;
+let _storeAuthSession: string | undefined;
 const _loadedLimitByAgent = new Map<string, number>();
 const _listeners = new Set<() => void>();
 
@@ -228,11 +231,13 @@ export async function fetchAndSyncSessionArtifacts(
   threadId: string,
 ): Promise<ThreadArtifact[]> {
   if (!agentId || !threadId) return [];
+  const authSession = tokenSessionIdentity(getAuthToken());
   try {
     const history = await octopThreadsApi.history(agentId, threadId, {
       limit: 1,
       offset: 0,
     });
+    if (tokenSessionIdentity(getAuthToken()) !== authSession) return [];
     const artifacts = normalizeThreadArtifacts(
       history.artifacts,
       agentId,
@@ -362,12 +367,19 @@ function setModuleLoadingMore(value: boolean) {
 }
 
 /**
- * Drop previous-agent threads before the first paint of a new agent.
+ * Drop previous threads before the first paint of a new agent or login.
  * Clearing only in useEffect leaks stale sessions for one render, and
  * chat nav can then write `/chat/{newAgent}/{oldThread}` into the URL.
  */
-function syncStoreToAgent(agentId: string | null) {
-  if (_storeAgentId === agentId) return;
+function syncStoreToAgent(agentId: string | null, authSession: string) {
+  if (_storeAuthSession !== authSession) {
+    if (_storeAuthSession !== undefined) chatStore.clearChatSessionCache();
+    _storeAuthSession = authSession;
+    _loadedLimitByAgent.clear();
+    _pendingThreadIds.clear();
+  } else if (_storeAgentId === agentId) {
+    return;
+  }
   _storeAgentId = agentId;
   _sessions = [];
   _loading = agentId != null;
@@ -384,6 +396,7 @@ function syncStoreToAgent(agentId: string | null) {
 /** Reset module session store between vitest cases. */
 export function resetSessionStoreForTests() {
   _storeAgentId = null;
+  _storeAuthSession = undefined;
   _sessions = [];
   _loading = true;
   _hasMore = false;
@@ -399,14 +412,23 @@ export function resetSessionStoreForTests() {
 }
 
 export function useSessions(agentId: string | null) {
-  syncStoreToAgent(agentId);
+  const authSession = tokenSessionIdentity(getAuthToken());
+  syncStoreToAgent(agentId, authSession);
   const { sessions, loading, hasMore, loadingMore } = useSyncExternalStore(
     subscribeSessionStore,
     getSessionSnapshot,
   );
+  const isCurrent = useCallback(
+    () =>
+      _storeAgentId === agentId &&
+      _storeAuthSession === authSession &&
+      tokenSessionIdentity(getAuthToken()) === authSession,
+    [agentId, authSession],
+  );
 
   const fetchSessions = useCallback(
     async (activeThreadId?: string) => {
+      if (!isCurrent()) return [];
       if (!agentId) {
         setModuleSessions([]);
         setModuleLoading(false);
@@ -418,23 +440,23 @@ export function useSessions(agentId: string | null) {
           agentId,
           limit,
         );
-        if (_storeAgentId !== agentId) return _sessions;
+        if (!isCurrent()) return [];
         applySessionPage(valid, more, limit, agentId, activeThreadId);
         return visibleSessionsForAgent(valid, agentId, activeThreadId);
       } catch {
-        return _sessions;
+        return isCurrent() ? _sessions : [];
       } finally {
-        if (_storeAgentId === agentId) {
+        if (isCurrent()) {
           setModuleLoading(false);
         }
       }
     },
-    [agentId],
+    [agentId, isCurrent],
   );
 
   const loadMoreSessions = useCallback(
     async (activeThreadId?: string) => {
-      if (!agentId || _loadingMore || !_hasMore) return;
+      if (!agentId || !isCurrent() || _loadingMore || !_hasMore) return;
       setModuleLoadingMore(true);
       try {
         const nextLimit = getLoadedLimit(agentId) + SESSION_PAGE_SIZE;
@@ -442,37 +464,38 @@ export function useSessions(agentId: string | null) {
           agentId,
           nextLimit,
         );
-        if (_storeAgentId !== agentId) return;
+        if (!isCurrent()) return;
         applySessionPage(valid, more, nextLimit, agentId, activeThreadId);
       } catch {
         /* ignore */
       } finally {
-        setModuleLoadingMore(false);
+        if (isCurrent()) setModuleLoadingMore(false);
       }
     },
-    [agentId],
+    [agentId, isCurrent],
   );
 
   const fetchAllSessions = useCallback(
     async (activeThreadId?: string) => {
-      if (!agentId) return;
+      if (!agentId || !isCurrent()) return;
       try {
         const { sessions: valid, hasMore: more } = await fetchSessionsPage(
           agentId,
           50,
         );
-        if (_storeAgentId !== agentId) return;
+        if (!isCurrent()) return;
         applySessionPage(valid, more, valid.length, agentId, activeThreadId);
       } catch {
         /* ignore */
       }
     },
-    [agentId],
+    [agentId, isCurrent],
   );
 
   const ensureThreadInList = useCallback(
     async (threadId: string): Promise<ThreadProbeResult> => {
       if (!agentId || !threadId) return "missing";
+      if (!isCurrent()) return "unknown";
       if (_sessions.some((s) => s.id === threadId)) return "found";
       try {
         const limit = getLoadedLimit(agentId);
@@ -482,7 +505,7 @@ export function useSessions(agentId: string | null) {
           probeLimit,
         );
         // Agent switched while the probe was in flight — do not rewrite URL.
-        if (_storeAgentId !== agentId) return "unknown";
+        if (!isCurrent()) return "unknown";
         const found = valid.some((s) => s.id === threadId);
         if (!found) return "missing";
         applySessionPage(
@@ -498,12 +521,12 @@ export function useSessions(agentId: string | null) {
         return "unknown";
       }
     },
-    [agentId],
+    [agentId, isCurrent],
   );
 
   // Fetch only: agent switches are synced in-render via syncStoreToAgent.
   useEffect(() => {
-    if (!agentId) return;
+    if (!agentId || !isCurrent()) return;
     resetSessionPagination(agentId);
     setModuleLoading(true);
     void (async () => {
@@ -513,17 +536,17 @@ export function useSessions(agentId: string | null) {
           requestedAgent,
           SESSION_PAGE_SIZE,
         );
-        if (_storeAgentId !== requestedAgent) return;
+        if (!isCurrent()) return;
         applySessionPage(valid, more, SESSION_PAGE_SIZE, requestedAgent);
       } catch {
         /* ignore */
       } finally {
-        if (_storeAgentId === requestedAgent) {
+        if (isCurrent()) {
           setModuleLoading(false);
         }
       }
     })();
-  }, [agentId]);
+  }, [agentId, isCurrent]);
 
   useEffect(() => {
     return onSessionEvent((event) => {
@@ -537,7 +560,7 @@ export function useSessions(agentId: string | null) {
     session: Session;
     resolvedId: Promise<string>;
   } => {
-    if (!agentId) {
+    if (!agentId || !isCurrent()) {
       const empty: Session = {
         id: "",
         name: "New Chat",
@@ -558,7 +581,9 @@ export function useSessions(agentId: string | null) {
     const resolvedId = octopThreadsApi
       .create(agentId)
       .then((created) => {
+        if (tokenSessionIdentity(getAuthToken()) !== authSession) return "";
         markPendingThread(created.thread_id);
+        if (!isCurrent()) return created.thread_id;
         const now = Math.floor(Date.now() / 1000);
         const session = toSession({
           thread_id: created.thread_id,
@@ -578,6 +603,7 @@ export function useSessions(agentId: string | null) {
         return created.thread_id;
       })
       .catch((error: unknown) => {
+        if (!isCurrent()) return "";
         void message.error(
           error instanceof Error ? error.message : "无法创建会话",
         );
@@ -585,14 +611,16 @@ export function useSessions(agentId: string | null) {
         return "";
       });
     return { session: placeholder, resolvedId };
-  }, [agentId]);
+  }, [agentId, authSession, isCurrent]);
 
   const deleteSession = useCallback(
     async (id: string) => {
-      if (!agentId || !id) return false;
+      if (!agentId || !id || !isCurrent()) return false;
       try {
         await octopThreadsApi.delete(agentId, id);
-        setModuleSessions((prev) => prev.filter((s) => s.id !== id));
+        if (tokenSessionIdentity(getAuthToken()) !== authSession) return true;
+        if (isCurrent())
+          setModuleSessions((prev) => prev.filter((s) => s.id !== id));
         chatStore.removeSession(id);
         chatStore.emitSessionEvent({ kind: "sessionDeleted", sessionId: id });
         return true;
@@ -600,11 +628,12 @@ export function useSessions(agentId: string | null) {
         return false;
       }
     },
-    [agentId],
+    [agentId, authSession, isCurrent],
   );
 
   const pinSession = useCallback(
     (id: string, pinned: boolean) => {
+      if (!isCurrent()) return;
       setModuleSessions((prev) =>
         sortSessions(prev.map((s) => (s.id === id ? { ...s, pinned } : s))),
       );
@@ -612,11 +641,12 @@ export function useSessions(agentId: string | null) {
         void octopThreadsApi.patch(agentId, id, { pinned }).catch(() => {});
       }
     },
-    [agentId],
+    [agentId, isCurrent],
   );
 
   const renameSession = useCallback(
     (id: string, name: string) => {
+      if (!isCurrent()) return;
       const next = formatThreadTitle(name) || name.trim();
       if (!next) return;
       setModuleSessions((prev) =>
@@ -626,7 +656,7 @@ export function useSessions(agentId: string | null) {
         void octopThreadsApi.rename(agentId, id, next).catch(() => {});
       }
     },
-    [agentId],
+    [agentId, isCurrent],
   );
 
   const syncSession = useCallback(

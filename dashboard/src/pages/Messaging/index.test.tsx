@@ -165,8 +165,88 @@ it("mentions only selected group members, distinguishes duplicate names and rese
   expect(input.value).toBe("");
   fireEvent.change(input, { target: { value: "普通消息" } });
   fireEvent.keyDown(input, { key: "Enter" });
-  expect(mock.client.send.mock.calls.at(-1)?.[1]).not.toHaveProperty(
-    "mention_user_ids",
+  expect(mock.client.send).toHaveBeenLastCalledWith(
+    "c",
+    expect.not.objectContaining({ mention_user_ids: expect.anything() }),
+  );
+});
+
+it("selects exactly one authorized expert separately from colleague mentions and resets it after send", async () => {
+  const first = {
+    binding_id: "expert-one",
+    source_agent_id: "source",
+    source_row_id: 10,
+    generation: 1,
+    state: "active" as const,
+    display_name: "Planner",
+    avatar: {},
+    can_call: true,
+  };
+  vi.spyOn(communicationApi, "groupExperts").mockResolvedValue({
+    items: [
+      first,
+      {
+        ...first,
+        binding_id: "removed",
+        display_name: "Removed expert",
+        state: "removed",
+      },
+      {
+        ...first,
+        binding_id: "unassigned",
+        display_name: "Unassigned expert",
+        can_call: false,
+      },
+    ],
+    candidates: [],
+    experts_enabled: true,
+    ready: true,
+    can_manage: false,
+    can_configure: false,
+    syncing: false,
+    scope_revision: 1,
+    scope_sources: [],
+  });
+  const state = mock.state as ReturnType<typeof emptyMessagingState>;
+  state.histories.c[0] = {
+    ...state.histories.c[0],
+    mention_expert_id: first.binding_id,
+    expert_call: {
+      call_id: "call",
+      call_state: "pending_admission",
+      expert_name: "Planner",
+    },
+  };
+  const { input } = openMentionGroup();
+  expect(screen.getByText("@Planner")).toBeInTheDocument();
+  fireEvent.change(input, { target: { value: "@" } });
+  fireEvent.click(await screen.findByRole("option", { name: /Planner/ }));
+  expect(screen.getAllByText("@Planner")).toHaveLength(2);
+  expect(
+    screen.queryByText("groupExperts.boundary", { exact: false }),
+  ).not.toBeInTheDocument();
+  expect(
+    screen.queryByRole("option", { name: /Removed expert|Unassigned expert/ }),
+  ).not.toBeInTheDocument();
+  expect(input.value).toBe("");
+  fireEvent.change(input, { target: { value: "Please review" } });
+  fireEvent.keyDown(input, { key: "Enter" });
+  expect(mock.client.send).toHaveBeenLastCalledWith(
+    "c",
+    expect.objectContaining({
+      text: "Please review",
+      mention_expert_id: "expert-one",
+    }),
+  );
+  expect(mock.client.send).toHaveBeenLastCalledWith(
+    "c",
+    expect.not.objectContaining({ mention_user_ids: expect.anything() }),
+  );
+  fireEvent.change(input, { target: { value: "Ordinary message" } });
+  fireEvent.keyDown(input, { key: "Enter" });
+  expect(mock.client.send).toHaveBeenLastCalledWith(
+    "c",
+    expect.not.objectContaining({ mention_expert_id: expect.anything() }),
   );
 });
 
@@ -255,8 +335,9 @@ it("removes the selected recipient after editing their mention and preserves the
   expect(input.value).toBe("请 @李明  确认");
   fireEvent.change(input, { target: { value: "请 @李华 确认" } });
   fireEvent.keyDown(input, { key: "Enter" });
-  expect(mock.client.send.mock.calls.at(-1)?.[1]).not.toHaveProperty(
-    "mention_user_ids",
+  expect(mock.client.send).toHaveBeenLastCalledWith(
+    "c",
+    expect.not.objectContaining({ mention_user_ids: expect.anything() }),
   );
 });
 

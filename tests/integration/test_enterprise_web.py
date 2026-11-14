@@ -1,5 +1,6 @@
 """Two independent edge apps share durable state and freshly read authorization."""
 
+from dataclasses import replace
 from types import SimpleNamespace
 
 import httpx
@@ -112,6 +113,14 @@ async def test_company_device_requests_route_by_employee_credential_without_jwt(
                 )
             ).status_code == 200
             assert (
+                await edge.post("/api/company-runtime/tasks/task/model", headers=native, json={})
+            ).status_code == 200
+            assert [call.extensions["timeout"] for call in calls] == [
+                client.timeout.as_dict(),
+                client.timeout.as_dict(),
+                {**client.timeout.as_dict(), "read": 600},
+            ]
+            assert (
                 await edge.get(
                     "/api/company-runtime/capabilities",
                     headers={**native, "Origin": "http://browser"},
@@ -121,7 +130,7 @@ async def test_company_device_requests_route_by_employee_credential_without_jwt(
             assert (
                 await edge.get("/api/company-runtime/capabilities", headers=native)
             ).status_code == 401
-            assert len(calls) == 2
+            assert len(calls) == 3
     finally:
         await client.aclose()
 
@@ -213,6 +222,85 @@ async def test_runtime_forwarding_preserves_auth_and_does_not_retry(env):
             assert response.status_code == 503 and len(calls) == 1
     finally:
         await client.aclose()
+
+
+async def test_web_forwarder_rejects_oversized_chunked_upload_with_413(env, monkeypatch):
+    _, server, headers = env
+    monkeypatch.setattr(server, "config", replace(server.config, max_upload_mb=1))
+    calls = []
+
+    async def remote(request):
+        calls.append(request.content)
+        return httpx.Response(200, stream=httpx.ByteStream(b"ok"))
+
+    async def chunks(sizes):
+        for size in sizes:
+            yield b"x" * size
+
+    limit = server.config.max_upload_bytes
+    async with httpx.AsyncClient(transport=httpx.MockTransport(remote)) as upstream:
+        app = build_web_app(server, "http://worker.invalid", runtime_client=upstream)
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://edge"
+        ) as edge:
+            for content in (chunks([limit, 1]), b"x" * (limit + 1)):
+                response = await edge.post("/api/runtime-check", headers=headers, content=content)
+                assert response.status_code == 413
+                assert response.json() == {"detail": "request_too_large"}
+                assert "Retry-After" not in response.headers
+            assert calls == []
+            response = await edge.post(
+                "/api/runtime-check", headers=headers, content=chunks([limit // 2, limit // 2])
+            )
+            assert response.status_code == 200
+            assert [len(body) for body in calls] == [limit]
+
+
+async def test_native_runtime_request_gets_retryable_response_when_read_queue_is_full(
+    env, monkeypatch
+):
+    import asyncio
+    from threading import Event
+
+    worker, server, _ = env
+    reader = BoundedIO(workers=1, capacity=1)
+    monkeypatch.setattr(server, "management_io", reader)
+    entered = asyncio.Event()
+    release = Event()
+    loop = asyncio.get_running_loop()
+
+    def hold_read():
+        loop.call_soon_threadsafe(entered.set)
+        release.wait(5)
+
+    async def unexpected_upstream(_request):
+        raise AssertionError("an overloaded edge must respond before forwarding")
+
+    busy = asyncio.create_task(reader.run(hold_read))
+    try:
+        await asyncio.wait_for(entered.wait(), 3)
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(unexpected_upstream)
+        ) as upstream:
+            app = build_web_app(server, "http://worker.invalid", runtime_client=upstream)
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url="http://edge"
+            ) as edge:
+                with monkeypatch.context() as sharded:
+                    sharded.setattr(server, "runtime_shards", SimpleNamespace())
+                    for client in (edge, worker):
+                        response = await client.get(
+                            "/api/company-runtime/capabilities",
+                            headers={"X-Octop-Device-Credential": "octop-device.overload-test"},
+                        )
+                        assert response.status_code == 503
+                        assert response.json()["error"]["details"] == {
+                            "reason": "read_capacity_exceeded",
+                            "retryable": True,
+                        }
+    finally:
+        release.set()
+        await busy
 
 
 async def test_edges_route_employee_workspaces_to_owner_and_global_writes_to_primary(env):

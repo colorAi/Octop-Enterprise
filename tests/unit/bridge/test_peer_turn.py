@@ -11,10 +11,13 @@ from octop.infra.bridge.peer_turn import USER_TURN_WS_KEYS, PeerTurnRejected
 
 
 def test_bridge_turn_ws_payload_keeps_composer_fields() -> None:
+    device = {"mode": "local", "device_id": "a" * 32, "grant_id": "b" * 32, "grant_version": 1}
     out = _bridge_turn_ws_payload(
         {
             "type": "turn.start",
             "request_id": "r1",
+            "client_request_id": "turn-retry-key",
+            "device": device,
             "agent_id": "main",
             "text": "hi",
             "thread_id": "thr_1",
@@ -37,6 +40,9 @@ def test_bridge_turn_ws_payload_keeps_composer_fields() -> None:
     assert out["target_agent_ids"] == ["doctor"]
     assert out["mcp_servers"] == ["gmail"]
     assert out["skills"] == ["notes"]
+    turn = UserTurnWsFrame.model_validate(out).to_turn_body()
+    assert turn.client_request_id == "turn-retry-key"
+    assert turn.device is not None and turn.device.model_dump() == device
     assert "request_id" not in out
     assert "agent_id" not in out
 

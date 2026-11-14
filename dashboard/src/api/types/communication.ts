@@ -89,6 +89,10 @@ export interface CommunicationMessage {
   message_id: string;
   seq: Sequence;
   sender_id: string;
+  sender_type?: "member" | "system" | "group_expert";
+  expert?: GroupExpertBinding;
+  expert_call?: GroupExpertCall;
+  mention_expert_id?: string;
   type: "text" | "image" | "file" | "system";
   text: string | null;
   recalled: boolean;
@@ -108,6 +112,7 @@ export interface SendMessage {
   reply_to_message_id?: string;
   mention_user_ids?: string[];
   mention_all?: boolean;
+  mention_expert_id?: string;
 }
 export interface SendReceipt {
   message_id: string;
@@ -115,6 +120,48 @@ export interface SendReceipt {
   created_at: string;
   conversation_id: string;
   replayed?: boolean;
+  expert_call?: GroupExpertCall;
+}
+
+export interface GroupExpertSource {
+  source_agent_id: string;
+  source_row_id: number;
+  display_name: string;
+  avatar: { url?: string };
+  can_call: boolean;
+}
+export interface GroupExpertBinding extends GroupExpertSource {
+  binding_id: string;
+  generation: number;
+  state: "active" | "removed" | "invalidated";
+}
+export interface GroupExpertCall {
+  call_id: string;
+  expert_name?: string;
+  call_state:
+    | "pending_admission"
+    | "queued"
+    | "dispatched"
+    | "awaiting_delivery"
+    | "cancel_requested"
+    | "completed"
+    | "failed"
+    | "rejected"
+    | "cancelled"
+    | "unknown";
+  reason_code?: string;
+}
+export interface GroupExperts {
+  group_kind?: GroupKind;
+  items: GroupExpertBinding[];
+  candidates: GroupExpertSource[];
+  experts_enabled: boolean;
+  ready: boolean;
+  can_manage: boolean;
+  can_configure: boolean;
+  syncing: boolean;
+  scope_revision: number;
+  scope_sources: { source_agent_id: string; source_row_id: number }[];
 }
 export interface SyncEvent {
   seq: Sequence;

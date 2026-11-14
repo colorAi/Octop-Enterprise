@@ -5,6 +5,7 @@ import { useDesktopProjects } from "../context/DesktopProjectsContext";
 import { Alert, Button, Input, Select, Space, Tag, Typography } from "antd";
 import { useTranslation } from "react-i18next";
 import { useDesktopWorkspace } from "../context/DesktopWorkspaceContext";
+import ProjectMigrationSettings from "./ProjectMigrationSettings";
 
 export default function LocalWorkspaceSettings() {
   const { t } = useTranslation();
@@ -162,6 +163,18 @@ export default function LocalWorkspaceSettings() {
       <Typography.Paragraph type="secondary" style={{ fontSize: 12 }}>
         {t("devices.workspaceConsent")}
       </Typography.Paragraph>
+      {multiProject && (
+        <ProjectMigrationSettings
+          online={online}
+          canImport={
+            online ||
+            Boolean(
+              desktop.state?.state === "reconnecting" &&
+                desktop.state.owner_user_id,
+            )
+          }
+        />
+      )}
       {online && (multiProject || desktop.state?.grant) && (
         <div style={{ marginBottom: 12 }}>
           <Space wrap>

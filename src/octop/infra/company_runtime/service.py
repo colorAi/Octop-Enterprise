@@ -5,17 +5,20 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 import time
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 from contextlib import suppress
 from importlib.metadata import version
 from typing import Any
 
 import httpx
 from anyio import CancelScope
+from anyio.lowlevel import checkpoint_if_cancelled
 from langchain_core.exceptions import ContextOverflowError
-from langchain_core.messages import message_to_dict, messages_from_dict
+from langchain_core.messages import AIMessageChunk, message_to_dict, messages_from_dict
+from langchain_core.messages.utils import count_tokens_approximately
 
 from octop.infra.agents.providers.reasoning import (
     reasoning_capability,
@@ -30,6 +33,9 @@ from octop.infra.db.repos.thread_messages import ThreadMessageInput
 from octop.infra.errors import ErrorCode, OctopError
 from octop.infra.users.resource_policy import assert_token_quota_available
 from octop.infra.utils.asyncio import offload
+from octop.infra.utils.locale import resolve_user_locale
+
+logger = logging.getLogger(__name__)
 
 
 def denied(reason: str, status: int = 409) -> OctopError:
@@ -49,17 +55,43 @@ def authenticate_company_device(services: Any, credential: str, origin: str | No
     return identity
 
 
+def _model_http_status(exc: Exception) -> int | None:
+    status = (
+        exc.response.status_code
+        if isinstance(exc, httpx.HTTPStatusError)
+        else getattr(exc, "status_code", None)
+    )
+    return status if isinstance(status, int) else None
+
+
+def _model_output_bytes(chunk: AIMessageChunk) -> int:
+    # Count generated payloads, not per-chunk envelopes, signatures or the
+    # provider's duplicate representation of tool_call_chunks in content.
+    size = len(chunk.text.encode())
+    reasoning_size = 0
+    if isinstance(chunk.content, list):
+        for block in chunk.content:
+            if not isinstance(block, dict):
+                continue
+            reasoning = block.get("thinking") or block.get("reasoning")
+            if isinstance(reasoning, str):
+                reasoning_size += len(reasoning.encode())
+    for call in chunk.tool_call_chunks:
+        size += len((call.get("name") or "").encode())
+        size += len((call.get("args") or "").encode())
+    reasoning = chunk.additional_kwargs.get("reasoning_content")
+    if not reasoning_size and isinstance(reasoning, str):
+        reasoning_size = len(reasoning.encode())
+    return size + reasoning_size
+
+
 def model_failure(exc: Exception) -> dict[str, Any]:
     """Expose a stable failure category without provider payloads or credentials."""
     if isinstance(exc, OctopError):
         if exc.code == ErrorCode.MODEL_NOT_ASSIGNED:
             return {"error": exc.code.value, "retryable": False}
         return {"error": exc.details.get("reason", "company_model_failed"), "retryable": False}
-    status = (
-        exc.response.status_code
-        if isinstance(exc, httpx.HTTPStatusError)
-        else getattr(exc, "status_code", None)
-    )
+    status = _model_http_status(exc)
     if isinstance(exc, ContextOverflowError) or (
         status in {400, 413, 422}
         and any(
@@ -85,7 +117,7 @@ def model_failure(exc: Exception) -> dict[str, Any]:
         "ConnectError",
     }:
         return {"error": "company_model_connection_lost", "retryable": True}
-    if isinstance(status, int):
+    if status is not None:
         return {
             "error": f"company_model_http_{status}",
             "retryable": status in {408, 429} or status >= 500,
@@ -443,7 +475,7 @@ class CompanyRuntimeService:
 
         await self.with_memory(task["agent_id"], capture)
 
-    async def model(self, task_id: str, body: dict[str, Any]) -> AsyncIterator[str]:
+    async def model(self, task_id: str, body: dict[str, Any]) -> AsyncGenerator[str, None]:
         task = await self.task(task_id, active=True)
         snapshot = json.loads(task["expert_json"])
         ref = body["model"]
@@ -494,26 +526,14 @@ class CompanyRuntimeService:
         shared = None
         reservation_id = uuid.uuid4().hex
         reserved_tokens = 0
-        succeeded = False
         if execution is not None:
-            shared = await execution.io.run(
-                execution.repo.proxy_run,
-                task=task_id,
-                user=self.owner,
-                device=self.identity["device_id"],
-                node=execution.node,
-                incarnation=execution.incarnation,
-            )
-            fence = (shared["run_id"], shared["node_id"], shared["incarnation"], shared["token"])
             output = int(
                 settings.get("max_tokens") or settings.get("max_completion_tokens") or 8192
             )
             if not 1 <= output <= 65536:
-                await execution.io.run(execution.repo.transition, *fence, "failed")
                 raise denied("model_output_limit_exceeded", 422)
             request_size = len(json.dumps(body, ensure_ascii=False).encode())
             if request_size > 1024 * 1024:
-                await execution.io.run(execution.repo.transition, *fence, "failed")
                 raise denied("model_input_limit_exceeded", 413)
             text_only = all(
                 isinstance(item.get("data", {}).get("content"), str) for item in body["messages"]
@@ -527,27 +547,6 @@ class CompanyRuntimeService:
                     int(profile.get("max_input_tokens") or profile.get("context_window") or 128000),
                 )
             ) + output
-            try:
-                deadline = time.monotonic() + 90
-                while True:
-                    try:
-                        await execution.io.run(
-                            execution.repo.reserve_model,
-                            *fence,
-                            key=reservation_id,
-                            provider=ref,
-                            tokens=reserved_tokens,
-                            quota_remaining=None,
-                        )
-                        break
-                    except ExecutionConflict as exc:
-                        if str(exc) != "model_capacity_exceeded" or time.monotonic() >= deadline:
-                            raise
-                        await self.task(task_id, active=True)
-                        await asyncio.sleep(0.1)
-            except BaseException:
-                await execution.io.run(execution.repo.transition, *fence, "failed")
-                raise
             model = model.bind(
                 **{
                     "max_completion_tokens"
@@ -555,38 +554,120 @@ class CompanyRuntimeService:
                     else "max_tokens": output
                 }
             )
+
+        messages = messages_from_dict(body["messages"])
+        if execution is not None:
+            with CancelScope(shield=True):
+                shared = await execution.io.run(
+                    execution.repo.proxy_run,
+                    task=task_id,
+                    user=self.owner,
+                    device=self.identity["device_id"],
+                    node=execution.node,
+                    incarnation=execution.incarnation,
+                )
+            assert shared is not None
+            fence = (shared["run_id"], shared["node_id"], shared["incarnation"], shared["token"])
+            try:
+                deadline = time.monotonic() + 90
+                while True:
+                    await checkpoint_if_cancelled()
+                    try:
+                        with CancelScope(shield=True):
+                            await execution.io.run(
+                                execution.repo.reserve_model,
+                                *fence,
+                                key=reservation_id,
+                                provider=ref,
+                                tokens=reserved_tokens,
+                                quota_remaining=None,
+                            )
+                        break
+                    except ExecutionConflict as exc:
+                        if str(exc) != "model_capacity_exceeded" or time.monotonic() >= deadline:
+                            raise
+                        await self.task(task_id, active=True)
+                        await asyncio.sleep(0.1)
+            except BaseException as exc:
+                state = "cancelled" if isinstance(exc, asyncio.CancelledError) else "failed"
+                with CancelScope(shield=True):
+                    await execution.io.run(execution.repo.transition, *fence, state)
+                raise
+        stream = None
+        state = "failed"
+        received = False
+        output_bytes = 0
+        rejected = False
         try:
+            await checkpoint_if_cancelled()
+            stream = model.astream(messages)
             next_check = 0.0
-            async for chunk in model.astream(messages_from_dict(body["messages"])):
+            async for chunk in stream:
+                received = True
+                if chunk.usage_metadata:
+                    usage = chunk.usage_metadata
+                if shared is not None and not usage:
+                    output_bytes += _model_output_bytes(chunk)
                 if shared is not None and time.monotonic() >= next_check:
                     assert execution is not None
                     await execution.io.run(execution.repo.check, *fence)
                     await self.task(task_id, active=True)
                     next_check = time.monotonic() + 1
-                if chunk.usage_metadata:
-                    usage = chunk.usage_metadata
                 yield encode(message_to_dict(chunk)) + "\n"
-            succeeded = True
+            state = "completed"
+        except (asyncio.CancelledError, GeneratorExit):
+            state = "cancelled"
+            raise
+        except Exception as exc:
+            rejected = not received and _model_http_status(exc) in {
+                400,
+                401,
+                403,
+                404,
+                413,
+                422,
+                429,
+            }
+            raise
         finally:
-            # StreamingResponse cancels this scope again while the client is
-            # disconnecting. Finish both writes before acknowledging teardown.
+            # Disconnects can cancel every await in the request scope.
             with CancelScope(shield=True):
+                close = getattr(stream, "aclose", None)
+                if close is not None:
+                    with suppress(Exception):
+                        await close()
+                input_tokens = int(usage.get("input_tokens", 0))
+                output_tokens = int(usage.get("output_tokens", 0))
                 if shared is not None:
                     assert execution is not None
-                    with suppress(Exception):
-                        await execution.io.run(
-                            execution.repo.settle_model,
-                            *fence,
-                            key=reservation_id,
-                            actual=int(usage.get("total_tokens", reserved_tokens))
-                            if succeeded
-                            else None,
-                        )
+                    actual: int | None = None
+                    estimate: int | None = None
+                    if usage:
+                        actual = int(usage.get("total_tokens", input_tokens + output_tokens))
+                    elif state == "completed":
+                        # Estimate the submitted messages and the generated payload.
+                        # Count bytes across the stream before rounding so chunk size
+                        # has no effect on the charge for text and tool arguments.
+                        prompt = request_size
+                        with suppress(TypeError, ValueError):
+                            prompt = count_tokens_approximately(messages, tools=body.get("tools"))
+                        actual = min(reserved_tokens, prompt + (output_bytes + 3) // 4)
+                    elif stream is None or rejected:
+                        actual = 0
+                    else:
+                        # The amount consumed by an interrupted request is unconfirmed.
+                        prompt = request_size if text_only else reserved_tokens - output
+                        estimate = prompt + output_bytes
+                    try:
                         await execution.io.run(
                             execution.repo.transition,
                             *fence,
-                            "completed" if succeeded else "unknown",
+                            state if actual is not None else "unknown",
+                            model_receipt=(reservation_id, actual),
+                            model_estimate=estimate,
                         )
+                    except Exception:
+                        logger.exception("failed to settle desktop model run %s", shared["run_id"])
                 await offload(
                     self.services.usage_repo.record,
                     agent_id=task["agent_id"],
@@ -594,13 +675,15 @@ class CompanyRuntimeService:
                     thread_id=task["thread_id"],
                     model=ref,
                     source="company_runtime",
-                    input_tokens=int(usage.get("input_tokens", 0)),
-                    output_tokens=int(usage.get("output_tokens", 0)),
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
                     **({"execution_id": shared["run_id"]} if shared is not None else {}),
                 )
 
-    async def checkpoints(self, task_id: str, operations: list[dict[str, Any]]) -> dict[str, int]:
-        task = await self.task(task_id)
+    async def checkpoints(
+        self, task_id: str, operations: list[dict[str, Any]], *, require_active: bool = False
+    ) -> dict[str, int]:
+        task = await self.task(task_id, active=require_active)
         if task["status"] not in {"running", "cancel_requested", "unknown"}:
             raise denied("task_already_finished")
         for operation in operations:
@@ -753,6 +836,9 @@ class CompanyRuntimeService:
 
         task = await self.task(task_id, active=True)
         ids = json.loads(task["request_json"]).get("knowledge_base_ids", [])
+        locale = await offload(
+            resolve_user_locale, user_repo=self.services.user_repo, user_id=self.owner
+        )
         return await retrieve_context(
             self.services,
             user_id=self.owner,
@@ -760,5 +846,5 @@ class CompanyRuntimeService:
             query=body["query"],
             knowledge_base_ids=ids,
             k=min(body.get("k", 8), 20),
-            locale="zh",
+            locale=locale,
         )

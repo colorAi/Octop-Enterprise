@@ -265,6 +265,7 @@ class OctopServer:
         self.wizard_tokens = WizardTokenStore(ttl_seconds=300)
         self.communication: CommunicationBridge | None = None
         self.employee_resources: Any = None
+        self.group_experts: Any = None
         self.devices: DeviceManager | None = None
         self._started = False
         self._started_at: int | None = None
@@ -717,11 +718,16 @@ class OctopServer:
 
         if self.role == "worker":
             from octop.infra.execution.gateway import GatewayExecution
+            from octop.infra.group_experts.executor import GroupExpertExecutor
+            from octop.infra.group_experts.service import GroupExpertService
 
+            self.group_experts = GroupExpertService(self)
+            self.execution.group_handler = GroupExpertExecutor(self.group_experts)
             adapter = GatewayExecution(self, self.execution)
             gateway.processor.execution = adapter
             registry.execution = adapter
             await self.execution.start()
+            await self.group_experts.start(background=self.runtime_shards.primary)
             await gateway.reload_channels_from_db()
             cron_mgr.resume()
             await proactive_scheduler.start_all()
@@ -772,6 +778,8 @@ class OctopServer:
                 await self.runtime_shards.close()
             if self.execution is not None:
                 await self.execution.close()
+            if self.group_experts is not None:
+                await self.group_experts.close()
             if self.employee_resources is not None:
                 await self.employee_resources.drain()
             await self.management_io.drain()

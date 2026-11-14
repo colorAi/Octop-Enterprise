@@ -84,7 +84,7 @@ async function refresh() {
             ? "Read only"
             : "只读"
         } · ${
-          (grant.allow_company ?? grant.allow_h3c)
+          grant.allow_company
             ? en
               ? "Server sharing allowed"
               : "已同意传入服务器"

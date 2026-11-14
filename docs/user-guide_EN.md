@@ -14,7 +14,7 @@ This guide covers the current enterprise edition. Administrators deploy the comp
 | Permission changes and software updates                    | [Update procedures](updates_EN.md)                                            |
 | Development environment and code verification              | [Contributing](../CONTRIBUTING_EN.md)                                         |
 
-Administrators build the server from this repository's source and build matching clients; employees install the client provided by the company. Software upgrades follow [Update procedures](updates_EN.md).
+Administrators deploy the server from this repository's source and download or build matching clients; employees install the client provided by the company. Software upgrades follow [Update procedures](updates_EN.md).
 
 ## Administrator quick start
 

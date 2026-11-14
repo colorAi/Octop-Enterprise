@@ -109,6 +109,8 @@ export function applyRenewedAccessToken(
   response: Response,
   requestToken: string,
 ): void {
+  if (response.headers.get("X-Octop-Group-Expert-Syncing") === "1")
+    window.dispatchEvent(new Event("octop:group-expert-syncing"));
   const renewed = response.headers.get(ACCESS_TOKEN_RESPONSE_HEADER);
   if (renewed && requestToken && requestToken === getAuthToken()) {
     setAuthToken(renewed, !isSessionOnlyAuth());

@@ -20,12 +20,15 @@ import type { ManagedGroup } from "../../../api/types/communication";
 import { newClientMessageId } from "../../../utils/communicationId";
 import { communicationErrorText } from "../../Messaging/communicationUi";
 import { useCommunication } from "../../Messaging/hooks/CommunicationContext";
+import { useCurrentUser } from "../../../hooks/useCurrentUser";
+import GroupExpertsPanel from "../../Messaging/GroupExpertsPanel";
 const org = communicationApi.organization;
 
 function GroupManager({ id, close }: { id: string; close: () => void }) {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const { state, client } = useCommunication();
+  const user = useCurrentUser();
   const joinRequest = useRef(newClientMessageId());
   const [group, setGroup] = useState<ManagedGroup>();
   const [busy, setBusy] = useState(false);
@@ -158,6 +161,9 @@ function GroupManager({ id, close }: { id: string; close: () => void }) {
           {t("communication.save")}
         </Button>
       </Form>
+      {group && user?.role === "admin" && (
+        <GroupExpertsPanel key={id} group={id} organization />
+      )}
       <h3>{t("communication.members")}</h3>
       <Table
         size="small"

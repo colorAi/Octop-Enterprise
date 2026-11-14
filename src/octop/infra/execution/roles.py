@@ -23,6 +23,7 @@ from octop.infra.db.migrate import (
 from octop.infra.db.pool import PostgresPool
 from octop.infra.db.services import build_shared_services
 from octop.infra.execution.service import ExecutionService
+from octop.infra.group_experts.service import GroupExpertService
 from octop.infra.users.manager import UserManager
 from octop.infra.utils.bounded_io import BoundedIO
 from octop.infra.utils.paths import PathLayout
@@ -116,6 +117,7 @@ class WebProcess:
         self.management_io = BoundedIO(workers=2, capacity=24)
         self.user_manager = UserManager(self.services)
         self.communication = CommunicationBridge(self.services)
+        self.group_experts = GroupExpertService(self)
         self.app_runtime = SimpleNamespace(user_manager=self.user_manager)
         self.execution = ExecutionService(
             self.services.execution_repo,
@@ -140,6 +142,7 @@ class WebProcess:
         self._started = True
 
     async def stop(self) -> None:
+        await self.group_experts.close()
         await self.communication.stop()
         await self.execution.close()
         await self.management_io.drain()

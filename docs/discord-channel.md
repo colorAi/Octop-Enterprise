@@ -1,4 +1,4 @@
-# Discord 通道：本地验收与配置
+# Discord 通道：配置与验收
 
 支持私聊、服务器文字频道、已有线程、文本/图片/附件、正在输入提示、长回复自动分段。
 
@@ -48,28 +48,4 @@ uv run octop run
 
 暂不包含原生 Slash Command 注册、自动新建线程、语音房、编辑式流式回复。一个 Agent 建议先配置一个 Discord Bot；同一 Agent 多 Bot 共用同一频道的会话隔离不在首版范围。
 
-本次自动化验收使用模拟 Gateway/REST，不需要真实 Token。真实网络、Discord 服务器权限与 LLM 回复由上述人工步骤验证。
-
-## 5. 自动化验收结果（2026-09-21）
-
-| 检查 | 结果 |
-|---|---|
-| octop-gateway `make all` | 格式、Lint、mypy 通过；458 项测试通过，13 项集成测试按默认命令排除 |
-| Octop `make all` | 格式、Lint、mypy 通过；3587 项测试通过，17 项条件跳过 |
-| Discord 最终相关后端复核 | 18 项通过，覆盖路由、实时状态、通道 CRUD 与配置探测 |
-| 前端通道测试 | 12 项通过，包含 Discord 入口、Token 和长数字 ID 的完整保存流程 |
-| `make build-frontend` / 启动脚本 | TypeScript 与 Vite 构建通过；`run-discord-local.sh --help` 通过；内置网页产物已生成 |
-
-命令使用 `RUN='uv run --no-sync'` 保留未发布的本地网关；通道库复用 Octop 的开发环境（`UV_PROJECT_ENVIRONMENT=../Octop/.venv`）。Octop 完整测试需允许绑定本机随机端口，最初沙箱导致的 15 项端口权限失败已在允许本机端口后完整重跑通过。
-
-没有使用真实 Bot Token，也没有发布包、提交或推送代码。人工测试请使用本文第一节的本地启动方式。
-
-## 6. 全频道默认模式验收（2026-09-22）
-
-新增「允许所有可访问频道」开关，前后端默认开启；缺少该字段的旧配置同样按开启处理。关闭并保存后保持指定频道模式；输入框保留原有 ID。私聊允许列表与直接 @触发规则不变。
-
-- octop-gateway `make all`：460 passed，13 deselected；格式、Lint、mypy 通过。
-- Octop `make all`：3591 passed，17 skipped；格式、Lint、mypy 通过。
-- 前端通道测试：16 passed，覆盖默认开启、关闭后保存、旧配置默认值、重新编辑保留布尔值。
-- 前端相关文件 ESLint 通过；TypeScript 和 Vite 构建通过，内置网页产物已更新。
-- 重启本地 Octop 并刷新网页后生效；真实 Discord 联调仍由用户人工测试。
+自动化测试使用模拟 Gateway/REST，不需要真实 Token。真实网络、Discord 服务器权限与 LLM 回复由上述人工步骤验证。

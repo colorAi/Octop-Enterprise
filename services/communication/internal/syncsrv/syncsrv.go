@@ -112,8 +112,16 @@ func (s *Service) handleSync(w http.ResponseWriter, r *http.Request) {
 		expired()
 		return
 	}
-	rows, err := tx.Query(r.Context(), `SELECT seq, type, object_id, version, payload
-		FROM user_sync_events WHERE user_id=$1 AND seq > $2 AND seq <= $4 ORDER BY seq LIMIT $3`, a.UserID, since, limit+1, head)
+	// Older servers emitted group expert call events to every current member.
+	// Check retained events at read time as well, preserving sequence continuity
+	// when the viewer cannot read the message (including a later clear).
+	rows, err := tx.Query(r.Context(), `SELECT seq, type, object_id, version, payload,
+		type<>'group.expert.call' OR EXISTS(
+			SELECT 1 FROM messages m JOIN member_epochs me ON me.conversation_id=m.conversation_id AND me.user_id=e.user_id
+			LEFT JOIN conversation_user_state st ON st.conversation_id=m.conversation_id AND st.user_id=e.user_id
+			WHERE m.id=e.object_id AND m.seq BETWEEN me.visible_from_seq AND COALESCE(me.visible_through_seq,9223372036854775807)
+			AND m.seq>COALESCE(st.cleared_through_seq,0)
+		) FROM user_sync_events e WHERE e.user_id=$1 AND e.seq > $2 AND e.seq <= $4 ORDER BY e.seq LIMIT $3`, a.UserID, since, limit+1, head)
 	if err != nil {
 		httpx.WriteErrorOf(w, r, httpx.ErrStorage)
 		return
@@ -125,7 +133,8 @@ func (s *Service) handleSync(w http.ResponseWriter, r *http.Request) {
 		var seq, ver int64
 		var typ, obj string
 		var payload []byte
-		if err := rows.Scan(&seq, &typ, &obj, &ver, &payload); err != nil {
+		var visible bool
+		if err := rows.Scan(&seq, &typ, &obj, &ver, &payload, &visible); err != nil {
 			httpx.WriteErrorOf(w, r, httpx.ErrStorage)
 			return
 		}
@@ -136,6 +145,9 @@ func (s *Service) handleSync(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		previous = seq
+		if !visible {
+			typ, obj, ver, payload = "sync.redacted", "", 0, []byte("{}")
+		}
 		items = append(items, eventView{Seq: strconv.FormatInt(seq, 10), Type: typ, ObjectID: obj,
 			Version: strconv.FormatInt(ver, 10), Payload: payload})
 	}

@@ -30,6 +30,9 @@ type Claims struct {
 	Expires     int64    `json:"exp"`
 	Version     int64    `json:"version"`
 	Permissions []string `json:"permissions"`
+	Method      string   `json:"method,omitempty"`
+	Path        string   `json:"path,omitempty"`
+	BodyDigest  string   `json:"body_digest,omitempty"`
 }
 
 func From(r *http.Request) (Actor, bool) {

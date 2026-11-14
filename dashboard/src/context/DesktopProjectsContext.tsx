@@ -22,6 +22,7 @@ interface ProjectsContext {
   error: string;
   revision: number;
   refresh(): void;
+  sync(project_id: string): Promise<DesktopProjectState | null>;
   relocate(project_id: string): Promise<DesktopProjectState | null>;
   update(params: {
     project_id: string;
@@ -41,6 +42,7 @@ const Context = createContext<ProjectsContext>({
   error: "",
   revision: 0,
   refresh: () => {},
+  sync: async () => null,
   relocate: async () => null,
   update: async () => null,
   choose: async () => null,
@@ -102,7 +104,7 @@ export function DesktopProjectsProvider({ children }: { children: ReactNode }) {
   }, [online, owner, available, revision, apply]);
   const change = useCallback(
     async (
-      action: "choose" | "select" | "update" | "relocate",
+      action: "choose" | "select" | "update" | "relocate" | "sync",
       params: ProjectFileScope & {
         agent_id?: string;
         name?: string;
@@ -112,6 +114,7 @@ export function DesktopProjectsProvider({ children }: { children: ReactNode }) {
     ) => {
       const bridge = window.__octopRuntime?.projects;
       if (!bridge || !online) return null;
+      if (action === "sync" && !bridge.sync) return null;
       const request = ++sequence.current;
       setBusy(true);
       setError("");
@@ -123,9 +126,12 @@ export function DesktopProjectsProvider({ children }: { children: ReactNode }) {
             ? await bridge.relocate({ project_id: params.project_id! })
             : action === "update"
             ? await bridge.update({ ...params, project_id: params.project_id! })
+            : action === "sync"
+            ? (await bridge.sync!({ project_ids: [params.project_id!] })).state
             : await bridge.select(params);
         if (request !== sequence.current) return null;
         apply(next);
+        if (action === "sync") refresh();
         return next;
       } catch (err) {
         if (request === sequence.current)
@@ -135,7 +141,7 @@ export function DesktopProjectsProvider({ children }: { children: ReactNode }) {
         if (request === sequence.current) setBusy(false);
       }
     },
-    [online, apply],
+    [online, apply, refresh],
   );
   return (
     <Context.Provider
@@ -146,6 +152,10 @@ export function DesktopProjectsProvider({ children }: { children: ReactNode }) {
         error,
         revision,
         refresh,
+        sync: useCallback(
+          (project_id) => change("sync", { project_id }),
+          [change],
+        ),
         relocate: useCallback(
           (project_id) => change("relocate", { project_id }),
           [change],

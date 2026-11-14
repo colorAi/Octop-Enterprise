@@ -10,6 +10,7 @@ from starlette.requests import Request
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from octop.api.common.execution import execution_error_response
+from octop.api.common.reads import management_read
 from octop.api.common.runtime_routing import runtime_agent, runtime_owner
 from octop.api.deps import resolve_user_from_token
 from octop.infra.db.repos.execution import ExecutionConflict
@@ -27,6 +28,8 @@ class RuntimeActivityMiddleware:
             shards is None
             or scope["type"] not in {"http", "websocket"}
             or path.startswith("/api/health")
+            or path.startswith("/api/im/")
+            or path.startswith("/internal/group-experts/")
         ):
             await self.app(scope, receive, send)
             return
@@ -54,13 +57,11 @@ class RuntimeActivityMiddleware:
                 await self.app(scope, receive, send)
                 return
             try:
-                user = await self.server.management_io.run(
-                    resolve_user_from_token, self.server, raw
-                )
+                user = await management_read(self.server, resolve_user_from_token, self.server, raw)
                 owner = await runtime_owner(self.server, path, user, socket.query_params)
-                await self.server.management_io.run(shards.assert_user, owner)
-            except OctopError:
-                await socket.close(code=4001)
+                await management_read(self.server, shards.assert_user, owner)
+            except OctopError as exc:
+                await socket.close(code=1013 if exc.status == 503 else 4001)
                 return
             except ExecutionConflict:
                 await socket.close(code=1013)
@@ -73,7 +74,7 @@ class RuntimeActivityMiddleware:
                 owner = await runtime_owner(
                     self.server, path, user, request.query_params, headers=request.headers
                 )
-                await self.server.management_io.run(shards.assert_user, owner)
+                await management_read(self.server, shards.assert_user, owner)
             except OctopError as exc:
                 from starlette.responses import JSONResponse
 

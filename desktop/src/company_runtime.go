@@ -35,7 +35,7 @@ func parseRuntimeEvent(name, nonce string) (id, method string, params json.RawMe
 		return
 	}
 	switch p[2] {
-	case "project_continue", "project_relocate", "project_fork", "project_update", "project_status", "project_choose", "project_select", "project_create", "project_threads", "project_files", "project_read", "status", "refresh_status", "start", "cancel", "reveal", "reconcile", "preview_image", "steer", "steer_remove", "hitl_resume", "upload_artifact", "import_attachment":
+	case "project_export", "project_import", "project_sync", "project_account_list", "project_attach", "project_continue", "project_relocate", "project_fork", "project_update", "project_status", "project_choose", "project_select", "project_create", "project_threads", "project_files", "project_read", "status", "refresh_status", "start", "cancel", "reveal", "reconcile", "preview_image", "steer", "steer_remove", "hitl_resume", "upload_artifact", "import_attachment":
 	default:
 		return
 	}
@@ -119,6 +119,12 @@ func (a *App) performRuntimeAction(nonce, base, method string, params json.RawMe
 			a.companyMu.Unlock()
 			return nil, errors.New("图片预览请求无效")
 		}
+		resolved, resolveErr := a.resolveArtifactPathLocked(p.Path)
+		if resolveErr != nil {
+			a.companyMu.Unlock()
+			return nil, resolveErr
+		}
+		p.Path = resolved
 		workspace, scopeErr := a.artifactRootLocked(p.Path)
 		epoch, granted := a.runtimeEpoch, scopeErr == nil
 		a.companyMu.Unlock()
@@ -142,6 +148,12 @@ func (a *App) performRuntimeAction(nonce, base, method string, params json.RawMe
 			SHA256 string `json:"sha256"`
 		}
 		_ = json.Unmarshal(params, &p)
+		resolved, resolveErr := a.resolveArtifactPathLocked(p.Path)
+		if resolveErr != nil {
+			a.companyMu.Unlock()
+			return nil, resolveErr
+		}
+		p.Path = resolved
 		workspace, scopeErr := a.artifactRootLocked(p.Path)
 		epoch, granted := a.runtimeEpoch, scopeErr == nil
 		currentReceipt := a.runtimeArtifacts[p.Path]
@@ -393,6 +405,18 @@ func (a *App) watchRuntimeIdentity(nonce, base string, epoch uint64, expires int
 
 func runtimeErrorText(code string) string {
 	messages := map[string]string{
+		"project_export_select":                 "请选择要导出的项目。",
+		"project_sync_select":                   "请选择要同步对话的项目。",
+		"project_sync_server_required":          "公司服务尚不支持按账号同步项目对话，请更新后重试。",
+		"project_archive_not_owned":             "迁移包属于其他服务器或账号，请登录原公司账号后导入。",
+		"project_archive_invalid":               "迁移包格式无效或内容不完整。",
+		"project_path_ambiguous":                "旧文件路径对应多个项目，请从项目的新目录打开文件。",
+		"project_archive_checksum":              "迁移包文件校验失败，请重新复制或导出。",
+		"project_archive_project_exists":        "本机已关联该项目或此目录已用于其他项目。可在项目菜单同步对话或重新定位目录。",
+		"project_archive_destination_exists":    "导入目录已有不同内容，请选择另一个导入位置。",
+		"project_archive_output_inside_project": "请将迁移包保存到待导出项目之外的文件夹。",
+		"project_archive_too_large":             "迁移包超过文件数量或大小上限，请分批迁移项目。",
+
 		"project_already_running":                "这个项目已有运行中或待核对的任务，请处理完成后再使用另一位专家。",
 		"thread_project_missing":                 "此会话尚未绑定本机项目，请从项目列表打开原会话，或选择文件夹新建对话。",
 		"project_directory_changed":              "原项目文件夹已移动或不可用，请恢复原目录；不会自动切换到其他目录。",
@@ -405,7 +429,7 @@ func runtimeErrorText(code string) string {
 		"company_protocol_incompatible":          "公司服务与客户端运行协议不兼容，请安装匹配的企业客户端。",
 		"device_session_expired":                 "当前设备连接已过期，请重新登录公司账号。",
 		"legacy_thread_read_only":                "此会话包含服务器执行的旧历史，仅供查看；请新建会话开始本机任务。",
-		"project_on_another_device":              "此会话的本地项目属于另一台电脑，文件未同步；请新建会话处理本机文件。",
+		"project_on_another_device":              "这条旧对话尚未关联账号项目。请先在原电脑同步对话或导出项目。",
 		"task_selection_changed":                 "任务状态已变化，请刷新任务列表后再核对。",
 		"recovery_not_owned":                     "无法核对该任务的归属，请使用原公司账号、原电脑和原工作目录重新连接。",
 		"previous_device_still_active":           "该任务仍连接到另一会话，请先结束原会话再核对。",

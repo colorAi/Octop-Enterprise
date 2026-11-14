@@ -7,6 +7,7 @@ import (
 	"octop/communication/internal/auth"
 	"octop/communication/internal/chat"
 	"octop/communication/internal/deps"
+	"octop/communication/internal/experts"
 	"octop/communication/internal/groups"
 	"octop/communication/internal/httpx"
 	"octop/communication/internal/jobs"
@@ -30,6 +31,10 @@ func New(d *deps.Deps) *App {
 	a.Sup.Register("media.process", mediasvc.NewProcessJob(d))
 	a.Sup.RegisterRecurring("media.cleanup", time.Hour, mediasvc.NewCleanupJob(d))
 	a.Sup.RegisterRecurring("sync.purge", time.Hour, syncsrv.NewPurgeJob(d))
+	groupExperts := experts.New(d)
+	groupExperts.Register(a.Mux)
+	a.Sup.RegisterRecurring("group.expert.reconcile", time.Second, groupExperts.Reconcile)
+	a.Sup.Register("group.expert.reconcile.call", groupExperts.Reconcile)
 	a.Sup.Register("sync_wakeup", func(ctx context.Context, b json.RawMessage) error {
 		var v struct {
 			UserID string `json:"user_id"`

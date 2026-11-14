@@ -18,6 +18,7 @@ from langchain_core.utils.function_calling import convert_to_openai_tool
 from langgraph.checkpoint.base import WRITES_IDX_MAP, BaseCheckpointSaver, CheckpointTuple
 from pydantic import ConfigDict, Field
 
+from octop.infra.company_runtime import MODEL_STREAM_READ_TIMEOUT_SECONDS
 from octop.infra.company_runtime.model_context import calibrated_prompt_tokens
 
 
@@ -136,7 +137,7 @@ class CompanyChatModel(BaseChatModel):
                 "POST",
                 f"tasks/{self.task_id}/model",
                 json=body,
-                timeout=httpx.Timeout(600, connect=10),
+                timeout=httpx.Timeout(MODEL_STREAM_READ_TIMEOUT_SECONDS, connect=10),
             ) as response:
                 response.raise_for_status()
                 async for line in response.aiter_lines():

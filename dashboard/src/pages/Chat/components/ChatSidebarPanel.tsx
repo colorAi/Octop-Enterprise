@@ -19,11 +19,13 @@ interface ChatSidebarPanelProps {
   isSidebarResizing?: boolean;
   sidebarElRef?: RefObject<HTMLDivElement>;
   agents: OctopAgent[];
+  historyAgents: OctopAgent[];
   sessions: Session[];
   activeThreadId: string | null;
   resolvedAgentId: string | null | undefined;
   sessionsHasMore: boolean;
   sessionsLoadingMore: boolean;
+  onRefreshSessions: () => void;
   onLoadMoreSessions: () => void;
   onFetchAllSessions: () => void;
   onSelectSession: (sessionId: string, agentId: string) => void;
@@ -54,11 +56,13 @@ export default function ChatSidebarPanel({
   isSidebarResizing = false,
   sidebarElRef,
   agents,
+  historyAgents,
   sessions,
   activeThreadId,
   resolvedAgentId,
   sessionsHasMore,
   sessionsLoadingMore,
+  onRefreshSessions,
   onLoadMoreSessions,
   onFetchAllSessions,
   onSelectSession,
@@ -87,7 +91,7 @@ export default function ChatSidebarPanel({
     onSidebarOpenChange(true);
   }, [sidebarOpen, onSidebarOpenChange]);
 
-  const legacySessions = navEmbedded ? (
+  const compactSessions = navEmbedded ? (
     <MinimalAgentSessionNav
       agents={agents}
       activeId={activeThreadId}
@@ -103,27 +107,25 @@ export default function ChatSidebarPanel({
       activeForkDisabled={forkDisabled}
       activeForkDisabledHint={forkDisabledHint}
     />
-  ) : (
-    <SessionList
-      agents={agents}
-      sessions={sessions}
-      activeId={activeThreadId}
-      activeAgentId={resolvedAgentId ?? null}
-      hasMore={sessionsHasMore}
-      loadingMore={sessionsLoadingMore}
-      onLoadMore={onLoadMoreSessions}
-      onFetchAllSessions={onFetchAllSessions}
-      onSelect={onSelectSession}
-      onAgentSelect={onAgentSelect}
-      onNewChat={onNewChatWithAgent}
-      onDelete={onDeleteSession}
-      onRename={onRenameSession}
-      onPin={onPinSession}
-      onFork={onForkSession}
-      activeForkDisabled={forkDisabled}
-      activeForkDisabledHint={forkDisabledHint}
-    />
-  );
+  ) : null;
+  const sessionListProps = {
+    sessions,
+    activeId: activeThreadId,
+    activeAgentId: resolvedAgentId ?? null,
+    hasMore: sessionsHasMore,
+    loadingMore: sessionsLoadingMore,
+    onLoadMore: onLoadMoreSessions,
+    onFetchAllSessions,
+    onSelect: onSelectSession,
+    onAgentSelect,
+    onNewChat: onNewChatWithAgent,
+    onDelete: onDeleteSession,
+    onRename: onRenameSession,
+    onPin: onPinSession,
+    onFork: onForkSession,
+    activeForkDisabled: forkDisabled,
+    activeForkDisabledHint: forkDisabledHint,
+  };
 
   const sessionList = (
     <ProjectNavigation
@@ -132,8 +134,12 @@ export default function ChatSidebarPanel({
       threadId={activeThreadId}
       onNewChat={onNewChatWithAgent}
       onSelect={onSelectSession}
+      serverHistory={
+        <SessionList {...sessionListProps} agents={historyAgents} historyMode />
+      }
+      onOpenServerHistory={onRefreshSessions}
     >
-      {legacySessions}
+      {compactSessions ?? <SessionList {...sessionListProps} agents={agents} />}
     </ProjectNavigation>
   );
   if (navEmbedded) {

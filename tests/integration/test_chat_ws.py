@@ -10,9 +10,11 @@ from unittest.mock import MagicMock
 
 import httpx
 import pytest
+from langchain_core.messages import HumanMessage
 from starlette.websockets import WebSocketDisconnect
 
 from octop.infra.errors import ErrorCode, OctopError
+from octop.infra.history.projection import message_inputs
 from tests.support.app import octop_client, write_octop_config
 from tests.support.auth import (
     auth_header,
@@ -662,6 +664,53 @@ async def test_thread_history_after_stream(env: Any) -> None:
     hist = await c.get(f"/api/agents/{aid}/threads/{tid}/history", headers=alice_auth)
     assert hist.status_code == 200
     assert "messages" in hist.json()
+
+
+async def test_synced_desktop_history_is_available_to_the_same_account_on_a_new_login(
+    env: Any,
+) -> None:
+    client, server, _, alice, bob, agent_id = env
+    owner = server.services.user_repo.get_by_username("alice").id
+    projects = server.services.company_project_repo
+    project, thread = "original-project", "desktop-thread"
+    projects.register(project, owner, "original-installation", "Original project")
+    projects.create_thread(
+        project,
+        owner,
+        "original-installation",
+        thread_id=thread,
+        agent_id=agent_id,
+        device_id="original-device",
+        title="Synced conversation",
+    )
+    message = HumanMessage(content="Synced from the original computer", id="synced-message")
+    server.services.thread_message_repo.replace_all(thread, message_inputs([message]))
+    server.services.thread_repo.touch_last_active(thread)
+    assert [entry["project_id"] for entry in projects.list_projects(owner, 10, 0)] == [project]
+
+    threads_path = f"/api/agents/{agent_id}/threads"
+    history_path = f"{threads_path}/{thread}/history"
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=client._octop_app), base_url="http://testserver"
+    ) as new_client:
+        alice_new = await auth_header(new_client, username="alice")
+        listed = await new_client.get(threads_path, headers=alice_new)
+        assert listed.status_code == 200
+        row = listed.json()[0]
+        assert (row["thread_id"], row["execution_location"], row["has_messages"]) == (
+            thread,
+            "desktop",
+            True,
+        )
+        history = await new_client.get(history_path, headers=alice_new)
+        assert history.status_code == 200
+        assert history.json()["messages"][0]["content"] == [
+            {"type": "text", "text": message.content}
+        ]
+        assert (await new_client.get(history_path, headers=bob)).status_code == 403
+
+    original_history = await client.get(history_path, headers=alice)
+    assert original_history.json()["messages"] == history.json()["messages"]
 
 
 async def test_thread_history_reports_active_turn(env: Any) -> None:

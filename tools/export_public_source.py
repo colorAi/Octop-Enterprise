@@ -18,6 +18,7 @@ EXCLUDED = (
     ".claude/",
     ".codex/",
     ".playwright-cli/",
+    "dashboard/.company-preview/",
     "output/",
     "fnos/",
     "scripts/build-fpk.sh",
@@ -62,6 +63,7 @@ EXCLUDED = (
     "docs/review-fixes-20261013.md",
     "docs/upstream-sync-20261015.md",
     "docs/upstream-sync-20261017.md",
+    "docs/design/upstream-review-20261106.md",
 )
 SECRET_PATTERNS = (
     re.compile(

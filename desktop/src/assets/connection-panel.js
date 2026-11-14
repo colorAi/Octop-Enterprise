@@ -36,7 +36,7 @@ function mountConnectionPanel(config) {
   function runtimeRequest(method, params = {}) {
     return new Promise((resolve, reject) => {
       const id = String(++sequence);
-      const timer = setTimeout(() => { runtimePending.delete(id); reject(new Error("本地运行时响应超时；请核对任务状态后重试")); }, (method === "project_choose" || method === "project_relocate") ? 300000 : 60000);
+      const timer = setTimeout(() => { runtimePending.delete(id); reject(new Error("本地运行时响应超时；请核对任务状态后重试")); }, (method === "project_export" || method === "project_import") ? 1800000 : (method === "project_choose" || method === "project_relocate" || method === "project_attach") ? 300000 : 60000);
       runtimePending.set(id, { resolve, reject, timer });
       emit(`runtime:${config.nonce}:${id}:${method}:${encodeURIComponent(JSON.stringify(params))}`);
     });
@@ -55,6 +55,11 @@ function mountConnectionPanel(config) {
     version: 1,
     projects: Object.freeze({
       status: () => runtimeRequest("project_status"),
+      export: params => runtimeRequest("project_export", params),
+      import: () => runtimeRequest("project_import"),
+      sync: params => runtimeRequest("project_sync", params),
+      accountProjects: () => runtimeRequest("project_account_list"),
+      attach: params => runtimeRequest("project_attach", params),
       choose: () => runtimeRequest("project_choose"),
       select: params => runtimeRequest("project_select", params),
       create: params => runtimeRequest("project_create", params),

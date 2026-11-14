@@ -6,7 +6,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 
@@ -25,9 +24,10 @@ func (a *App) runtimeAccountCurrent(nonce, base string, epoch uint64) bool {
 // Caller holds companyMu. The catalog belongs to a company/employee installation,
 // not to the short-lived login device ID or the currently selected project.
 func (a *App) projectStoreLocked(base string) (*companyprojects.Store, error) {
-	identity, _, err := a.company.RuntimeIdentity()
-	if err != nil {
-		return nil, err
+	identity := a.company.Status()
+	if identity.OwnerUserID <= 0 || identity.ExpiresAt <= time.Now().Unix() ||
+		(identity.State != "online" && identity.State != "reconnecting") {
+		return nil, errors.New("本地设备未连接公司服务，请在设置中重新连接")
 	}
 	scope := companyStateDir(base, identity.OwnerUserID)
 	if a.projectStore != nil && a.projectScope == scope {
@@ -156,6 +156,12 @@ func (a *App) prepareProjectBrowser(nonce, base string) (*companyprojects.Browse
 }
 
 func (a *App) performProjectAction(nonce, base, method string, raw json.RawMessage) (any, error) {
+	switch method {
+	case "project_export", "project_import":
+		return a.performProjectTransfer(nonce, base, method, raw)
+	case "project_sync", "project_account_list", "project_attach":
+		return a.performAccountProjectAction(nonce, base, method, raw)
+	}
 	var params struct {
 		ProjectID      string `json:"project_id"`
 		ThreadID       string `json:"thread_id"`
@@ -177,7 +183,7 @@ func (a *App) performProjectAction(nonce, base, method string, raw json.RawMessa
 	var browser *companyprojects.Browser
 	var err error
 	switch method {
-	case "project_status", "project_select", "project_files", "project_read", "project_threads", "project_continue":
+	case "project_status", "project_choose", "project_select", "project_files", "project_read", "project_threads", "project_continue":
 		browser, err = a.prepareProjectBrowser(nonce, base)
 	default:
 		process, err = a.ensureRuntimeProcess(nonce, base, method, ensureCompanyPortable)
@@ -251,6 +257,7 @@ func (a *App) performProjectAction(nonce, base, method string, raw json.RawMessa
 				return nil, err
 			}
 		}
+		var chosen companyprojects.Project
 		a.companyMu.Lock()
 		if !a.runtimeAccountCurrent(nonce, base, epoch) || a.projectStore != store {
 			a.companyMu.Unlock()
@@ -270,14 +277,21 @@ func (a *App) performProjectAction(nonce, base, method string, raw json.RawMessa
 			if method == "project_relocate" {
 				_, err = store.Relocate(params.ProjectID, canonical)
 			} else {
-				_, err = store.Register(canonical)
+				chosen, err = store.Register(canonical)
 			}
 		}
 		a.companyMu.Unlock()
 		if err != nil {
 			return nil, err
 		}
-		return projectState{Catalog: store.Snapshot(), Supported: true, Cancelled: path == ""}, nil
+		if chosen.ID != "" {
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancel()
+			if _, err := rpc(ctx, "register", chosen, nil); err != nil {
+				return nil, err
+			}
+		}
+		return projectState{Catalog: store.Snapshot(), Supported: true, Cancelled: path == ""}, check()
 	}
 	if method == "project_status" {
 		return projectState{Catalog: store.Snapshot(), Supported: true}, check()
@@ -455,21 +469,8 @@ func (a *App) performProjectAction(nonce, base, method string, raw json.RawMessa
 		return result, nil
 	}
 	if method == "project_threads" {
-		// Only recorded local receipts can migrate a legacy conversation. Retrying is
-		// harmless, and the company verifies installation ownership independently.
-		if project.Legacy {
-			threads := []string{}
-			for thread, id := range snapshot.Threads {
-				if id == project.ID {
-					threads = append(threads, thread)
-				}
-			}
-			sort.Strings(threads)
-			for _, thread := range threads {
-				if _, err = rpc(ctx, "adopt", project, map[string]any{"thread_id": thread}); err != nil {
-					return nil, err
-				}
-			}
+		if err := browser.AdoptLegacyConversations(ctx, project, snapshot.Threads); err != nil {
+			return nil, err
 		}
 		result, err := rpc(ctx, "threads", project, map[string]any{"offset": params.Offset})
 		if err != nil {
@@ -515,6 +516,7 @@ func (a *App) projectStartParamsLocked(nonce, base string, raw json.RawMessage) 
 	delete(params, "project_id")
 	delete(params, "project_root")
 	delete(params, "project_revision")
+	delete(params, "project_previous_roots")
 	if a.projectSupported {
 		store, err := a.projectStoreLocked(base)
 		if err != nil {
@@ -527,6 +529,7 @@ func (a *App) projectStartParamsLocked(nonce, base string, raw json.RawMessage) 
 				return nil, err
 			}
 			params["project_id"], params["project_root"], params["project_revision"] = p.ID, p.Path, p.Revision
+			params["project_previous_roots"] = p.PreviousPaths
 		} else {
 			return nil, errors.New("thread_project_missing")
 		}
@@ -595,4 +598,16 @@ func checkProjectIdle(raw json.RawMessage, catalog companyprojects.Catalog, root
 		}
 	}
 	return nil
+}
+
+func (a *App) resolveArtifactPathLocked(path string) (string, error) {
+	if a.projectSupported && a.projectStore == nil {
+		if _, err := a.projectStoreLocked(a.companyURL); err != nil {
+			return "", err
+		}
+	}
+	if a.projectStore != nil {
+		return a.projectStore.ResolveImportedPath(path)
+	}
+	return path, nil
 }

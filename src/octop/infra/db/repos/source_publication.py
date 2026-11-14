@@ -58,6 +58,7 @@ class SourcePublicationRepo:
         revision: int,
         digest: str,
         executor: tuple[str, str] | None = None,
+        group_objects: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         if not re.fullmatch(r"[0-9a-f]{64}", digest):
             raise ValueError("invalid_source_manifest_digest")
@@ -107,6 +108,14 @@ class SourcePublicationRepo:
                     "INSERT INTO resource_source_events(user_id,generation,manifest_sha256,created_at) VALUES(?,?,?,?)",
                     (user, next_generation, digest, now),
                 )
+            if group_objects is not None:
+                from octop.infra.db.repos.group_expert_sources import (
+                    publish_objects,
+                    refresh_scopes,
+                )
+
+                publish_objects(conn, now, group_objects, source_manifest=digest)
+                refresh_scopes(conn, now)
             if self.db.dialect == "postgresql":
                 conn.execute("SELECT pg_notify('octop_execution','resources')")
             return dict(

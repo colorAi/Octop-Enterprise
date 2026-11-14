@@ -30,7 +30,19 @@ type messageItem struct {
 	MentionUserIDs   []string         `json:"mention_user_ids"`
 	MentionAll       bool             `json:"mention_all"`
 	SystemKind       string           `json:"system_kind,omitempty"`
+	SenderType       string           `json:"sender_type"`
+	MentionExpertID  *string          `json:"mention_expert_id,omitempty"`
+	Expert           map[string]any   `json:"expert,omitempty"`
+	ExpertCall       map[string]any   `json:"expert_call,omitempty"`
 }
+
+// Both list and quote reads fetch expert metadata with their message query.
+const expertMessageColumns = `m.sender_type,m.mention_expert_id,
+ CASE WHEN eb.binding_id IS NULL THEN NULL ELSE jsonb_build_object('binding_id',eb.binding_id,'display_name',eb.display_name,'avatar',eb.avatar,'state',eb.state) END,
+ CASE WHEN ec.call_id IS NULL THEN NULL ELSE jsonb_build_object('call_id',ec.call_id,'call_state',ec.call_state,'reason_code',ec.reason_code,'expert_name',COALESCE(mentioned.display_name,'')) END`
+const expertMessageJoins = ` LEFT JOIN group_expert_bindings eb ON eb.binding_id=m.expert_binding_id AND eb.conversation_id=m.conversation_id
+ LEFT JOIN group_expert_calls ec ON ec.message_id=m.id AND ec.binding_id=m.mention_expert_id
+ LEFT JOIN group_expert_bindings mentioned ON mentioned.binding_id=m.mention_expert_id AND mentioned.conversation_id=m.conversation_id `
 
 func (s *Service) attachMessageAssets(ctx context.Context, item *messageItem) error {
 	if item.Recalled {
@@ -61,8 +73,8 @@ func (s *Service) visibleMessage(ctx context.Context, conv, id, user, kind strin
 	var item messageItem
 	var sender *string
 	var created time.Time
-	err := s.D.Store.Pool.QueryRow(ctx, `SELECT id,seq,sender_id,type,text,recalled_at IS NOT NULL,created_at,reply_to_message_id
-        FROM messages WHERE conversation_id=$1 AND id=$2`, conv, id).Scan(&item.ID, newSeq(&item.Seq), &sender, &item.Type, &item.Text, &item.Recalled, &created, &item.ReplyToMessageID)
+	err := s.D.Store.Pool.QueryRow(ctx, `SELECT m.id,m.seq,m.sender_id,m.type,m.text,m.recalled_at IS NOT NULL,m.created_at,m.reply_to_message_id,`+expertMessageColumns+`
+        FROM messages m `+expertMessageJoins+` WHERE m.conversation_id=$1 AND m.id=$2`, conv, id).Scan(&item.ID, newSeq(&item.Seq), &sender, &item.Type, &item.Text, &item.Recalled, &created, &item.ReplyToMessageID, &item.SenderType, &item.MentionExpertID, &item.Expert, &item.ExpertCall)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}

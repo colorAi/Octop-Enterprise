@@ -329,7 +329,7 @@ class DeviceManager:
                 if existing.selection != selection or existing.session_key != session_key:
                     raise _error("device_task_identity_conflict", status=409)
                 if not existing.valid_grant(conn):
-                    raise _error("directory_permission_or_h3c_consent_required")
+                    raise _error("directory_permission_or_consent_required")
                 return existing.token
         if len(self.tasks) >= 4096:
             raise _error("device_tasks_full", status=429)
@@ -345,7 +345,7 @@ class DeviceManager:
             request_id,
         )
         if not task.valid_grant(conn):
-            raise _error("directory_permission_or_h3c_consent_required")
+            raise _error("directory_permission_or_consent_required")
         self.tasks[token] = task
         return token
 

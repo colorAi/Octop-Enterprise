@@ -54,6 +54,24 @@ async def test_legacy_and_server_local_execution_never_mix(company):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("locale", ["en", "zh"])
+async def test_company_knowledge_uses_employee_locale(company, monkeypatch, locale):
+    server, client, _, owner = company
+    install_agent(server)
+    server.services.user_repo.set_locale(owner, locale)
+    retrieve = AsyncMock(return_value="knowledge context")
+    monkeypatch.setattr("octop.infra.knowledge.retrieve.retrieve_context", retrieve)
+    try:
+        await acquire(client)
+        result = await client.request("tasks/task1/knowledge", {"query": "report"})
+        assert result == {"content": "knowledge context"}
+        assert retrieve.await_args.kwargs["locale"] == locale
+        assert retrieve.await_args.kwargs["user_id"] == owner
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
 async def test_real_company_memory_is_idempotent_and_cross_session(company, tmp_path):
     from octop_memory import Memory
 

@@ -39,8 +39,6 @@ export interface DirectoryGrant {
   version: number;
   writable: boolean;
   allow_company?: boolean;
-  /** @deprecated Compatibility with older native clients. */
-  allow_h3c?: boolean;
 }
 export interface DeviceSelection {
   mode: "local" | "auto";

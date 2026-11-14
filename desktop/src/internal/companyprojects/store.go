@@ -25,6 +25,7 @@ type Project struct {
 	LastThread    string   `json:"last_thread,omitempty"`
 	Hidden        bool     `json:"hidden,omitempty"`
 	PreviousPaths []string `json:"previous_paths,omitempty"`
+	SyncPending   bool     `json:"sync_pending,omitempty"`
 }
 
 type Catalog struct {
@@ -187,25 +188,33 @@ func (s *Store) add(next *Catalog, path string, authorized, legacy bool) (Projec
 	return p, nil
 }
 
-// Register is called only after native directory selection and consent.
-func (s *Store) Register(path string) (Project, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+func (s *Store) authorizedRoot(path string) (string, error) {
 	root, err := canonical(path)
 	if err != nil {
-		return Project{}, err
+		return "", err
 	}
 	info, err := os.Stat(root)
 	if err != nil || !info.IsDir() {
-		return Project{}, errors.New("directory_unavailable")
+		return "", errors.New("directory_unavailable")
 	}
 	// Resolve the catalog's existing parent so a symlink cannot hide app data.
 	state, err := canonicalDestination(filepath.Dir(s.filename))
 	if err != nil {
-		return Project{}, err
+		return "", err
 	}
 	if contains(root, state) || contains(state, root) {
-		return Project{}, errors.New("runtime_data_must_be_outside_project")
+		return "", errors.New("runtime_data_must_be_outside_project")
+	}
+	return root, nil
+}
+
+// Register is called only after native directory selection and consent.
+func (s *Store) Register(path string) (Project, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	root, err := s.authorizedRoot(path)
+	if err != nil {
+		return Project{}, err
 	}
 	next := clone(s.data)
 	p, err := s.add(&next, root, true, false)
@@ -230,6 +239,156 @@ func (s *Store) Select(id string) error {
 	next := clone(s.data)
 	next.Current = id
 	return s.save(next)
+}
+
+func (s *Store) grantAccountProject(next *Catalog, project Project, path string) error {
+	root, err := s.authorizedRoot(path)
+	if err != nil {
+		return err
+	}
+	if old, ok := next.Projects[project.ID]; ok {
+		if !sameDirectory(old.Path, root) {
+			return errors.New("project_archive_project_exists")
+		}
+		if old.Path == root && old.Authorized && !old.Hidden {
+			return nil
+		}
+		project = old
+	}
+	for id, other := range next.Projects {
+		if id != project.ID && sameDirectory(other.Path, root) {
+			return errors.New("project_archive_project_exists")
+		}
+	}
+	if project.Path != "" && project.Path != root {
+		project.PreviousPaths = append(project.PreviousPaths, project.Path)
+	}
+	project.Path = root
+	project.Authorized = true
+	project.Hidden = false
+	project.Legacy = false
+	project.Revision++
+	project.SyncPending = true
+	next.Projects[project.ID] = project
+	return nil
+}
+
+// ImportCatalog grants the extracted directories. Conversation bindings are
+// fetched separately from the account's current server state.
+func (s *Store) ImportCatalog(directory string, manifest ArchiveManifest) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	next := clone(s.data)
+	for _, project := range manifest.Projects {
+		project.LastThread = ""
+		if err := s.grantAccountProject(&next, project, filepath.Join(directory, "projects", project.ID)); err != nil {
+			return err
+		}
+	}
+	next.Current = manifest.Projects[0].ID
+	return s.save(next)
+}
+
+func (s *Store) Attach(id, name, directory string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	next := clone(s.data)
+	if err := s.grantAccountProject(&next, Project{ID: id, Name: name}, directory); err != nil {
+		return err
+	}
+	next.Current = id
+	return s.save(next)
+}
+
+func (s *Store) SyncConversations(expected Project, name string, threads []string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	project, err := checkedProject(s.data.Projects[expected.ID])
+	if err != nil {
+		return err
+	}
+	if project.Path != expected.Path || project.Revision != expected.Revision {
+		return errors.New("project_directory_changed")
+	}
+	next := clone(s.data)
+	for _, thread := range threads {
+		if old := next.Threads[thread]; old != "" && old != project.ID {
+			return errors.New("thread_project_conflict")
+		}
+		next.Threads[thread] = project.ID
+	}
+	if project.Name == expected.Name {
+		project.Name = name
+	}
+	project.SyncPending = false
+	next.Projects[project.ID] = project
+	return s.save(next)
+}
+
+// ResolveImportedPath checks current paths using native rules and remaps old
+// project roots using portable paths. Unmatched paths reach the caller's scope check.
+func (s *Store) ResolveImportedPath(original string) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	native := filepath.ToSlash(original)
+	portable := strings.ReplaceAll(original, "\\", "/")
+	var selected Project
+	var relative string
+	best := 0
+	bestCurrent, ambiguous := false, false
+	for _, p := range s.data.Projects {
+		for index, prefix := range append([]string{p.Path}, p.PreviousPaths...) {
+			current := index == 0
+			candidate := portable
+			if current {
+				candidate, prefix = native, filepath.ToSlash(prefix)
+			} else {
+				prefix = strings.ReplaceAll(prefix, "\\", "/")
+			}
+			prefix = strings.TrimRight(prefix, "/")
+			if len(candidate) < len(prefix) {
+				continue
+			}
+			head, rest := candidate[:len(prefix)], candidate[len(prefix):]
+			windows := (len(prefix) > 1 && prefix[1] == ':') || strings.HasPrefix(prefix, "//")
+			if head != prefix && !(windows && strings.EqualFold(head, prefix)) {
+				continue
+			}
+			if rest != "" && !strings.HasPrefix(rest, "/") {
+				continue
+			}
+			if len(prefix) == best && current == bestCurrent && p.ID != selected.ID {
+				ambiguous = true
+			}
+			if len(prefix) > best || (len(prefix) == best && current && !bestCurrent) {
+				selected = p
+				relative = strings.TrimPrefix(rest, "/")
+				best = len(prefix)
+				bestCurrent, ambiguous = current, false
+			}
+		}
+	}
+	if best == 0 {
+		return original, nil
+	}
+	if ambiguous {
+		return "", errors.New("project_path_ambiguous")
+	}
+	if _, err := checkedProject(selected); err != nil {
+		return "", err
+	}
+	if relative == "" {
+		return selected.Path, nil
+	}
+	rel := filepath.FromSlash(relative)
+	if bestCurrent {
+		if rel == "." || !filepath.IsLocal(rel) || filepath.Clean(rel) != rel || strings.ContainsRune(rel, 0) {
+			return "", errors.New("project_path_invalid")
+		}
+	} else if !portableArchivePath(relative) {
+		return "", errors.New("project_path_invalid")
+	}
+	return filepath.Join(selected.Path, rel), nil
 }
 
 // Bind preserves a conversation's project even when the active project changes.
@@ -387,20 +546,9 @@ func (s *Store) Relocate(id, path string) (Project, error) {
 	if !ok {
 		return Project{}, errors.New("project_not_found")
 	}
-	root, err := canonical(path)
+	root, err := s.authorizedRoot(path)
 	if err != nil {
 		return Project{}, err
-	}
-	info, err := os.Stat(root)
-	if err != nil || !info.IsDir() {
-		return Project{}, errors.New("directory_unavailable")
-	}
-	state, err := canonicalDestination(filepath.Dir(s.filename))
-	if err != nil {
-		return Project{}, err
-	}
-	if contains(root, state) || contains(state, root) {
-		return Project{}, errors.New("runtime_data_must_be_outside_project")
 	}
 	for other, project := range s.data.Projects {
 		if other != id && sameDirectory(project.Path, root) {

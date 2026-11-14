@@ -36,9 +36,16 @@ async def execution_error_response(request: Request, exc: Exception) -> JSONResp
         else ErrorCode.FORBIDDEN
     )
     error = OctopError(code, reason, status=status, details={"reason": reason})
+    envelope = error.to_envelope(locale=resolve_request_locale(request))
+    if reason.startswith("group_expert_"):
+        from octop.i18n import tr
+
+        envelope["error"]["message"] = tr(
+            "group_experts." + reason, resolve_request_locale(request)
+        )
     return JSONResponse(
         status_code=status,
-        content=error.to_envelope(locale=resolve_request_locale(request)),
+        content=envelope,
         headers={"Retry-After": "5" if reason == "sandbox_memory_exhausted" else "1"}
         if status in {429, 503}
         else None,

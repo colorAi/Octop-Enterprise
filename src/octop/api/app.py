@@ -211,6 +211,8 @@ def build_app(server: OctopServer) -> FastAPI:
         executions,
         expert_assignments,
         experts,
+        group_expert_internal,
+        group_experts,
         health,
         i18n,
         internal_mcp,
@@ -278,6 +280,10 @@ def build_app(server: OctopServer) -> FastAPI:
             _RouterMount(connectors.router, "/api", ["connectors"]),
             _RouterMount(bridge.router, "/api", ["bridge"]),
             _RouterMount(communication.router, "/api/im", ["communication"]),
+            _RouterMount(group_experts.router, "/api/im", ["communication"]),
+            _RouterMount(
+                group_expert_internal.router, "/internal/group-experts/v1", ["communication"]
+            ),
             _RouterMount(knowledge_bases.router, "/api", ["knowledge"]),
             _RouterMount(internal_mcp.router, "/api", ["internal-mcp"]),
             _RouterMount(channels.router, "/api", ["channels"]),

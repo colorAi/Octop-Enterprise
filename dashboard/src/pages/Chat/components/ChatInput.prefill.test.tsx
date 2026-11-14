@@ -168,6 +168,7 @@ describe("ChatInput prefill clear-on-send", () => {
       "expert",
       "thread",
       "last keystroke",
+      expect.any(String),
     );
   });
 

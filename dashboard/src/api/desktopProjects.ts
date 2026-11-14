@@ -10,6 +10,7 @@ export interface DesktopProject {
   last_expert?: string;
   last_thread?: string;
   hidden?: boolean;
+  sync_pending?: boolean;
 }
 export interface DesktopProjectState {
   supported: boolean;
@@ -36,7 +37,26 @@ export interface ProjectFileScope {
   project_id?: string;
   thread_id?: string;
 }
+export interface ProjectImportResult {
+  cancelled?: boolean;
+  path?: string;
+  project_ids?: string[];
+  synced_count?: number;
+  sync_pending?: boolean;
+  sync_error?: string;
+  state?: DesktopProjectState;
+}
 export interface DesktopProjectsBridge {
+  export?(params: {
+    project_ids: string[];
+  }): Promise<{ cancelled?: boolean; path?: string }>;
+  import?(): Promise<ProjectImportResult>;
+  sync?(params: { project_ids: string[] }): Promise<{
+    synced_count: number;
+    state: DesktopProjectState;
+  }>;
+  accountProjects?(): Promise<{ project_id: string; name: string }[]>;
+  attach?(params: { project_id: string }): Promise<ProjectImportResult>;
   continue?(params: {
     project_id: string;
     source_thread_id: string;

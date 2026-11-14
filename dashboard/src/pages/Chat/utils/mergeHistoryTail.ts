@@ -78,13 +78,27 @@ function mergePendingTail(
   afterAnchor: number,
 ): ChatMessage[] {
   const merged = history.slice(0, afterAnchor);
+  const savedPositions = new Map(history.map(({ id }, index) => [id, index]));
+  const nextSavedPosition = new Array<number>(tail.length);
+  let nextSaved = history.length;
+  for (let i = tail.length - 1; i >= 0; i--) {
+    nextSavedPosition[i] = nextSaved;
+    const position = savedPositions.get(tail[i].id);
+    if (position !== undefined && position >= afterAnchor) nextSaved = position;
+  }
   let next = afterAnchor;
 
-  for (const message of tail) {
+  for (const [i, message] of tail.entries()) {
+    const position = savedPositions.get(message.id);
+    if (position !== undefined) {
+      // Keep the server's copy at the matching position in the local turn.
+      while (next <= position) merged.push(history[next++]);
+      continue;
+    }
     if (message.role === "user") {
-      while (next < history.length) {
-        // Legacy history can be untimed. Only a newer timestamp establishes
-        // that a persisted row belongs after this pending question.
+      // A shared message ID sets an upper bound even if its timestamp ties
+      // the question's or is missing. Compare timestamps for unmatched rows.
+      while (next < nextSavedPosition[i]) {
         if (
           message.timestamp > 0 &&
           history[next].timestamp > message.timestamp
@@ -140,10 +154,7 @@ export function mergeHistoryWithLocalTail(
     const afterAnchor = anchor
       ? base.findIndex(({ id }) => id === anchor.id) + 1
       : 0;
-    const pendingTail = current
-      .slice(pending)
-      .filter(({ id }) => !loadedIds.has(id));
-    return mergePendingTail(base, pendingTail, afterAnchor);
+    return mergePendingTail(base, current.slice(pending), afterAnchor);
   }
   if (lastOverlap < 0) return loaded;
 

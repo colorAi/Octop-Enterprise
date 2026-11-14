@@ -26,6 +26,7 @@ import {
 
 import { getApiUrl } from "../../../api/config";
 import { getAuthToken } from "../../../api/request";
+import { tokenSessionIdentity } from "../../../utils/authSession";
 import { octopThreadsApi } from "../../../api/modules/octopThreads";
 import { isPendingThread } from "./useSessions";
 import type { TokenUsage } from "../../../api/types";
@@ -189,9 +190,11 @@ function sealInFlightAssistantMessages(state: SessionStreamState): void {
 // /chat so the Chat input can be pre-populated reliably without relying on
 // React Router location.state, which can be unreliable across mounts.
 let _pendingPrefillText = "";
+let _prefillOwner = "";
 
 /** Enqueue a text to be pre-filled into the chat input on the next Chat mount. */
 export function setPendingPrefillText(text: string): void {
+  _prefillOwner = tokenSessionIdentity(getAuthToken());
   _pendingPrefillText = text;
 }
 
@@ -199,15 +202,17 @@ export function setPendingPrefillText(text: string): void {
 export function consumePendingPrefillText(): string {
   const val = _pendingPrefillText;
   _pendingPrefillText = "";
-  return val;
+  return _prefillOwner === tokenSessionIdentity(getAuthToken()) ? val : "";
 }
 
 let _pendingPrefillAttachments: ChatAttachment[] = [];
+let _attachmentOwner = "";
 
 /** Enqueue attachments to restore in the composer on the next Chat mount / thread switch. */
 export function setPendingPrefillAttachments(
   attachments: ChatAttachment[],
 ): void {
+  _attachmentOwner = tokenSessionIdentity(getAuthToken());
   _pendingPrefillAttachments = attachments.map((attachment) => ({
     ...attachment,
   }));
@@ -217,11 +222,13 @@ export function setPendingPrefillAttachments(
 export function consumePendingPrefillAttachments(): ChatAttachment[] {
   const val = _pendingPrefillAttachments;
   _pendingPrefillAttachments = [];
-  return val.map((attachment) => ({ ...attachment }));
+  return _attachmentOwner === tokenSessionIdentity(getAuthToken())
+    ? val.map((attachment) => ({ ...attachment }))
+    : [];
 }
 
 // ── Composer draft (sessionStorage) ───────────────────────────────────────
-// Survives navigating away from /chat and back; keyed per agent + thread.
+// Survives navigation; isolated by login session, agent and thread.
 
 const DRAFT_STORAGE_PREFIX = "octop:chat-draft:";
 
@@ -229,7 +236,9 @@ function draftStorageKey(
   agentId: string,
   threadId: string | null | undefined,
 ): string {
-  return `${DRAFT_STORAGE_PREFIX}${agentId}:${threadId ?? "__new__"}`;
+  return `${DRAFT_STORAGE_PREFIX}${encodeURIComponent(
+    tokenSessionIdentity(getAuthToken()),
+  )}:${agentId}:${threadId ?? "__new__"}`;
 }
 
 /** Read a saved composer draft for *(agentId, threadId)*. */
@@ -250,8 +259,9 @@ export function writeInputDraft(
   agentId: string | null | undefined,
   threadId: string | null | undefined,
   text: string,
+  owner = tokenSessionIdentity(getAuthToken()),
 ): void {
-  if (!agentId) return;
+  if (!agentId || owner !== tokenSessionIdentity(getAuthToken())) return;
   try {
     const key = draftStorageKey(agentId, threadId);
     if (text) sessionStorage.setItem(key, text);
@@ -1143,6 +1153,15 @@ export function removeSession(sessionId: string) {
   clearStreamActivity(sessionId);
   clearStreamWatchdog(sessionId);
   closeLiveSocket(sessionId, { intentional: true, userCancelled: true });
+}
+
+/** Drop messages and detach streams when the authenticated login changes. */
+export function clearChatSessionCache(): void {
+  for (const sessionId of sessionStates.keys()) removeSession(sessionId);
+  editingLocalSessions.clear();
+  focusedChatSessionId = null;
+  _pendingPrefillText = "";
+  _pendingPrefillAttachments = [];
 }
 
 /** Drop a session map key without destroying the underlying state object.

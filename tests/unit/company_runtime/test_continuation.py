@@ -132,8 +132,8 @@ async def test_revoked_source_can_continue_only_with_current_assignment(company)
 
 
 @pytest.mark.asyncio
-async def test_continue_rejects_foreign_history_wrong_installation_and_running_task(company):
-    server, client, _, owner = company
+async def test_continue_allows_same_account_on_another_device_and_rejects_foreign_history(company):
+    server, client, credentials, owner = company
     install_agent(server)
     history(server)
     other = server.services.user_repo.create(username="other", role="user")
@@ -157,12 +157,18 @@ async def test_continue_rejects_foreign_history_wrong_installation_and_running_t
         for override in (
             {"source_thread_id": "foreign"},
             {"agent_id": "foreign"},
-            {"installation_token": "z" * 32},
         ):
             response = await client.http.post(
                 "projects/project-a/continue", json={**body, **override}
             )
             assert response.status_code == 403
+        continued = await client.http.post(
+            "projects/project-a/continue",
+            json={**body, "thread_id": "continued", "installation_token": "z" * 32},
+            headers={"X-Octop-Device-Credential": credentials[1]},
+        )
+        assert continued.status_code == 200
+        assert continued.json()["copied_messages"] == 4
         assert (
             await client.http.post(
                 "projects/project-a/continue", json=body, headers={"Origin": "http://company.test"}

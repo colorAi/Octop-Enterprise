@@ -45,5 +45,5 @@ func (c *Client) publishGrants(ctx context.Context) error {
 	}
 	ctx, done := context.WithTimeout(ctx, 5*time.Second)
 	defer done()
-	return wsjson.Write(ctx, conn, map[string]any{"type": "grants", "grants": wireGrants(c.files.Grants())})
+	return wsjson.Write(ctx, conn, map[string]any{"type": "grants", "grants": c.files.Grants()})
 }

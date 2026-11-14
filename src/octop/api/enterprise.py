@@ -21,10 +21,12 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from starlette.background import BackgroundTask
 
 from octop.api.common.execution import execution_error_response
+from octop.api.common.reads import management_read
 from octop.api.common.runtime_routing import runtime_owner
 from octop.api.deps import extract_raw_token, resolve_user_from_token
 from octop.api.middleware.jwt_auth import install as install_jwt_auth
-from octop.api.routers import communication, executions, users
+from octop.api.routers import communication, executions, group_expert_internal, group_experts, users
+from octop.infra.company_runtime import MODEL_STREAM_READ_TIMEOUT_SECONDS
 from octop.infra.errors import OctopError
 from octop.infra.execution.service import ExecutionConflict
 
@@ -41,6 +43,11 @@ _HOP = frozenset(
     }
 )
 _LOCAL_USERS = re.compile(r"^/api/users(?:/(?:page|permissions|[0-9]+))?$")
+_COMPANY_MODEL_STREAM = re.compile(r"^/api/company-runtime/tasks/[^/]+/model$")
+
+
+class _RequestTooLarge(Exception):
+    """The streaming request body exceeded the edge upload limit."""
 
 
 def build_web_app(
@@ -72,10 +79,12 @@ def build_web_app(
     app.include_router(users.router, prefix="/api/users")
     app.include_router(executions.router, prefix="/api/executions")
     app.include_router(communication.router, prefix="/api/im")
+    app.include_router(group_experts.router, prefix="/api/im")
+    app.include_router(group_expert_internal.router, prefix="/internal/group-experts/v1")
 
     async def route(path: str, user: Any = None, query: Any = None, headers: Any = None) -> str:
         owner = await runtime_owner(server, path, user, query or {}, headers=headers)
-        return await server.management_io.run(server.services.execution_repo.route, owner) or origin
+        return await management_read(server, server.services.execution_repo.route, owner) or origin
 
     @app.exception_handler(OctopError)
     async def octop_error(_: Request, exc: OctopError) -> JSONResponse:
@@ -110,6 +119,7 @@ def build_web_app(
         local = (
             path in {"/api/health", "/api/health/ready"}
             or path.startswith("/api/im/")
+            or path.startswith("/internal/group-experts/v1/")
             or path.startswith("/api/executions/")
             or (request.method == "GET" and _LOCAL_USERS.fullmatch(path))
         )
@@ -126,7 +136,7 @@ def build_web_app(
             async for chunk in request.stream():
                 size += len(chunk)
                 if size > maximum:
-                    raise ValueError("request_too_large")
+                    raise _RequestTooLarge
                 yield chunk
 
         try:
@@ -143,11 +153,28 @@ def build_web_app(
         url = selected + request.url.path
         if request.url.query:
             url += "?" + request.url.query
+        timeout = client.timeout
+        if (
+            request.method == "POST"
+            and _COMPANY_MODEL_STREAM.fullmatch(path)
+            and timeout.read is not None
+            and timeout.read < MODEL_STREAM_READ_TIMEOUT_SECONDS
+        ):
+            timeout = httpx.Timeout(
+                connect=timeout.connect,
+                read=MODEL_STREAM_READ_TIMEOUT_SECONDS,
+                write=timeout.write,
+                pool=timeout.pool,
+            )
         try:
             response = await client.send(
-                client.build_request(request.method, url, headers=headers, content=content()),
+                client.build_request(
+                    request.method, url, headers=headers, content=content(), timeout=timeout
+                ),
                 stream=True,
             )
+        except _RequestTooLarge:
+            return JSONResponse(status_code=413, content={"detail": "request_too_large"})
         except (httpx.HTTPError, ValueError):
             return JSONResponse(
                 status_code=503,
@@ -188,18 +215,18 @@ def build_web_app(
                 digest = hashlib.sha256(hello.credential.encode()).hexdigest()
                 devices = server.services.device_repo
                 if hello.type == "pair":
-                    owner = await server.management_io.run(
-                        devices.pairing_owner, digest, int(time.time())
+                    owner = await management_read(
+                        server, devices.pairing_owner, digest, int(time.time())
                     )
                 else:
-                    identity = await server.management_io.run(
-                        devices.authenticate, digest, int(time.time())
+                    identity = await management_read(
+                        server, devices.authenticate, digest, int(time.time())
                     )
                     owner = identity["owner_user_id"] if identity else None
                 if owner is None:
                     raise ValueError("device_denied")
                 selected = (
-                    await server.management_io.run(server.services.execution_repo.route, owner)
+                    await management_read(server, server.services.execution_repo.route, owner)
                     or origin
                 )
             else:
@@ -208,7 +235,7 @@ def build_web_app(
                     access_token=websocket.query_params.get("access_token"),
                 )
                 user = (
-                    await server.management_io.run(resolve_user_from_token, server, raw)
+                    await management_read(server, resolve_user_from_token, server, raw)
                     if raw
                     else None
                 )
@@ -216,7 +243,10 @@ def build_web_app(
         except ExecutionConflict:
             await websocket.close(code=1013)
             return
-        except (OctopError, ValueError, TimeoutError):
+        except OctopError as exc:
+            await websocket.close(code=1013 if exc.status == 503 else 4001)
+            return
+        except (ValueError, TimeoutError):
             await websocket.close(code=4001)
             return
         target = (

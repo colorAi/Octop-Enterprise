@@ -18,7 +18,7 @@ def build_dashboard(root: Path) -> dict:
         subprocess.run(["node", "node_modules/vite/bin/vite.js", "build", "--outDir", str(output)],
                        cwd=dashboard, env=environment, check=True)
         index = (output / "index.html").read_text()
-        if "assets.phantomai.top" in index or "https://h3c." in index:
+        if "assets.phantomai.top" in index:
             raise ValueError("Packaged UI must not depend on public static resources")
         files = {}
         with zipfile.ZipFile(destination, "w", compression=zipfile.ZIP_DEFLATED) as archive:

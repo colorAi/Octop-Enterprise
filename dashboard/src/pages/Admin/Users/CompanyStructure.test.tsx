@@ -115,7 +115,7 @@ it("opens an editor only after obtaining the employee's authoritative state", as
   );
   mount();
   const open = await screen.findByRole("button", {
-    name: "employeeResources.expertManagement",
+    name: "Alice common.edit",
   });
   await waitFor(() => expect(open).toBeEnabled());
   fireEvent.click(open);

@@ -11,12 +11,17 @@ import {
   ChevronRight,
   Folder,
   FolderOpen,
+  History,
+  ArrowLeft,
   MoreHorizontal,
   Plus,
   RefreshCw,
 } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import type { OctopAgent } from "../../../context/AgentContext";
 import { useDesktopProjects } from "../../../context/DesktopProjectsContext";
+import { useCurrentUser } from "../../../hooks/useCurrentUser";
+import { isCompanyDesktop } from "../../../api/desktopRuntime";
 import type {
   DesktopProject,
   ProjectThread,
@@ -30,6 +35,8 @@ type Props = {
   threadId?: string | null;
   onNewChat: (agentId: string, projectId?: string) => void;
   onSelect: (threadId: string, agentId: string) => void;
+  serverHistory?: ReactNode;
+  onOpenServerHistory?: () => void;
   children: ReactNode;
 };
 
@@ -59,6 +66,7 @@ function ProjectFolder({
   onSelect(thread: ProjectThread): void;
   onManage(key: string): void;
 }) {
+  const { t } = useTranslation();
   const { busy } = useDesktopProjects();
   const [threads, setThreads] = useState<ProjectThread[]>([]);
   const [more, setMore] = useState(false);
@@ -189,6 +197,15 @@ function ProjectFolder({
             trigger={["click"]}
             menu={{
               items: [
+                ...(window.__octopRuntime?.projects?.sync
+                  ? [
+                      {
+                        key: "sync",
+                        label: t("projectMigration.sync"),
+                        disabled: !project.authorized,
+                      },
+                    ]
+                  : []),
                 { key: "rename", label: "重命名项目" },
                 { key: "relocate", label: "重新定位原文件夹" },
                 { key: "hide", label: "从项目列表移除" },
@@ -215,6 +232,11 @@ function ProjectFolder({
           {!project.authorized && (
             <p className={styles.folderHint}>
               请通过项目菜单重新定位原文件夹并授权
+            </p>
+          )}
+          {project.authorized && project.sync_pending && (
+            <p className={styles.folderHint}>
+              {t("projectMigration.pendingShort")}
             </p>
           )}
           {loading && threads.length === 0 && (
@@ -298,8 +320,12 @@ export function ProjectNavigation({
   threadId,
   onNewChat,
   onSelect,
+  serverHistory,
+  onOpenServerHistory,
   children,
 }: Props) {
+  const { t } = useTranslation();
+  const user = useCurrentUser();
   const projects = useDesktopProjects();
   const state = projects.state;
   const current = state?.current_project_id;
@@ -308,6 +334,7 @@ export function ProjectNavigation({
     null,
   );
   const [revision, setRevision] = useState(0);
+  const [showServerHistory, setShowServerHistory] = useState(false);
   const experts = useMemo(
     () => agents.filter((a) => !a.history_only && a.kind !== "team"),
     [agents],
@@ -369,6 +396,10 @@ export function ProjectNavigation({
     };
   }, []);
   const manage = (project: DesktopProject, key: string) => {
+    if (key === "sync") {
+      void projects.sync(project.id);
+      return;
+    }
     if (key === "rename") {
       setRename({ id: project.id, name: project.name });
       return;
@@ -383,7 +414,27 @@ export function ProjectNavigation({
       revoke: key === "revoke",
     });
   };
-  if (!projects.available) return <>{children}</>;
+  if (!projects.available) {
+    if (!isCompanyDesktop() && user && user.role !== "admin")
+      return (
+        <div className={styles.navigation}>
+          <div className={styles.heading}>
+            <strong>{t("chat.webHistory")}</strong>
+            <Button
+              type="text"
+              size="small"
+              aria-label={t("chat.refreshWebHistory")}
+              title={t("chat.refreshWebHistory")}
+              icon={<RefreshCw size={14} />}
+              onClick={onOpenServerHistory}
+            />
+          </div>
+          <p className={styles.folderHint}>{t("chat.webHistoryHint")}</p>
+          <div className={styles.historyList}>{children}</div>
+        </div>
+      );
+    return <>{children}</>;
+  }
   if (state?.supported === false)
     return (
       <>
@@ -393,6 +444,23 @@ export function ProjectNavigation({
         />
         {children}
       </>
+    );
+  if (showServerHistory && serverHistory)
+    return (
+      <div className={styles.navigation}>
+        <div className={styles.heading}>
+          <Button
+            type="text"
+            size="small"
+            aria-label={t("chat.backToProjects")}
+            title={t("chat.backToProjects")}
+            icon={<ArrowLeft size={14} />}
+            onClick={() => setShowServerHistory(false)}
+          />
+          <strong>{t("chat.serverHistory")}</strong>
+        </div>
+        <div className={styles.historyList}>{serverHistory}</div>
+      </div>
     );
   const visible = Object.values(state?.projects ?? {}).filter((p) => !p.hidden);
   return (
@@ -424,6 +492,19 @@ export function ProjectNavigation({
       >
         添加项目文件夹
       </Button>
+      {serverHistory && (
+        <Button
+          type="text"
+          className={styles.addProject}
+          icon={<History size={15} />}
+          onClick={() => {
+            onOpenServerHistory?.();
+            setShowServerHistory(true);
+          }}
+        >
+          {t("chat.serverHistory")}
+        </Button>
+      )}
       {projects.error && <Alert type="warning" message={projects.error} />}
       <div className={styles.projectList}>
         {visible.map((project) => (

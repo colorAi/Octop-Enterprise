@@ -6,6 +6,7 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { DesktopRuntimeBridge } from "../../../api/desktopRuntime";
 import type {
@@ -13,7 +14,10 @@ import type {
   ProjectThread,
 } from "../../../api/desktopProjects";
 import type { OctopAgent } from "../../../context/AgentContext";
+import ChatSidebarPanel from "./ChatSidebarPanel";
 import { ProjectNavigation } from "./ProjectNavigation";
+import { CurrentUserProvider } from "../../../hooks/useCurrentUser";
+import type { OctopUser } from "../../../api/modules/auth";
 const p = vi.hoisted(() => ({
   state: null as DesktopProjectState | null,
   available: true,
@@ -66,6 +70,7 @@ const items: Record<string, ProjectThread[]> = {
 };
 const threads = vi.fn();
 beforeEach(() => {
+  p.available = true;
   p.state = {
     supported: true,
     current_project_id: "A",
@@ -107,6 +112,51 @@ beforeEach(() => {
 afterEach(() => {
   delete window.__octopRuntime;
   vi.resetAllMocks();
+});
+
+it("labels employee browser history without adding project controls", () => {
+  p.available = false;
+  delete window.__octopRuntime;
+  const refresh = vi.fn();
+  render(
+    <CurrentUserProvider
+      user={{ id: 7, role: "user" } as OctopUser}
+      setUser={vi.fn()}
+    >
+      <ProjectNavigation
+        agents={agents}
+        onNewChat={vi.fn()}
+        onSelect={vi.fn()}
+        onOpenServerHistory={refresh}
+      >
+        <span>网页会话列表</span>
+      </ProjectNavigation>
+    </CurrentUserProvider>,
+  );
+  expect(screen.getByText("chat.webHistory")).toBeInTheDocument();
+  expect(screen.getByText("网页会话列表")).toBeInTheDocument();
+  expect(
+    screen.queryByRole("button", { name: "添加项目文件夹" }),
+  ).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "chat.refreshWebHistory" }));
+  expect(refresh).toHaveBeenCalledOnce();
+});
+
+it("keeps the administrator browser navigation unchanged", () => {
+  p.available = false;
+  delete window.__octopRuntime;
+  render(
+    <CurrentUserProvider
+      user={{ id: 1, role: "admin" } as OctopUser}
+      setUser={vi.fn()}
+    >
+      <ProjectNavigation agents={agents} onNewChat={vi.fn()} onSelect={vi.fn()}>
+        <span>管理员原有会话列表</span>
+      </ProjectNavigation>
+    </CurrentUserProvider>,
+  );
+  expect(screen.getByText("管理员原有会话列表")).toBeInTheDocument();
+  expect(screen.queryByText("chat.webHistory")).not.toBeInTheDocument();
 });
 function show(
   props: Partial<React.ComponentProps<typeof ProjectNavigation>> = {},
@@ -159,6 +209,66 @@ it("selects a conversation with its original project and expert", async () => {
     thread_id: "b1",
     agent_id: "designer",
   });
+});
+it("opens synced history on a desktop without a local project", () => {
+  p.state = {
+    supported: true,
+    current_project_id: "",
+    projects: {},
+    threads: {},
+  };
+  const refresh = vi.fn();
+  const select = vi.fn();
+  const unused = vi.fn();
+  render(
+    <MemoryRouter>
+      <ChatSidebarPanel
+        isMobile={false}
+        sidebarOpen
+        sidebarWidth={260}
+        agents={[]}
+        historyAgents={[{ ...agents[0], state: "stopped" }]}
+        sessions={[
+          {
+            id: "synced-thread",
+            threadId: "synced-thread",
+            name: "已同步的聊天",
+            updatedAt: null,
+            channelType: "dashboard",
+            hasMessages: true,
+            executionLocation: "desktop",
+          },
+        ]}
+        activeThreadId={null}
+        resolvedAgentId="writer"
+        sessionsHasMore={false}
+        sessionsLoadingMore={false}
+        onRefreshSessions={refresh}
+        onLoadMoreSessions={unused}
+        onFetchAllSessions={unused}
+        onSelectSession={select}
+        onAgentSelect={unused}
+        onNewChatWithAgent={unused}
+        onDeleteSession={unused}
+        onRenameSession={unused}
+        onPinSession={unused}
+        onForkSession={unused}
+        onSidebarOpenChange={unused}
+        onSidebarResizeStart={unused}
+        navEmbedded
+      />
+    </MemoryRouter>,
+  );
+  fireEvent.click(screen.getByRole("button", { name: "chat.serverHistory" }));
+  expect(refresh).toHaveBeenCalledOnce();
+  fireEvent.click(screen.getByText("已同步的聊天"));
+  expect(select).toHaveBeenCalledWith("synced-thread", "writer");
+  expect(p.select).not.toHaveBeenCalled();
+  expect(threads).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: "chat.backToProjects" }));
+  expect(
+    screen.getByRole("button", { name: "添加项目文件夹" }),
+  ).toBeInTheDocument();
 });
 it("starts with the expert selected on a different folder and passes its explicit project", async () => {
   const start = vi.fn();

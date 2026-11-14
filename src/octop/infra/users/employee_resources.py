@@ -198,6 +198,7 @@ class EmployeeResources:
             welcome_payload_from_manifest_data,
         )
         from octop.infra.agents.settings.runtime_limits import agent_runtime_values
+        from octop.infra.group_experts.policy import source_tool_policy
         from octop.infra.utils.immutable_files import store_object
 
         row = await self._read(self.services.agent_repo.get, source_id)
@@ -235,6 +236,10 @@ class EmployeeResources:
             "avatar": avatar,
             "source_row_id": row.id,
             "runtime_settings": agent_runtime_values(json.loads(row.config_json or "{}")),
+            "group_tool_policy": source_tool_policy(json.loads(row.config_json or "{}")),
+            "group_tool_revision": await self._read(
+                self.services.group_expert_repo.tool_revision, row.agent_id, row.id
+            ),
         }
 
     async def display_definition(self, user_id: int, agent_id: str) -> dict[str, Any] | None:

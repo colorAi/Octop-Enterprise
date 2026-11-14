@@ -10,6 +10,7 @@ import {
   Modal,
   List,
   Spin,
+  Tag,
 } from "antd";
 import {
   AtSign,
@@ -56,6 +57,9 @@ import ColleagueMentionInput, {
   type ColleagueMentionInputRef,
 } from "./ColleagueMentionInput";
 import { mentionedUserIds, type MentionDraft } from "./colleagueMentions";
+import type { GroupExpertBinding } from "../../api/types/communication";
+import { ExpertAvatar } from "./GroupExpertsPanel";
+import ExpertCallStatus from "./ExpertCallStatus";
 
 export function ChatPane({
   conversation,
@@ -80,6 +84,10 @@ export function ChatPane({
   const [older, setOlder] = useState(false);
   const [details, setDetails] = useState(false);
   const [reply, setReply] = useState<CommunicationMessage>();
+  const [expert, setExpert] = useState<GroupExpertBinding>();
+  useEffect(() => {
+    setExpert(undefined);
+  }, [conv]);
   const scroller = useRef<HTMLDivElement>(null);
   const picker = useRef<HTMLInputElement>(null);
   const filePicker = useRef<HTMLInputElement>(null);
@@ -154,6 +162,10 @@ export function ChatPane({
   }, [client, conv, messages, pageVisible]);
   const send = () => {
     if (!canSend || uploading || (!text.trim() && !assets.length)) return;
+    if (expert && !text.trim()) {
+      setError(t("groupExperts.questionRequired"));
+      return;
+    }
     if (assets.length && text.trim().length > 2000) {
       setError(t("communication.captionLimit"));
       return;
@@ -170,10 +182,12 @@ export function ChatPane({
       ...(assets.length ? { asset_ids: assets } : {}),
       ...(reply ? { reply_to_message_id: reply.message_id } : {}),
       ...(mentionIds.length ? { mention_user_ids: mentionIds } : {}),
+      ...(expert ? { mention_expert_id: expert.binding_id } : {}),
     };
     setDraft({ text: "", mentions: [] });
     setAssets([]);
     setReply(undefined);
+    setExpert(undefined);
     nearBottom.current = true;
     setError("");
     void client.send(conv, body).catch(report);
@@ -409,7 +423,12 @@ export function ChatPane({
         >
           {messages?.map((message) => {
             const own = message.sender_id === state.profile?.user_id;
-            const sender = own
+            const sender = message.expert
+              ? {
+                  user_id: message.sender_id,
+                  nickname: message.expert.display_name,
+                }
+              : own
               ? state.contacts[message.sender_id] ?? state.profile
               : state.contacts[message.sender_id];
             if (message.type === "system")
@@ -421,6 +440,10 @@ export function ChatPane({
                       "group.members.changed",
                     ].includes(message.system_kind || "")
                       ? "communication.membersChanged"
+                      : message.system_kind?.startsWith("group.expert.")
+                      ? `groupExperts.system.${message.system_kind
+                          .split(".")
+                          .pop()}`
                       : "communication.systemMessage",
                   )}
                 </div>
@@ -431,7 +454,13 @@ export function ChatPane({
                   sender?.nickname ||
                   t(own ? "communication.you" : "communication.colleague")
                 }
-                avatar={<PersonAvatar person={sender} size={36} />}
+                avatar={
+                  message.expert ? (
+                    <ExpertAvatar url={message.expert.avatar.url} size={36} />
+                  ) : (
+                    <PersonAvatar person={sender} size={36} />
+                  )
+                }
               />
             );
             return (
@@ -442,7 +471,10 @@ export function ChatPane({
                 }`}
               >
                 <div className={chatStyles.avatarCol}>
-                  {conversation.type === "group" && !own && canSend ? (
+                  {conversation.type === "group" &&
+                  !own &&
+                  canSend &&
+                  (!message.expert || message.expert.state === "active") ? (
                     <Dropdown
                       trigger={["contextMenu"]}
                       menu={{
@@ -456,7 +488,31 @@ export function ChatPane({
                             }),
                           },
                         ],
-                        onClick: () => void mentionSender(message.sender_id),
+                        onClick: () => {
+                          if (!message.expert) {
+                            void mentionSender(message.sender_id);
+                            return;
+                          }
+                          void communicationApi
+                            .groupExperts(conv)
+                            .then((value) => {
+                              const binding = value.items.find(
+                                (v) =>
+                                  v.binding_id === message.expert?.binding_id &&
+                                  v.can_call &&
+                                  v.state === "active",
+                              );
+                              if (
+                                binding &&
+                                value.ready &&
+                                value.experts_enabled
+                              )
+                                composer.current?.mentionExpert(binding);
+                              else
+                                setError(t("groupExperts.expertUnavailable"));
+                            })
+                            .catch(report);
+                        },
                       }}
                     >
                       <span>{avatar}</span>
@@ -477,6 +533,15 @@ export function ChatPane({
                         : sender?.nickname || t("communication.colleague")}
                     </span>
                     <PersonJobTitle person={sender} />
+                    {message.expert && (
+                      <span>
+                        {t(
+                          message.expert.state === "active"
+                            ? "groupExperts.expert"
+                            : "groupExperts.removed",
+                        )}
+                      </span>
+                    )}
                     {!message.recalled &&
                       !own &&
                       state.profile &&
@@ -509,6 +574,13 @@ export function ChatPane({
                         {message.reply_to_message_id && (
                           <ReplyQuote conversation={conv} message={message} />
                         )}
+                        {message.mention_expert_id && (
+                          <Tag>
+                            @
+                            {message.expert_call?.expert_name ||
+                              t("groupExperts.expert")}
+                          </Tag>
+                        )}
                         {message.text && (
                           <div className={styles.text}>{message.text}</div>
                         )}
@@ -526,6 +598,9 @@ export function ChatPane({
                       </>
                     )}
                   </div>
+                  {!message.recalled && (
+                    <ExpertCallStatus call={message.expert_call} />
+                  )}
                   {!message.recalled && (
                     <div className={styles.messageActions}>
                       <button
@@ -658,10 +733,20 @@ export function ChatPane({
               ))}
             </div>
           )}
+          {expert && (
+            <div className={styles.replyDraft}>
+              <ExpertAvatar url={expert.avatar.url} size={24} />{" "}
+              <span>@{expert.display_name}</span>
+              <Button size="small" onClick={() => setExpert(undefined)}>
+                {t("communication.remove")}
+              </Button>
+            </div>
+          )}
           <ColleagueMentionInput
             ref={composer}
             draft={draft}
             onChange={setDraft}
+            onExpert={setExpert}
             onSend={send}
             groupId={
               conversation.type === "group" && pageVisible ? conv : undefined

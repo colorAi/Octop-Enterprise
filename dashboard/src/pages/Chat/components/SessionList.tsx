@@ -28,6 +28,7 @@ import SharedExpertHint from "./SharedExpertHint";
 import RemoteExpertHint from "./RemoteExpertHint";
 import TeamChatBadge from "./TeamChatBadge";
 import { useSessionWorkIds } from "../hooks/useSessionWorkIds";
+import { useDesktopProjects } from "../../../context/DesktopProjectsContext";
 import {
   resolveSessionWorkStatus,
   type SessionWorkStatus,
@@ -73,6 +74,13 @@ const SessionItem = memo(function SessionItem({
   forkDisabledHint,
 }: SessionItemProps) {
   const { t } = useTranslation();
+  const projects = useDesktopProjects();
+  const boundProject =
+    projects.state?.projects[projects.state?.threads[session.id] ?? ""];
+  const needsProject =
+    projects.available &&
+    projects.state?.supported !== false &&
+    !boundProject?.authorized;
   const [isEditing, setIsEditing] = useState(false);
   const [editValue, setEditValue] = useState(session.name);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -98,8 +106,11 @@ const SessionItem = memo(function SessionItem({
     setIsEditing(false);
   }, [editValue, session.name, session.id, onRename]);
 
-  const itemForkDisabled = Boolean(forkDisabled) || !session.hasActivity;
-  const itemForkHint = !session.hasActivity
+  const itemForkDisabled =
+    needsProject || Boolean(forkDisabled) || !session.hasActivity;
+  const itemForkHint = needsProject
+    ? t("chat.forkNeedsProject")
+    : !session.hasActivity
     ? t("chat.forkNoAssistant")
     : forkDisabledHint;
 
@@ -230,6 +241,7 @@ const SessionItem = memo(function SessionItem({
 
 interface AgentCardProps {
   agent: OctopAgent;
+  historyMode: boolean;
   sessions: Session[];
   activeId: string | null;
   searchQuery: string;
@@ -251,6 +263,7 @@ interface AgentCardProps {
 
 function ActiveAgentCard({
   agent,
+  historyMode,
   sessions,
   activeId,
   searchQuery,
@@ -291,7 +304,7 @@ function ActiveAgentCard({
   }, [searchQuery, onFetchAllSessions]);
 
   const showExpandMore = hasMore && !searchQuery.trim();
-  const sessionsEnabled = isAgentChatReady(agent.state);
+  const sessionsEnabled = historyMode || isAgentChatReady(agent.state);
 
   return (
     <div
@@ -330,19 +343,21 @@ function ActiveAgentCard({
               <RemoteExpertHint agent={agent} />
             </div>
             <AgentUnreadBadge count={agent.unread_count ?? 0} />
-            <button
-              type="button"
-              className={styles.agentNewChatBtn}
-              disabled={agent.history_only}
-              aria-label={t("chatWelcome.newChat")}
-              title={t("chatWelcome.newChat")}
-              onClick={(e) => {
-                e.stopPropagation();
-                onNewChat(agent.agent_id);
-              }}
-            >
-              <MessageSquarePlus size={14} strokeWidth={1.75} aria-hidden />
-            </button>
+            {!historyMode && (
+              <button
+                type="button"
+                className={styles.agentNewChatBtn}
+                disabled={agent.history_only}
+                aria-label={t("chatWelcome.newChat")}
+                title={t("chatWelcome.newChat")}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onNewChat(agent.agent_id);
+                }}
+              >
+                <MessageSquarePlus size={14} strokeWidth={1.75} aria-hidden />
+              </button>
+            )}
             {onHide ? (
               <button
                 type="button"
@@ -375,7 +390,7 @@ function ActiveAgentCard({
           </div>
         ) : sessions.length === 0 ? (
           <div className={styles.agentCardSessionsEmpty}>
-            {t("chat.noSessionsYet", "直接发消息即可开始对话")}
+            {historyMode ? t("chat.noSavedHistory") : t("chat.noSessionsYet")}
           </div>
         ) : filteredSessions.length === 0 ? (
           <div className={styles.agentCardSessionsEmpty}>
@@ -524,6 +539,7 @@ function InactiveAgentRow({
 
 interface SessionListProps {
   agents: OctopAgent[];
+  historyMode?: boolean;
   sessions: Session[];
   activeId: string | null;
   activeAgentId: string | null;
@@ -544,6 +560,7 @@ interface SessionListProps {
 
 export default function SessionList({
   agents,
+  historyMode = false,
   sessions,
   activeId,
   activeAgentId,
@@ -651,6 +668,7 @@ export default function SessionList({
                     <ActiveAgentCard
                       key={agent.agent_id}
                       agent={agent}
+                      historyMode={historyMode}
                       sessions={sessions}
                       activeId={activeId}
                       searchQuery={searchQuery}
@@ -678,7 +696,9 @@ export default function SessionList({
                     key={agent.agent_id}
                     agent={agent}
                     onSelect={() => onAgentSelect(agent.agent_id)}
-                    onNewChat={() => onNewChat(agent.agent_id)}
+                    onNewChat={
+                      historyMode ? undefined : () => onNewChat(agent.agent_id)
+                    }
                     onHide={
                       canHide(agent) ? () => hide(agent.agent_id) : undefined
                     }

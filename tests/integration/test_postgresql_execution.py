@@ -1,5 +1,6 @@
 """True independent Python processes competing on a dedicated PostgreSQL DB."""
 
+import asyncio
 import multiprocessing
 import os
 from concurrent.futures import ProcessPoolExecutor
@@ -11,8 +12,15 @@ from octop.infra.db.pool import PostgresPool
 from octop.infra.db.repos.execution import ExecutionConflict, ExecutionRepo
 from tests.support.postgresql import requires_postgresql
 from tests.unit.db.test_execution import fence, seed_execution, submit
+from tests.unit.db.test_execution import (
+    test_unknown_desktop_estimate_survives_slot_expiry_and_reconciles as check_desktop_estimate,
+)
 
 pytestmark = [requires_postgresql, pytest.mark.postgresql]
+
+
+def test_postgres_desktop_estimate_survives_and_reconciles(execution):
+    check_desktop_estimate(execution)
 
 
 def _initialize_checkpoints(url):
@@ -137,6 +145,27 @@ def execution():
         yield pool, repo, user
     finally:
         pool.close()
+
+
+async def test_empty_claim_does_not_wake_postgresql_workers(execution):
+    from psycopg import AsyncConnection
+
+    _, repo, user = execution
+    url = os.environ["OCTOP_TEST_DATABASE_URL"]
+    async with await AsyncConnection.connect(url, autocommit=True) as listener:
+        await listener.execute("LISTEN octop_execution")
+        assert await asyncio.to_thread(repo.claim, "worker", "boot1") is None
+        assert [item async for item in listener.notifies(timeout=0.15, stop_after=1)] == []
+
+        queued = await asyncio.to_thread(submit, repo, user)
+        assert [item.payload async for item in listener.notifies(timeout=2, stop_after=1)] == [
+            "changed"
+        ]
+        claimed = await asyncio.to_thread(repo.claim, "worker", "boot1")
+        assert claimed is not None and claimed["run_id"] == queued["run_id"]
+        assert [item.payload async for item in listener.notifies(timeout=2, stop_after=1)] == [
+            "changed"
+        ]
 
 
 def _reserve_sandbox(args):

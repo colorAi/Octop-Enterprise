@@ -10,7 +10,11 @@ import { Button, Input, Spin } from "antd";
 import type { TextAreaRef } from "antd/es/input/TextArea";
 import { useTranslation } from "react-i18next";
 import { communicationApi } from "../../api/modules/communication";
-import type { GroupMember } from "../../api/types/communication";
+import type {
+  GroupMember,
+  GroupExpertBinding,
+} from "../../api/types/communication";
+import { ExpertAvatar } from "./GroupExpertsPanel";
 import { communicationErrorText } from "./communicationUi";
 import {
   mentionAtCursor,
@@ -24,6 +28,7 @@ import styles from "./index.module.less";
 export interface ColleagueMentionInputRef {
   mention: () => void;
   mentionMember: (member: GroupMember) => void;
+  mentionExpert: (binding: GroupExpertBinding) => void;
 }
 
 interface Props {
@@ -34,11 +39,12 @@ interface Props {
   userId?: string;
   disabled: boolean;
   maxLength: number;
+  onExpert?: (binding: GroupExpertBinding) => void;
 }
 
 const ColleagueMentionInput = forwardRef<ColleagueMentionInputRef, Props>(
   function ColleagueMentionInput(
-    { draft, onChange, onSend, groupId, userId, disabled, maxLength },
+    { draft, onChange, onSend, groupId, userId, disabled, maxLength, onExpert },
     ref,
   ) {
     const { t } = useTranslation();
@@ -48,6 +54,7 @@ const ColleagueMentionInput = forwardRef<ColleagueMentionInputRef, Props>(
     const [query, setQuery] =
       useState<ReturnType<typeof mentionAtCursor>>(null);
     const [members, setMembers] = useState<GroupMember[]>([]);
+    const [experts, setExperts] = useState<GroupExpertBinding[]>([]);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<unknown>();
     const [revision, setRevision] = useState(0);
@@ -58,6 +65,7 @@ const ColleagueMentionInput = forwardRef<ColleagueMentionInputRef, Props>(
       if (!open || !groupId) return;
       const controller = new AbortController();
       setMembers([]);
+      setExperts([]);
       setLoading(true);
       setError(undefined);
       void communicationApi.members(groupId, controller.signal).then(
@@ -74,11 +82,33 @@ const ColleagueMentionInput = forwardRef<ColleagueMentionInputRef, Props>(
           }
         },
       );
+      void communicationApi
+        .groupExperts(groupId, false, controller.signal)
+        .then((value) => {
+          if (
+            !controller.signal.aborted &&
+            value.ready &&
+            value.experts_enabled
+          )
+            setExperts(
+              value.items.filter((v) => v.state === "active" && v.can_call),
+            );
+        })
+        .catch(() => undefined);
       return () => controller.abort();
     }, [open, groupId, revision]);
 
     const search = query?.query.toLocaleLowerCase() ?? "";
-    const candidates = members.filter(
+    const candidates: (GroupMember & { expert?: GroupExpertBinding })[] = [
+      ...experts.map(
+        (expert): GroupMember & { expert: GroupExpertBinding } => ({
+          user_id: `expert:${expert.binding_id}`,
+          nickname: expert.display_name,
+          expert,
+        }),
+      ),
+      ...members,
+    ].filter(
       (member) =>
         member.user_id !== userId &&
         !member.archived &&
@@ -115,6 +145,15 @@ const ColleagueMentionInput = forwardRef<ColleagueMentionInputRef, Props>(
       setQuery(nextQuery);
     };
     useImperativeHandle(ref, () => ({
+      mentionExpert(binding) {
+        if (
+          groupId &&
+          !disabled &&
+          binding.can_call &&
+          binding.state === "active"
+        )
+          onExpert?.(binding);
+      },
       mentionMember(member) {
         if (!groupId || disabled || member.user_id === userId) return;
         const element = input.current?.resizableTextArea?.textArea;
@@ -153,10 +192,19 @@ const ColleagueMentionInput = forwardRef<ColleagueMentionInputRef, Props>(
     }));
 
     const insertMember = (
-      member: GroupMember,
+      member: GroupMember & { expert?: GroupExpertBinding },
       range: { start: number; end: number },
       prefix = "",
     ) => {
+      if (member.expert) {
+        onExpert?.(member.expert);
+        const text =
+          draft.text.slice(0, range.start) + draft.text.slice(range.end);
+        onChange(updateMentionDraft(draft, text, range.start));
+        setQuery(null);
+        focusAt(range.start);
+        return;
+      }
       const label = `@${member.my_nickname || member.nickname}`;
       const start = range.start + prefix.length;
       const text =
@@ -188,7 +236,7 @@ const ColleagueMentionInput = forwardRef<ColleagueMentionInputRef, Props>(
             onMouseDown={(event) => event.preventDefault()}
           >
             <div className={styles.mentionHeading}>
-              {t("communication.mentionColleague")}
+              {t("groupExperts.mentionHeading")}
             </div>
             {loading ? (
               <div className={styles.mentionHint}>
@@ -225,9 +273,19 @@ const ColleagueMentionInput = forwardRef<ColleagueMentionInputRef, Props>(
                       onClick={() => choose(member)}
                       tabIndex={-1}
                     >
-                      <PersonAvatar person={member} size={28} />
+                      {member.expert ? (
+                        <ExpertAvatar
+                          url={member.expert.avatar.url}
+                          size={28}
+                        />
+                      ) : (
+                        <PersonAvatar person={member} size={28} />
+                      )}
                       <span>
                         {member.my_nickname || member.nickname}
+                        {member.expert && (
+                          <small>{t("groupExperts.expert")}</small>
+                        )}
                         {member.my_nickname &&
                           member.my_nickname !== member.nickname && (
                             <small>{member.nickname}</small>

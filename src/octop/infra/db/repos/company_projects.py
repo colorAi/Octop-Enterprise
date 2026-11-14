@@ -8,7 +8,7 @@ import time
 from typing import Any
 
 from octop.infra.db.pool import DatabasePool
-from octop.infra.db.repos.company_runtime import RuntimeConflict, encode
+from octop.infra.db.repos.company_runtime import RuntimeConflict, encode, save_checkpoint
 from octop.infra.db.repos.threads import clip_thread_title
 
 
@@ -17,12 +17,12 @@ class CompanyProjectRepo:
         self.db = db
 
     @staticmethod
-    def _owned(conn: Any, project_id: str, owner: int, installation: str) -> Any:
+    def _owned(conn: Any, project_id: str, owner: int) -> Any:
         row = conn.execute(
             "SELECT * FROM company_projects WHERE project_id=? AND owner_user_id=?",
             (project_id, owner),
         ).fetchone()
-        if not row or not hmac.compare_digest(row["installation_hash"], installation):
+        if not row:
             raise RuntimeConflict("project_not_owned")
         return row
 
@@ -34,28 +34,26 @@ class CompanyProjectRepo:
                 "VALUES(?,?,?,?,?,?) ON CONFLICT(project_id) DO NOTHING",
                 (project_id, owner, installation, name, now, now),
             )
-            # A retry preserves a later rename and can never take over another installation.
-            return dict(self._owned(conn, project_id, owner, installation))
+            # A registration retry preserves the project's current name.
+            return dict(self._owned(conn, project_id, owner))
 
-    def rename(self, project_id: str, owner: int, installation: str, name: str) -> dict[str, Any]:
+    def rename(self, project_id: str, owner: int, name: str) -> dict[str, Any]:
         with self.db.transaction() as conn:
-            self._owned(conn, project_id, owner, installation)
             conn.execute(
-                "UPDATE company_projects SET name=?,updated_at=? WHERE project_id=?",
-                (name, int(time.time()), project_id),
+                "UPDATE company_projects SET name=?,updated_at=? "
+                "WHERE project_id=? AND owner_user_id=?",
+                (name, int(time.time()), project_id, owner),
             )
-            return dict(self._owned(conn, project_id, owner, installation))
+            return dict(self._owned(conn, project_id, owner))
 
-    def list_projects(
-        self, owner: int, installation: str, limit: int, offset: int
-    ) -> list[dict[str, Any]]:
+    def list_projects(self, owner: int, limit: int, offset: int) -> list[dict[str, Any]]:
         with self.db.connect() as conn:
             return [
                 dict(row)
                 for row in conn.execute(
-                    "SELECT * FROM company_projects WHERE owner_user_id=? AND installation_hash=? "
+                    "SELECT * FROM company_projects WHERE owner_user_id=? "
                     "ORDER BY updated_at DESC,project_id DESC LIMIT ? OFFSET ?",
-                    (owner, installation, limit, offset),
+                    (owner, limit, offset),
                 ).fetchall()
             ]
 
@@ -75,8 +73,8 @@ class CompanyProjectRepo:
         now = int(time.time())
         key = f"dashboard:{agent_id}:{owner}"
         with self.db.transaction() as conn:
+            conn.execute("UPDATE execution_control SET id=id WHERE id=1")
             if continuation:
-                conn.execute("UPDATE execution_control SET id=id WHERE id=1")
                 source = conn.execute(
                     "SELECT t.agent_id FROM threads t JOIN agents a ON a.agent_id=t.agent_id "
                     "WHERE t.thread_id=? AND t.user_id=? AND a.user_id=?",
@@ -97,7 +95,6 @@ class CompanyProjectRepo:
                 ):
                     raise RuntimeConflict("thread_already_running")
             if fork:
-                conn.execute("UPDATE execution_control SET id=id WHERE id=1")
                 current = conn.execute(
                     "SELECT COALESCE(MAX(seq),0) FROM thread_messages WHERE thread_id=?",
                     (fork["source"],),
@@ -118,7 +115,7 @@ class CompanyProjectRepo:
                     (fork["source"],),
                 ).fetchone():
                     raise RuntimeConflict("thread_already_running")
-            self._owned(conn, project_id, owner, installation)
+            self._owned(conn, project_id, owner)
             expert = conn.execute(
                 "SELECT user_id,enabled,kind FROM agents WHERE agent_id=?", (agent_id,)
             ).fetchone()
@@ -177,13 +174,12 @@ class CompanyProjectRepo:
                             ),
                         )
                     checkpoint = seed["checkpoint"]
-                    conn.execute(
-                        "INSERT INTO company_runtime_checkpoints(thread_id,namespace,checkpoint_id,payload) VALUES(?,'',?,?)",
-                        (
-                            thread_id,
-                            checkpoint["config"]["configurable"]["checkpoint_id"],
-                            encode(checkpoint),
-                        ),
+                    save_checkpoint(
+                        conn,
+                        thread_id,
+                        "",
+                        checkpoint["config"]["configurable"]["checkpoint_id"],
+                        checkpoint,
                     )
                 conn.execute(
                     "UPDATE company_projects SET updated_at=? WHERE project_id=?", (now, project_id)
@@ -195,11 +191,9 @@ class CompanyProjectRepo:
                 "session_key": key,
             }
 
-    def fork_context(
-        self, project_id: str, owner: int, installation: str, thread_id: str
-    ) -> dict[str, Any]:
+    def fork_context(self, project_id: str, owner: int, thread_id: str) -> dict[str, Any]:
         with self.db.connect() as conn:
-            self._owned(conn, project_id, owner, installation)
+            self._owned(conn, project_id, owner)
             source = conn.execute(
                 "SELECT t.agent_id,t.title FROM threads t JOIN company_project_threads p ON p.thread_id=t.thread_id WHERE t.thread_id=? AND t.user_id=? AND p.project_id=?",
                 (thread_id, owner, project_id),
@@ -223,9 +217,10 @@ class CompanyProjectRepo:
         """Attach metadata to an existing desktop thread without touching files/history."""
         with self.db.transaction() as conn:
             conn.execute("UPDATE execution_control SET id=id WHERE id=1")
-            self._owned(conn, project_id, owner, installation)
+            self._owned(conn, project_id, owner)
             binding = conn.execute(
-                "SELECT owner_user_id,installation_hash FROM company_runtime_threads WHERE thread_id=?",
+                "SELECT r.owner_user_id,r.installation_hash,p.project_id FROM company_runtime_threads r "
+                "LEFT JOIN company_project_threads p ON p.thread_id=r.thread_id WHERE r.thread_id=?",
                 (thread_id,),
             ).fetchone()
             if (
@@ -235,35 +230,40 @@ class CompanyProjectRepo:
                 ).fetchone()
             ):
                 return
-            if (
-                not binding
-                or binding["owner_user_id"] != owner
-                or not hmac.compare_digest(binding["installation_hash"], installation)
-            ):
+            if not binding or binding["owner_user_id"] != owner:
+                raise RuntimeConflict("project_on_another_device")
+            if binding["project_id"] == project_id:
+                return
+            if binding["project_id"] is not None:
+                raise RuntimeConflict("thread_project_conflict")
+            if not hmac.compare_digest(binding["installation_hash"], installation):
                 raise RuntimeConflict("project_on_another_device")
             conn.execute(
-                "INSERT INTO company_project_threads(thread_id,project_id) VALUES(?,?) ON CONFLICT(thread_id) DO NOTHING",
+                "INSERT INTO company_project_threads(thread_id,project_id) VALUES(?,?)",
                 (thread_id, project_id),
             )
-            current = conn.execute(
-                "SELECT project_id FROM company_project_threads WHERE thread_id=?", (thread_id,)
-            ).fetchone()
-            if current["project_id"] != project_id:
-                raise RuntimeConflict("thread_project_conflict")
 
     def threads(
-        self, project_id: str, owner: int, installation: str, limit: int, offset: int
+        self, project_id: str, owner: int, limit: int, offset: int, *, after: str | None = None
     ) -> list[dict[str, Any]]:
+        if after is None:
+            order = (
+                " ORDER BY t.pinned DESC, CASE WHEN t.last_active>0 THEN t.last_active "
+                "ELSE t.created_at END DESC,t.thread_id DESC LIMIT ? OFFSET ?"
+            )
+            args = (project_id, owner, limit, offset)
+        else:
+            order = " AND t.thread_id>? ORDER BY t.thread_id LIMIT ?"
+            args = (project_id, owner, after, limit)
         with self.db.connect() as conn:
-            self._owned(conn, project_id, owner, installation)
+            self._owned(conn, project_id, owner)
             return [
                 dict(row)
                 for row in conn.execute(
                     "SELECT t.thread_id,t.agent_id,t.title,t.last_active,t.created_at,t.pinned,p.project_id, "
                     "(SELECT r.status FROM company_runtime_tasks r WHERE r.thread_id=t.thread_id ORDER BY r.id DESC LIMIT 1) AS task_status "
                     "FROM company_project_threads p JOIN threads t ON t.thread_id=p.thread_id "
-                    "WHERE p.project_id=? AND t.user_id=? ORDER BY t.pinned DESC, "
-                    "CASE WHEN t.last_active>0 THEN t.last_active ELSE t.created_at END DESC,t.thread_id DESC LIMIT ? OFFSET ?",
-                    (project_id, owner, limit, offset),
+                    "WHERE p.project_id=? AND t.user_id=?" + order,
+                    args,
                 ).fetchall()
             ]

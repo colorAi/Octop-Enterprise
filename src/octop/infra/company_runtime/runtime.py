@@ -407,6 +407,7 @@ class EnterpriseRuntime:
             "project_path": str(project),
             "project_id": params.get("project_id"),
             "project_revision": int(params.get("project_revision", 1)),
+            "project_previous_roots": params.get("project_previous_roots", []),
         }
         task_dir = self.state / "tasks" / task["task_id"]
         if await offload((task_dir / "task.json").exists):
@@ -586,6 +587,7 @@ class EnterpriseRuntime:
                 directory,
                 lambda event: self.emit({**event, "thread_id": thread}),
                 tool_path=self.tool_path,
+                previous_roots=task.get("project_previous_roots", []),
             )
 
             async def authorize() -> None:
@@ -836,6 +838,16 @@ class EnterpriseRuntime:
                 snapshot["instructions"]
                 + f"\nEnterprise execution: project={project}; selected source folder={project if task.get('project_id') else self.workspace}; Python={sys.executable}. Shell commands run with the current employee OS permissions. Preserve source files. Never overwrite or delete without user authorization. Do not upload raw media for local processing. Personal memory is provided by the company memory service through memory_search/memory_get/remember. Automatic recall contains durable saved memories; use memory_search and memory_get for details from earlier conversations. Historical assistant statements do not describe current tool availability or current task results. Project documents are project files and are not loaded as personal memory. Expert bootstrap is already complete. Company expert skills are cached at {cache}. Only this task's granted company tools are available. Team delegation and external connectors are unavailable."
             )
+            if task.get("project_previous_roots"):
+                instructions += (
+                    "\nThis project was moved or imported. Its current root is "
+                    + str(project)
+                    + ". Historical roots "
+                    + json.dumps(task["project_previous_roots"], ensure_ascii=False)
+                    + " are obsolete. Resolve historical file references relative to the current root. "
+                    "Check scripts/configuration for obsolete absolute paths before running them; "
+                    "do not automatically replay previous commands or unfinished tools."
+                )
             instructions += (
                 "\nWhen the user asks to display, send or resend an existing local image "
                 "or file, call send_local_file with its project path. Shell-generated files "

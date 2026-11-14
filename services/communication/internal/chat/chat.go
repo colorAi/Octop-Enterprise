@@ -20,6 +20,7 @@ import (
 
 	"octop/communication/internal/auth"
 	"octop/communication/internal/deps"
+	"octop/communication/internal/experts"
 	"octop/communication/internal/httpx"
 	"octop/communication/internal/idgen"
 	"octop/communication/internal/policy"
@@ -439,6 +440,7 @@ type sendReq struct {
 	ReplyTo         string   `json:"reply_to_message_id"`
 	MentionUserIDs  []string `json:"mention_user_ids"`
 	MentionAll      bool     `json:"mention_all"`
+	MentionExpertID string   `json:"mention_expert_id"`
 	forwardSourceID string
 }
 
@@ -451,8 +453,9 @@ func (r *sendReq) digest(convID string) string {
 		CMID string   `json:"m,omitempty"`
 		M    []string `json:"M,omitempty"`
 		MA   bool     `json:"MA,omitempty"`
+		ME   string   `json:"ME,omitempty"`
 	}
-	c := canon{C: convID, CMID: r.ClientMessageID, R: r.ReplyTo, MA: r.MentionAll}
+	c := canon{C: convID, CMID: r.ClientMessageID, R: r.ReplyTo, MA: r.MentionAll, ME: r.MentionExpertID}
 	if r.Text != nil {
 		c.T = *r.Text
 	}
@@ -484,6 +487,10 @@ func (s *Service) handleSend(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, r, httpx.ErrInvalidRequest.WithMessage("@ 列表最多 50 人"))
 		return
 	}
+	if len(req.MentionExpertID) > 160 {
+		httpx.WriteErrorOf(w, r, httpx.ErrInvalidRequest)
+		return
+	}
 	digest := req.digest(convID)
 
 	var (
@@ -501,16 +508,26 @@ func (s *Service) handleSend(w http.ResponseWriter, r *http.Request) {
 			var seq int64
 			var created time.Time
 			var storedDigest []byte
-			err := tx.QueryRow(r.Context(), `SELECT m.id, m.conversation_id, m.seq, m.created_at, x.content_digest
+			var original map[string]any
+			var localExpert bool
+			err := tx.QueryRow(r.Context(), `SELECT m.id, m.conversation_id, m.seq, m.created_at, x.content_digest, x.result,
+				EXISTS(SELECT 1 FROM group_expert_bindings b WHERE b.binding_id=m.mention_expert_id AND b.conversation_id=m.conversation_id)
 				FROM messages m JOIN message_receipts x ON x.sender_id=m.sender_id AND x.client_message_id=m.client_message_id
 				WHERE m.sender_id=$1 AND m.client_message_id=$2`, a.UserID, req.ClientMessageID).
-				Scan(&msgID, &msgConv, &seq, &created, &storedDigest)
+				Scan(&msgID, &msgConv, &seq, &created, &storedDigest, &original, &localExpert)
 			if err == nil {
 				if hex.EncodeToString(storedDigest) != digest {
 					return httpx.ErrIdemConflict
 				}
 				out = map[string]any{"message_id": msgID, "conversation_id": msgConv, "seq": seqStr(seq),
 					"created_at": created.UTC().Format(time.RFC3339), "replayed": true}
+				if call, ok := original["expert_call"].(map[string]any); ok {
+					// Old receipts could store a name from a different group.
+					if !localExpert {
+						call["expert_name"] = ""
+					}
+					out["expert_call"] = call
+				}
 				replayed = true
 				return nil
 			}
@@ -531,6 +548,9 @@ func (s *Service) handleSend(w http.ResponseWriter, r *http.Request) {
 		}
 		var members []string
 		if kind == "private" {
+			if req.MentionExpertID != "" {
+				return httpx.ErrInvalidRequest
+			}
 			if err := store.LockFriendPair(r.Context(), tx, lo, hi); err != nil {
 				return err
 			}
@@ -653,8 +673,8 @@ func (s *Service) handleSend(w http.ResponseWriter, r *http.Request) {
 		if mentions == nil {
 			mentions = []string{}
 		}
-		if _, err := tx.Exec(r.Context(), `INSERT INTO messages(id, conversation_id, seq, sender_id, client_message_id, type, text, reply_to_message_id, mentions, mention_all)
-			VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`, msgID, convID, seq, a.UserID, req.ClientMessageID, mType, textArg, replyArg, mentions, req.MentionAll); err != nil {
+		if _, err := tx.Exec(r.Context(), `INSERT INTO messages(id, conversation_id, seq, sender_id, client_message_id, type, text, reply_to_message_id, mentions, mention_all,mention_expert_id)
+			VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,NULLIF($11,''))`, msgID, convID, seq, a.UserID, req.ClientMessageID, mType, textArg, replyArg, mentions, req.MentionAll, req.MentionExpertID); err != nil {
 			if isUnique(err, "messages_sender_idem_idx") {
 				return httpx.ErrIdemConflict
 			}
@@ -671,6 +691,13 @@ func (s *Service) handleSend(w http.ResponseWriter, r *http.Request) {
 		}
 		result := map[string]any{"message_id": msgID, "conversation_id": convID, "seq": seqStr(seq),
 			"created_at": time.Now().UTC().Format(time.RFC3339)}
+		if req.MentionExpertID != "" {
+			call, err := experts.New(s.D).Start(r.Context(), tx, convID, msgID, a.UserID, req.MentionExpertID, seq)
+			if err != nil {
+				return err
+			}
+			result["expert_call"] = map[string]any{"call_id": call.ID, "call_state": call.State, "reason_code": call.Reason, "expert_name": call.Name}
+		}
 		rawRes, _ := json.Marshal(result)
 		if req.ClientMessageID != "" {
 			if _, err := tx.Exec(r.Context(), `INSERT INTO message_receipts(id, sender_id, client_message_id, content_digest, result)
@@ -767,8 +794,8 @@ func (s *Service) handleMsgList(w http.ResponseWriter, r *http.Request) {
 			AND m.seq BETWEEN me.visible_from_seq AND COALESCE(me.visible_through_seq, 9223372036854775807))`
 		hargs = append(hargs, a.UserID)
 	}
-	rows, err := s.D.Store.Pool.Query(r.Context(), `SELECT m.id, m.seq, m.sender_id, m.type, m.text, m.recalled_at IS NOT NULL, m.created_at,m.client_message_id,m.reply_to_message_id,m.mentions,m.mention_all,m.system_kind
-		FROM messages m WHERE `+where+`
+	rows, err := s.D.Store.Pool.Query(r.Context(), `SELECT m.id, m.seq, m.sender_id, m.type, m.text, m.recalled_at IS NOT NULL, m.created_at,m.client_message_id,m.reply_to_message_id,m.mentions,m.mention_all,m.system_kind,`+expertMessageColumns+`
+        FROM messages m `+expertMessageJoins+` WHERE `+where+`
 		ORDER BY m.seq DESC LIMIT $4`, hargs...)
 	if err != nil {
 		httpx.WriteError(w, r, httpx.ErrStorage)
@@ -781,7 +808,7 @@ func (s *Service) handleMsgList(w http.ResponseWriter, r *http.Request) {
 		var it messageItem
 		var sender *string
 		var created time.Time
-		if err := rows.Scan(&it.ID, newSeq(&it.Seq), &sender, &it.Type, &it.Text, &it.Recalled, &created, &it.ClientMessageID, &it.ReplyToMessageID, &it.MentionUserIDs, &it.MentionAll, &it.SystemKind); err != nil {
+		if err := rows.Scan(&it.ID, newSeq(&it.Seq), &sender, &it.Type, &it.Text, &it.Recalled, &created, &it.ClientMessageID, &it.ReplyToMessageID, &it.MentionUserIDs, &it.MentionAll, &it.SystemKind, &it.SenderType, &it.MentionExpertID, &it.Expert, &it.ExpertCall); err != nil {
 			httpx.WriteErrorOf(w, r, httpx.ErrStorage)
 			return
 		}

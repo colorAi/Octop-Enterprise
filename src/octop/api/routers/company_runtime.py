@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import AsyncIterator
+from contextlib import aclosing
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, Request
@@ -45,6 +46,7 @@ class Capabilities(Document):
         "project_catalog_v1",
         "multi_project_v1",
         "history_continuation_v1",
+        "account_projects_v1",
     ]
 
 
@@ -77,6 +79,14 @@ class ProjectIdentity(Document):
 class ProjectQuery(ProjectIdentity):
     limit: int = Field(default=25, ge=1, le=100)
     offset: int = Field(default=0, ge=0)
+
+
+class ProjectThreadsQuery(ProjectQuery):
+    after_thread_id: str | None = Field(
+        default=None,
+        max_length=128,
+        description="Sync in thread ID order. Pass an empty string for the first page.",
+    )
 
 
 class ProjectSave(ProjectIdentity):
@@ -141,7 +151,7 @@ async def register_project(body: ProjectSave, svc: CompanyRuntimeService = Depen
 @router.patch(
     "/projects",
     response_model=ProjectMetadata,
-    summary="Rename a project owned by this employee installation",
+    summary="Rename an account-owned project",
 )
 async def rename_project(body: ProjectSave, svc: CompanyRuntimeService = Depends(service)) -> Any:
     return await CompanyProjectService(svc, body.installation_token).save(
@@ -152,7 +162,7 @@ async def rename_project(body: ProjectSave, svc: CompanyRuntimeService = Depends
 @router.post(
     "/projects/query",
     response_model=ProjectList,
-    summary="List this installation's projects with bounded pagination",
+    summary="List the employee's projects with bounded pagination",
 )
 async def query_projects(body: ProjectQuery, svc: CompanyRuntimeService = Depends(service)) -> Any:
     return await CompanyProjectService(svc, body.installation_token).list(body.limit, body.offset)
@@ -177,10 +187,10 @@ async def create_project_thread(
     summary="List a project's conversations across the employee's experts",
 )
 async def query_project_threads(
-    project_id: str, body: ProjectQuery, svc: CompanyRuntimeService = Depends(service)
+    project_id: str, body: ProjectThreadsQuery, svc: CompanyRuntimeService = Depends(service)
 ) -> Any:
     return await CompanyProjectService(svc, body.installation_token).threads(
-        project_id, body.limit, body.offset
+        project_id, body.limit, body.offset, after=body.after_thread_id
     )
 
 
@@ -383,25 +393,12 @@ async def checkpoint(
     body: CheckpointRequest,
     svc: CompanyRuntimeService = Depends(service),
 ) -> Any:
-    task = await svc.task(task_id, active=action != "get")
-    args = (task["thread_id"], body.namespace, body.checkpoint_id)
     if action == "get":
-        return await offload(svc.repo.checkpoint, *args)
-    if not body.checkpoint_id:
-        raise denied("checkpoint_id_required", 422)
-    try:
-        if action == "put":
-            if body.payload is None:
-                raise denied("checkpoint_payload_required", 422)
-            await offload(svc.repo.put_checkpoint, *args, body.payload)
-        else:
-            if any(
-                set(w) != {"idx", "value"} or not isinstance(w["idx"], int) for w in body.writes
-            ):
-                raise denied("invalid_checkpoint_writes", 422)
-            await offload(svc.repo.put_writes, *args, body.task_key, body.writes)
-    except RuntimeConflict as exc:
-        raise denied(str(exc)) from exc
+        task = await svc.task(task_id)
+        return await offload(
+            svc.repo.checkpoint, task["thread_id"], body.namespace, body.checkpoint_id
+        )
+    await svc.checkpoints(task_id, [{**body.model_dump(), "action": action}], require_active=True)
     return {"saved": True}
 
 
@@ -423,8 +420,9 @@ async def model(
 
     async def stream() -> AsyncIterator[str]:
         try:
-            async for chunk in svc.model(task_id, body.model_dump()):
-                yield chunk
+            async with aclosing(svc.model(task_id, body.model_dump())) as chunks:
+                async for chunk in chunks:
+                    yield chunk
         except Exception as exc:
             yield json.dumps(model_failure(exc)) + "\n"
 

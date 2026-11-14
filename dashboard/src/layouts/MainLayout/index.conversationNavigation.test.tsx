@@ -71,6 +71,12 @@ vi.mock("../../components/PrivateExpertBoundary", () => ({
   default: ({ children }: { children: ReactNode }) => children,
 }));
 vi.mock("../../components/PwaUpdatePrompt", () => ({ default: () => null }));
+vi.mock("../../components/ClientConfigUpdatePrompt", () => ({
+  default: () => null,
+}));
+vi.mock("../../components/GroupExpertSyncBanner", () => ({
+  default: () => null,
+}));
 vi.mock("../../components/PwaInstallPrompt", () => ({
   PwaAutoPrompt: () => null,
 }));

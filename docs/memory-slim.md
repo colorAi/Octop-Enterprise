@@ -2,7 +2,7 @@
 
 ## 用户命令与表现
 
-升级本次 Octop 和 octop-memory 0.9.11 或更新版本，重启 Octop 一次加载控制入口。之后每次整理无需停服：
+需要 octop-memory 0.9.11 或更新版本；升级后重启 Octop 一次加载控制入口。之后每次整理无需停服：
 
 ```bash
 octop memory list             # 只看可整理的智能体名称和 ID，不触发维护
@@ -60,10 +60,7 @@ PG 尚未接入，避免把“命令不支持”误解成“数据库无需维�
 底层 octop-memory 已有 PG 普通 VACUUM / VACUUM FULL 运维能力，但不是当前对话命令的后端。
 普通 VACUUM 主要供库内复用空间；FULL 重写表且阻塞读写。PG checkpoint 表在同一 database 内
 可能由多个 agent/用户共享，不能仅暂停当前 agent 就调用 FULL。后续宜先做不阻塞聊天的只读诊断，
-再按实际收益和共享范围提供管理员维护操作。本轮只做只读评估和提示修正，没有开启 PG 整理。
-
-2026-09-18 文案回归：memory/slash memory/i18n 117 passed、2 deselected，Ruff/format 和
-strict mypy 499 files 通过。未重启正在运行的 Octop；新提示需加载更新后的代码才生效。
+再按实际收益和共享范围提供管理员维护操作。当前没有开启 PG 整理。
 
 ## 实现与一致性边界
 
@@ -129,84 +126,3 @@ IM 暂不开放：现有 IM `user_id` 是用于会话存储的 agent owner，不
   释放聊天预约，保留可读的混合格式和备份，不伪报全部压缩完成，也不自动回滚。
 - 此模式针对一个运行中的 Octop 管理的库。它不能升级独立运行的旧 reader，不能保证其他进程
   使用旧格式 reader 或自定义写库脚本时兼容；部署前需统一升级。共享同库的其他写入仍受 SQLite 锁影响。
-
-## 验证
-
-2026-09-18 不可整理原因诊断修复：单个 agent 的预览先验证归属，再诊断运行时，明确区分
-未运行、未启用记忆、非 SQLite backend（例如 PostgreSQL）以及配套在线整理接口缺失。
-修复了“已运行的 PostgreSQL agent 被过滤后只显示没有候选”的误导提示；候选列表也检查
-`slim_live_checkpoints` 能力，避免旧安装包被误报为可在线整理。未自动切换 backend 或更新运行环境。
-memory/slash memory/i18n 定向回归 117 passed、2 deselected（本轮排除已有 socket 用例）；
-strict mypy 499 files、Ruff/format 通过。这里只验证 PostgreSQL 拒绝提示，没有新增 PG 瘦身能力。
-
-2026-09-18 确认与维护提示改造：两个仓库从各自当前 HEAD 签出 `feature/memory-slim-tool`，保留
-全部未提交改动。Octop 原分支为 `feature/octop-harness-bump`，octop-memory 原分支为 `main`。
-
-- 上述对话/维护回归加 `tests/integration/test_memory_api.py`：201 passed，覆盖预览无任务/无改写、
-  确认后执行、权限和接口终态；`uv run --no-sync mypy --strict src/octop`：499 files 通过。
-- `npm test -- src/pages/Chat/hooks/useMemoryMaintenance.test.ts src/pages/Chat/components/MemoryMaintenanceBanner.test.tsx`：
-  9 passed，覆盖长耗时解释、断连重试、完成/失败恢复发送和可关闭结果；`npm run build` 通过。
-- 本轮不改库内迁移实现、不重复完整门禁；此前全量门禁限制见下。未提交、部署或执行真实库维护。
-
-2026-09-18 对话入口补充：
-
-```bash
-PYTHONPATH=../octop-memory/src:src uv run --no-sync pytest tests/unit/agents/test_memory_slim.py tests/unit/gateway/test_slash*.py tests/unit/gateway/test_message_keys.py tests/unit/gateway/test_gateway.py tests/unit/history/test_projection.py tests/unit/i18n -q
-```
-
-178 passed，覆盖真实临时 SQLite 的对话触发、历史保留、用户隔离、批次串行/互斥、所有权变更、
-失败和关机停止后续项、IM owner fallback 禁止授权、禁用用户、进度/结果、gateway 注入、
-维护回执不访问 checkpointer。strict mypy 499 files、Ruff/format 通过。
-随后补充“等待活跃对话结束期间 owner 变更”的检查：取得维护预约后再次验证 owner，6 个 chat
-协调器用例定向复跑通过（含新增用例），strict mypy 再次通过；未获授权时不创建备份或改写库。
-没有更改前端源文件或库内存储实现；未重复全量门禁，其既有环境限制见下。未部署、重启或整理真实库。
-
-临时数据库验证 reader snapshot、批次间并发替换/新增、迁移故障、备份可读和历史保留。
-协调器测试覆盖等待活跃调用、维护期间新调用等待、成功/失败释放、取消时先等待 worker 完成，
-本机控制认证/进度及 CLI 中文输出。前端测试覆盖每个阻塞阶段与成功/失败后的发送恢复。
-
-```bash
-# 从 Octop 仓库运行，加载配套 octop-memory 源码。
-PYTHONPATH=../octop-memory/src:src uv run --no-sync pytest tests/unit/agents/test_memory_slim.py tests/unit/i18n -q
-cd dashboard
-npm test -- src/pages/Chat/hooks/useMemoryMaintenance.test.ts
-npm run build
-```
-
-本轮只在临时库测试，未更新正在运行的生产进程、未对用户真实库执行瘦身。
-
-2026-09-18 选择与持续进度补充验证：coordinator/CLI/控制通道/i18n 共 81 passed，覆盖编号选择、
-错误编号重新输入、重名识别、空列表、只读发现、JSON 禁止自动选择，以及备份阶段无状态变化时
-仍持续发送耗时心跳。strict mypy 498 files 通过；本地脚本 `--online --help` 和 shell 语法检查通过。
-本轮未改动存储迁移/前端代码，未重复全量测试；完整门禁的既有环境限制见下。
-
-2026-09-18 `--all` 补充验证：上述定向测试更新为 88 passed，新增串行执行、默认项不干扰、
-批次及单项进度、人类可读/JSON 输出、失败/断连停止、参数冲突和空列表覆盖。
-strict mypy 498 files、Ruff/format、wrapper `--online --all --help` 通过。没有执行真实库整理。
-
-2026-09-18 验证结果：
-
-- octop-memory checkpoint compaction：37 passed（含长 reader 与并发写入）。
-- Octop 协调器/本机控制/CLI/记忆面板保护 + 原 memory API 集成 + i18n：90 passed。
-  本机 socket 测试因默认 sandbox 不允许 bind，放行仅此临时测试后通过；没有使用真实用户库。
-- 更广的 agent manager、启动及 CLI registry 回归：153 passed、1 skipped；唯一初次失败为
-  上述 socket bind 权限，已在后续放行的测试中通过。
-- Ruff/format、strict mypy（Octop 498 files、octop-memory 107 files）通过；
-  前端 2 个阶段恢复测试、TypeScript 编译与生产构建通过。
-- 两仓完整门禁均未全绿：octop-memory 的 24 个既有测试访问不可写的默认用户目录失败；
-  Octop 全量在旧 captcha 测试绑定端口时报 PermissionError，确认环境原因后中止全量运行，
-  复跑该文件定位为 2 passed / 1 error。未把中止结果或 PostgreSQL skip 当成通过。
-- 多 GiB 库/完整生产 IM 端到端/长期磁盘增长未测；本轮没有提交、部署或重启真实 Octop。
-
-## 2026-09-20 提交前验证与依赖收敛
-
-- 维护对象由 `AgentManager.memory_slim` 持有，shutdown 等待维护完成后关闭 Agent；
-  Gateway、SlashCtx、OctopServer 不再增加专用传递字段。CLI 控制入口按请求获取当前 runtime，
-  支持首次配置完成后加载 AgentManager。
-- `/memory` 在 catalog 声明 `persist_checkpoint=False`；processor 统一读取保存策略，
-  普通命令及别名继续写入 checkpoint 和已就绪的聊天展示记录。
-- `UV_CACHE_DIR=/tmp/octop-uv-cache PYTHONPATH=../octop-memory/src:src make all RUN='uv run --no-sync' PYTEST_JOBS=4`：
-  3361 passed、18 skipped；Ruff/format 和 mypy（499 source files）通过。
-- `cd dashboard && npm test -- src/pages/Chat/components/MemoryMaintenanceBanner.test.tsx src/pages/Chat/hooks/useMemoryMaintenance.test.ts`：
-  9 passed。提交钩子另执行 change-aware 检查和 `npm run build`（包含 `tsc -b`）。
-- 未执行真实记忆库瘦身或 PostgreSQL 维护；在线能力仍明确限定为兼容 SQLite。

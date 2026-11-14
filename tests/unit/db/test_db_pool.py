@@ -73,6 +73,22 @@ def test_run_migrations_creates_tables(db: SqlitePool):
     assert "knowledge_base_members" not in names
 
 
+def test_schema_32_project_preview_adds_account_runtime_state(db: SqlitePool):
+    with db.connect() as conn:
+        conn.execute("DROP TABLE company_runtime_checkpoint_heads")
+        conn.execute("ALTER TABLE company_runtime_tasks DROP COLUMN installation_hash")
+        conn.execute(
+            "CREATE TRIGGER prevent_watermark_regression BEFORE UPDATE ON _schema_version "
+            "WHEN NEW.version < OLD.version BEGIN SELECT RAISE(ABORT,'watermark_regressed'); END"
+        )
+    run_migrations(db)
+    with db.connect() as conn:
+        assert conn.execute("SELECT version FROM _schema_version").fetchone()[0] == 36
+        assert conn.execute("SELECT * FROM company_runtime_checkpoint_heads").fetchall() == []
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(company_runtime_tasks)")}
+    assert "installation_hash" in columns
+
+
 def test_run_migrations_idempotent(db: SqlitePool):
     run_migrations(db)
     with db.connect() as conn:
@@ -99,7 +115,7 @@ def test_run_migrations_idempotent(db: SqlitePool):
         sso_indexes = {
             r["name"] for r in conn.execute("PRAGMA index_list(sso_providers)").fetchall()
         }
-    assert v == 31
+    assert v == 36
     assert "login_failed_count" in cols
     assert "login_locked_until" in cols
     assert "preferences_json" in cols
@@ -223,7 +239,7 @@ def test_migration_002_idempotent_when_column_already_present(tmp_path: Path) ->
     with pool.connect() as conn:
         v = conn.execute("SELECT version FROM _schema_version").fetchone()[0]
         cron_cols = {r["name"] for r in conn.execute("PRAGMA table_info(cron_jobs)").fetchall()}
-    assert v == 31
+    assert v == 36
     assert "mcp_servers" in cron_cols
     assert "skill_packages" in {
         r["name"]
@@ -364,7 +380,7 @@ def test_stuck_version_6_without_permissions_column_is_repaired(tmp_path: Path) 
     with pool.connect() as conn:
         cols = {r["name"] for r in conn.execute("PRAGMA table_info(users)").fetchall()}
         version = conn.execute("SELECT version FROM _schema_version").fetchone()[0]
-    assert version == 31
+    assert version == 36
     assert "permissions" in cols
 
 
@@ -389,7 +405,7 @@ def test_schema_v10_without_projection_tables_is_repaired(tmp_path: Path) -> Non
         }
         kb_cols = {r["name"] for r in conn.execute("PRAGMA table_info(knowledge_bases)").fetchall()}
         cron_cols = {r["name"] for r in conn.execute("PRAGMA table_info(cron_jobs)").fetchall()}
-    assert version == 31
+    assert version == 36
     assert {"thread_messages", "thread_history_projection", "trajectory_events"}.issubset(
         table_names
     )
@@ -424,7 +440,7 @@ def test_ahead_of_max_schema_version_clamps_to_max(tmp_path: Path) -> None:
             r["name"]
             for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
         }
-    assert version == 31
+    assert version == 36
     assert "skill_package_id" in pkg_cols
     assert "published_expert_id" in pub_cols
     assert "user_invites" in invite_tables
@@ -507,7 +523,7 @@ def test_pre_squash_schema_version_clamped_and_knowledge_tables_filled(
             for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
         }
         user_cols = {r["name"] for r in conn.execute("PRAGMA table_info(users)").fetchall()}
-    assert version == 31
+    assert version == 36
     assert "permissions" in user_cols
     assert {
         "published_experts",
@@ -682,12 +698,16 @@ def test_v7_sqlite_sql_upgrades_legacy_text_pks(tmp_path: Path) -> None:
 
 
 def test_v14_to_v15_adds_sso_provider_kind_without_rebuilding(tmp_path: Path) -> None:
+    from octop.infra.db import migrate
+
     pool = SqlitePool(tmp_path / "octop.db")
-    run_migrations(pool)
+    # Build the actual old schema, rather than relabeling a current database
+    # whose later additive migrations have already run.
+    for version, path in migrate._discover():
+        if version <= 14:
+            migrate._apply_sqlite_migration(pool, version, path)
     with pool.connect() as conn:
         conn.execute("DROP INDEX IF EXISTS idx_sso_providers_kind")
-        conn.execute("ALTER TABLE sso_providers DROP COLUMN extra")
-        conn.execute("ALTER TABLE sso_providers DROP COLUMN kind")
         conn.execute("UPDATE _schema_version SET version = 14")
         conn.execute(
             """
@@ -713,7 +733,7 @@ def test_v14_to_v15_adds_sso_provider_kind_without_rebuilding(tmp_path: Path) ->
         bound = conn.execute(
             "SELECT sso_provider_id FROM users WHERE username = 'sso-admin'"
         ).fetchone()[0]
-    assert version == 31
+    assert version == 36
     assert int(row["id"]) == int(provider_id)
     assert row["kind"] == "oidc"
     assert row["extra"] == "{}"

@@ -207,6 +207,34 @@ describe("mergeHistoryWithLocalTail", () => {
     expect(mergeHistoryWithLocalTail(loaded, current)).toEqual(current);
   });
 
+  it.each([0, 5_000])(
+    "keeps a matching persisted reply after its pending question at timestamp %i",
+    (timestamp) => {
+      const question = msg("local-user", "user", "question", 5_000);
+      const localReply = msg("reply", "assistant", "live", 5_000);
+      const storedReply = msg("reply", "assistant", "stored", timestamp);
+
+      expect(
+        mergeHistoryWithLocalTail([storedReply], [question, localReply]),
+      ).toEqual([question, storedReply]);
+    },
+  );
+
+  it("preserves the order of several pending turns with shared reply IDs", () => {
+    const older = msg("older", "assistant", "earlier history", 1_000);
+    const first = msg("local-first", "user", "first question", 5_000);
+    const firstReply = msg("reply-first", "assistant", "first answer", 5_000);
+    const second = msg("local-second", "user", "second question", 5_000);
+    const secondReply = msg("reply-second", "assistant", "second answer", 0);
+
+    expect(
+      mergeHistoryWithLocalTail(
+        [older, firstReply, secondReply],
+        [older, first, firstReply, second, secondReply],
+      ),
+    ).toEqual([older, first, firstReply, second, secondReply]);
+  });
+
   it("preserves timestamp-less rows on a page that includes earlier history", () => {
     const older = msg("older", "assistant", "earlier history", 1_000);
     const untimed = msg("untimed", "assistant", "earlier answer", 0);

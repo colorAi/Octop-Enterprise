@@ -92,6 +92,87 @@ class CommunicationBridge:
     def mapped_id(self, user_id: int) -> str:
         return f"octop:{self._instance}:{user_id}"
 
+    def verify_group_request(self, token: str, method: str, path: str, raw: bytes) -> None:
+        try:
+            body, signature = token.split(".")
+            expected = hmac.digest(self._key, body.encode(), "sha256")
+            actual = base64.urlsafe_b64decode(signature + "=" * (-len(signature) % 4))
+            claims = json.loads(base64.urlsafe_b64decode(body + "=" * (-len(body) % 4)))
+            now = int(time.time())
+            valid = (
+                bool(self._key)
+                and hmac.compare_digest(expected, actual)
+                and all(
+                    (
+                        claims.get("iss") == "octop-im",
+                        claims.get("aud") == "octop",
+                        claims.get("purpose") == "group-experts-v1",
+                        claims.get("method") == method,
+                        claims.get("path") == path,
+                        claims.get("body_digest") == hashlib.sha256(raw).hexdigest(),
+                        now < claims["exp"] <= claims["iat"] + 15,
+                        claims["iat"] <= now + 5,
+                    )
+                )
+            )
+        except (ValueError, KeyError, TypeError):
+            valid = False
+        if not valid:
+            raise OctopError(ErrorCode.AUTH_FAILED, "invalid group service credential", status=401)
+
+    async def group_request(
+        self, method: str, path: str, body: dict[str, Any] | None = None, *, actor: int = 0
+    ) -> dict[str, Any]:
+        """Service-only transport. Bind the short credential to these exact bytes."""
+        if not self.enabled or self._http is None:
+            raise OctopError(ErrorCode.INTERNAL_ERROR, "communication unavailable", status=503)
+        if not path.startswith("/") or "?" in path or "#" in path:
+            raise ValueError("invalid_group_expert_path")
+        path = "/internal/group-experts/v1" + path
+        raw = (
+            json.dumps(body, ensure_ascii=False, separators=(",", ":")).encode()
+            if body is not None
+            else b""
+        )
+        now = int(time.time())
+        token = sign_credential(
+            self._key,
+            {
+                "iss": "octop",
+                "aud": "octop-im",
+                "purpose": "group-experts-v1",
+                "sub": self.mapped_id(actor),
+                "sid": "group-experts-v1",
+                "iat": now,
+                "exp": now + 15,
+                "method": method,
+                "path": path,
+                "body_digest": hashlib.sha256(raw).hexdigest(),
+            },
+        )
+        try:
+            response = await self._http.request(
+                method,
+                self.url + path,
+                content=raw,
+                headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"},
+                timeout=10,
+            )
+            value = response.json()
+        except (httpx.HTTPError, ValueError):
+            raise OctopError(
+                ErrorCode.INTERNAL_ERROR, "communication unavailable", status=503
+            ) from None
+        if response.status_code >= 400:
+            reason = value.get("error", {}).get("code", "group_expert_unavailable")
+            raise OctopError(
+                ErrorCode.FORBIDDEN,
+                "group expert request rejected",
+                status=response.status_code,
+                details={"reason": reason},
+            )
+        return dict(value["data"])
+
     async def resource_membership(self, user_id: int) -> dict[str, Any]:
         """Fresh organization authority; resource use never trusts a browser's department."""
         if not self.enabled or self._http is None:

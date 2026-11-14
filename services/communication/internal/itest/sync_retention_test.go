@@ -193,7 +193,10 @@ func TestSyncReadSeesConsistentStateDuringPurge(t *testing.T) {
 	deadline := time.Now().Add(3 * time.Second)
 	for {
 		var waiting bool
-		if err := h.D.Store.Pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE '%FROM user_sync_events WHERE user_id=%')`).Scan(&waiting); err != nil {
+		if err := h.D.Store.Pool.QueryRow(ctx, `SELECT EXISTS(
+			SELECT 1 FROM pg_locks
+			WHERE relation='user_sync_events'::regclass AND mode='AccessShareLock' AND NOT granted
+		)`).Scan(&waiting); err != nil {
 			t.Fatal(err)
 		}
 		if waiting {

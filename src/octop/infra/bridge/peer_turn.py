@@ -8,6 +8,8 @@ from typing import Any, Protocol
 # tests/unit/bridge/test_peer_turn.py asserts the two stay aligned.
 USER_TURN_WS_KEYS = frozenset(
     {
+        "device",
+        "client_request_id",
         "text",
         "session_key",
         "thread_id",

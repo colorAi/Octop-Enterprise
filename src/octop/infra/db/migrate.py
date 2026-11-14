@@ -1788,7 +1788,9 @@ def _apply_postgresql_migration(conn: Any, sql: str) -> None:
         conn.execute(stmt)
 
 
-def _apply_sqlite_migration(db: DatabasePool, version: int, path: Path) -> None:
+def _apply_sqlite_migration(
+    db: DatabasePool, version: int, path: Path, *, watermark: int | None = None
+) -> None:
     """Apply one SQLite migration.
 
     Version 2 uses ``_ensure_column`` / table helpers so re-running after a
@@ -1940,6 +1942,14 @@ def _apply_sqlite_migration(db: DatabasePool, version: int, path: Path) -> None:
             conn.execute("UPDATE _schema_version SET version = ?", (version,))
         return
     sql = path.read_text(encoding="utf-8")
+    if watermark is not None and watermark > version:
+        # A preview-schema repair must never lower an applied watermark, even
+        # if the process exits immediately after executescript completes.
+        sql = re.sub(
+            r"UPDATE _schema_version SET version\s*=\s*\d+;",
+            f"UPDATE _schema_version SET version = {watermark};",
+            sql,
+        )
     if version >= 26:
         # Development restores can retain new columns with an older watermark.
         # Keep the SQL pair canonical while making SQLite ADD COLUMN idempotent.
@@ -2119,7 +2129,13 @@ def _run_migrations(db: DatabasePool) -> None:
     if db.dialect == "sqlite":
         _repair_legacy_schema(db)
     for version, path in _discover(db.dialect):
-        if version <= _current_version(db):
+        current = _current_version(db)
+        # Earlier local b4 builds used the same watermark for project transfers.
+        if version <= current and not (
+            version == 32
+            and current >= 32
+            and not _table_exists(db, "company_runtime_checkpoint_heads")
+        ):
             continue
         # v18 touches optional ``user_invites``; use the idempotent helper for both
         # dialects so restores from pre-invite physical schemas do not fail.
@@ -2135,6 +2151,8 @@ def _run_migrations(db: DatabasePool) -> None:
             sql = path.read_text(encoding="utf-8")
             with db.connect() as conn, conn.transaction():
                 _apply_postgresql_migration(conn, sql)
+                if current > version:
+                    conn.execute("UPDATE _schema_version SET version = ?", (current,))
             if version == 3:
                 from octop.infra.db.repos.threads import repair_all_legacy_thread_titles
 
@@ -2149,7 +2167,7 @@ def _run_migrations(db: DatabasePool) -> None:
             if version == 10:
                 _ensure_knowledge_bases_schema(db)
         else:
-            _apply_sqlite_migration(db, version, path)
+            _apply_sqlite_migration(db, version, path, watermark=current)
     _reconcile_pre_squash_schema_version(db)
     _ensure_knowledge_bases_schema(db)
     _ensure_skill_packages_schema(db)

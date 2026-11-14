@@ -217,7 +217,7 @@ describe("communication synchronization", () => {
     await client.synchronize();
     expect(client.state.phase).toBe("ready");
   });
-  it("commits cursor and sequence only after history materialization succeeds", async () => {
+  it("commits message.new only after history materialization succeeds", async () => {
     await boot();
     client.focus("c");
     await client.loadHistory("c");
@@ -243,6 +243,205 @@ describe("communication synchronization", () => {
     expect(communicationApi.sync).toHaveBeenLastCalledWith(
       "cursor9",
       expect.any(AbortSignal),
+    );
+  });
+  it.each([true, false])(
+    "refreshes a cached expert question outside the latest page (focused=%s)",
+    async (focused) => {
+      const question = {
+        ...msg("1"),
+        client_message_id: "first-question",
+        reply_to_message_id: "m0",
+        reply_preview: msg("0"),
+        mention_user_ids: [own],
+        mention_all: true,
+        expert_call: { call_id: "call", call_state: "dispatched" as const },
+      };
+      vi.mocked(communicationApi.history).mockResolvedValueOnce({
+        items: [question],
+        has_more: false,
+        next_before_seq: "1",
+      });
+      await boot();
+      await client.loadHistory("c");
+      const tail = Array.from({ length: 50 }, (_, i) => msg(String(100 - i)));
+      vi.mocked(communicationApi.history).mockResolvedValue({
+        items: tail,
+        has_more: false,
+        next_before_seq: "51",
+      });
+      if (focused) client.focus("c");
+      await client.loadHistory("c");
+      expect(client.state.histories.c).toHaveLength(51);
+      const read = vi
+        .spyOn(communicationApi, "message")
+        .mockRejectedValueOnce(new Error("network"))
+        .mockResolvedValue({
+          ...msg("1"),
+          mention_user_ids: [],
+          mention_all: false,
+          expert_call: { call_id: "call", call_state: "completed" },
+        });
+      vi.mocked(communicationApi.sync).mockResolvedValue({
+        events: [
+          event("group.expert.call", "10", {
+            conversation_id: "c",
+            message_id: "m1",
+          }),
+        ],
+        cursor: "cursor10",
+        head_seq: "10",
+        has_more: false,
+      });
+      await client.synchronize();
+      expect(client.state.sequence).toBe("9");
+      expect(client.state.histories.c[0].expert_call?.call_state).toBe(
+        "dispatched",
+      );
+      await client.synchronize();
+      expect(client.state.sequence).toBe("10");
+      expect(client.state.histories.c[0].expert_call?.call_state).toBe(
+        "completed",
+      );
+      expect(client.state.histories.c[0]).toMatchObject({
+        client_message_id: question.client_message_id,
+        reply_to_message_id: question.reply_to_message_id,
+        reply_preview: question.reply_preview,
+        mention_user_ids: [own],
+        mention_all: true,
+      });
+      expect(client.state.histories.c).toHaveLength(51);
+      expect(read).toHaveBeenLastCalledWith("c", "m1", expect.any(AbortSignal));
+      expect(communicationApi.sync).toHaveBeenLastCalledWith(
+        "cursor9",
+        expect.any(AbortSignal),
+      );
+    },
+  );
+  it("advances expert sync past an invisible question and applies later messages", async () => {
+    await boot();
+    await client.loadHistory("c");
+    client.focus("c");
+    await client.loadHistory("c");
+    const read = vi
+      .spyOn(communicationApi, "message")
+      .mockRejectedValue(
+        new CommunicationError("not_found", 404, false, "Question not visible"),
+      );
+    vi.mocked(communicationApi.history).mockResolvedValue({
+      items: [msg("3")],
+      has_more: false,
+      next_before_seq: "3",
+    });
+    vi.mocked(communicationApi.sync)
+      .mockResolvedValueOnce({
+        events: [
+          event("group.expert.call", "10", {
+            conversation_id: "c",
+            message_id: "m1",
+          }),
+        ],
+        cursor: "cursor10",
+        head_seq: "12",
+        has_more: true,
+      })
+      .mockResolvedValueOnce({
+        events: [
+          event("conversation.cleared", "11", { conversation_id: "c" }),
+          event("message.new", "12", { conversation_id: "c" }),
+        ],
+        cursor: "cursor12",
+        head_seq: "12",
+        has_more: false,
+      });
+
+    await client.synchronize({ throwOnError: true });
+
+    expect(read).toHaveBeenCalledOnce();
+    expect(client.state.sequence).toBe("12");
+    expect(client.state.histories.c).toEqual([msg("3")]);
+    expect(communicationApi.sync).toHaveBeenLastCalledWith(
+      "cursor10",
+      expect.any(AbortSignal),
+    );
+  });
+  it("does not restore expert messages after a visibility change during refresh", async () => {
+    await boot();
+    await client.loadHistory("c");
+    let resolve!: (value: CommunicationMessage) => void;
+    vi.spyOn(communicationApi, "message").mockImplementationOnce(
+      () =>
+        new Promise((done) => {
+          resolve = done;
+        }),
+    );
+    vi.mocked(communicationApi.sync).mockResolvedValue({
+      events: [
+        event("group.expert.call", "10", {
+          conversation_id: "c",
+          message_id: "m1",
+        }),
+      ],
+      cursor: "cursor10",
+      head_seq: "10",
+      has_more: false,
+    });
+    const work = client.synchronize();
+    await vi.waitFor(() => expect(resolve).toBeDefined());
+    client.stop();
+    resolve({
+      ...msg("1"),
+      expert_call: { call_id: "call", call_state: "completed" },
+    });
+    await work;
+    expect(client.state.histories).toEqual({});
+  });
+  it("queues older history behind a targeted expert refresh", async () => {
+    await boot();
+    await client.loadHistory("c");
+    let resolve!: (value: CommunicationMessage) => void;
+    vi.spyOn(communicationApi, "message").mockImplementationOnce(
+      () =>
+        new Promise((done) => {
+          resolve = done;
+        }),
+    );
+    vi.mocked(communicationApi.sync).mockResolvedValue({
+      events: [
+        event("group.expert.call", "10", {
+          conversation_id: "c",
+          message_id: "m1",
+        }),
+      ],
+      cursor: "cursor10",
+      head_seq: "10",
+      has_more: false,
+    });
+    const work = client.synchronize();
+    await vi.waitFor(() => expect(resolve).toBeDefined());
+    vi.mocked(communicationApi.history)
+      .mockClear()
+      .mockResolvedValue({
+        items: [msg("0")],
+        has_more: false,
+        next_before_seq: "0",
+      });
+    const older = client.loadHistory("c", true);
+    await Promise.resolve();
+    expect(communicationApi.history).not.toHaveBeenCalled();
+    resolve({
+      ...msg("1"),
+      expert_call: { call_id: "call", call_state: "completed" },
+    });
+    await Promise.all([work, older]);
+    expect(communicationApi.history).toHaveBeenCalledWith(
+      "c",
+      "1",
+      expect.any(AbortSignal),
+    );
+    expect(client.state.histories.c.map((m) => m.seq)).toEqual(["0", "1"]);
+    expect(client.state.histories.c[1].expert_call?.call_state).toBe(
+      "completed",
     );
   });
   it("keeps the same send identifier for a retry and merges the canonical response", async () => {

@@ -66,6 +66,8 @@ import type {
 import type { HitlSessionPolicy } from "../utils/hitlSessionPolicy";
 import styles from "../index.module.less";
 import { BEFORE_CLIENT_CONFIG_REFRESH_EVENT } from "../../../utils/clientConfigUpdate";
+import { getAuthToken } from "../../../api/request";
+import { tokenSessionIdentity } from "../../../utils/authSession";
 
 /** Imperative handle exposed via ref for programmatic text injection. */
 export interface ChatInputHandle {
@@ -225,6 +227,7 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
       desktopProjects.state.current_project_id
         ? `project:${desktopProjects.state.current_project_id}`
         : null);
+    const draftOwner = useRef(tokenSessionIdentity(getAuthToken())).current;
     const [text, setText] = useState(
       () => initialText || readInputDraft(agentId, draftThreadId),
     );
@@ -445,7 +448,7 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
     // Persist draft while typing so leaving /chat and returning keeps content.
     useEffect(() => {
       const beforeRefresh = (event: Event) => {
-        if (agentId) writeInputDraft(agentId, draftThreadId, text);
+        if (agentId) writeInputDraft(agentId, draftThreadId, text, draftOwner);
         if (
           uploading ||
           attachments.length > 0 ||
@@ -468,6 +471,7 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
         );
     }, [
       agentId,
+      draftOwner,
       draftThreadId,
       text,
       uploading,
@@ -482,10 +486,10 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
     useEffect(() => {
       if (!agentId) return;
       const timer = window.setTimeout(() => {
-        writeInputDraft(agentId, draftThreadId, text);
+        writeInputDraft(agentId, draftThreadId, text, draftOwner);
       }, 250);
       return () => window.clearTimeout(timer);
-    }, [text, agentId, draftThreadId]);
+    }, [text, agentId, draftThreadId, draftOwner]);
     const submitRef = useRef<() => void>(() => {});
 
     const MIN_TEXTAREA_HEIGHT = isMobile ? 42 : 78;
@@ -602,7 +606,7 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
     const resetComposerAfterSubmit = useCallback(
       (prevHeight: number, submittedText: string) => {
         setText("");
-        writeInputDraft(agentId, draftThreadId, "");
+        writeInputDraft(agentId, draftThreadId, "", draftOwner);
         clearAttachments();
         userHasEditedRef.current = false;
         // Parent may re-pass the same prefill as initialText on the next render
@@ -624,6 +628,7 @@ const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
       },
       [
         agentId,
+        draftOwner,
         draftThreadId,
         clearAttachments,
         MIN_TEXTAREA_HEIGHT,

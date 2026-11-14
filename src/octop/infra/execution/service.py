@@ -6,7 +6,7 @@ import asyncio
 import json
 import logging
 import uuid
-from collections.abc import AsyncGenerator, AsyncIterator, Callable
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable
 from contextlib import suppress
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -91,6 +91,7 @@ class ExecutionService:
         self.io = BoundedIO(workers=2, capacity=32, wait=True)
         self.notifications = ExecutionNotifications(conninfo)
         self.handler: Handler | None = None
+        self.group_handler: Callable[[ActiveExecution], Awaitable[None]] | None = None
         self.cancel: Callable[[str, str], None] | None = None
         self._loops: list[asyncio.Task[None]] = []
         self._active: dict[str, asyncio.Task[None]] = {}
@@ -99,6 +100,15 @@ class ExecutionService:
 
     async def start(self) -> None:
         await self.start_lease()
+        if self.role == "worker" and self.group_handler is not None:
+            await self.io.run(
+                self.repo.register,
+                self.node,
+                self.incarnation,
+                self.role,
+                container_id=self.container_id,
+                group_expert_protocol=2,
+            )
         if self.role in {"worker", "monolith"}:
             if self.handler is None:
                 raise RuntimeError("execution handler is required before starting a worker")
@@ -157,6 +167,10 @@ class ExecutionService:
             await self.notifications.wait()
 
     async def _commands(self, active: ActiveExecution) -> None:
+        if active.run["operation"] == "group_expert":
+            # The isolated runner watches its durable state. Never route this
+            # cancellation through a personal agent runtime.
+            return
         while True:
             commands = await self.io.run(self.repo.commands, *active.fence)
             for command in commands:
@@ -260,6 +274,11 @@ class ExecutionService:
         usage_context = execution_run_id.set(run["run_id"])
         commands = asyncio.create_task(self._commands(active))
         try:
+            if run["operation"] == "group_expert":
+                if self.group_handler is None:
+                    raise ExecutionConflict("group_expert_protocol_unavailable")
+                await self.group_handler(active)
+                return
             decision = None
             while True:
                 await active.check()
@@ -293,7 +312,7 @@ class ExecutionService:
                     final_frames=final_frames,
                 )
                 break
-        except BaseException:
+        except BaseException as exc:
             # Exceptions/cancellation can happen after external writes. Never infer
             # failure or release occupancy from a lost coroutine alone.
             with suppress(Exception):
@@ -301,6 +320,8 @@ class ExecutionService:
             logger.warning(
                 "execution interrupted; result remains unknown run=%s", run["run_id"], exc_info=True
             )
+            if run["operation"] == "group_expert" and isinstance(exc, asyncio.CancelledError):
+                raise
         finally:
             commands.cancel()
             with suppress(asyncio.CancelledError, ExecutionConflict):

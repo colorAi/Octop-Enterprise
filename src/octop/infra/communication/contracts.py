@@ -100,6 +100,7 @@ ROUTES = (
     ),
     Route("GET", "/groups/{id}", "messaging", "Read group settings as a member"),
     Route("GET", "/groups/{id}/members", "messaging", "List active group members"),
+    Route("GET", "/groups/{id}/expert-calls/{call}", "messaging", "Read visible original-message expert call status"),
     Route("PATCH", "/groups/{id}/my-membership", "messaging", "Update own group nickname"),
     Route("GET", "/sync", "messaging", "Read incremental account events"),
     Route("POST", "/sync/snapshot", "messaging", "Create an atomic account snapshot"),

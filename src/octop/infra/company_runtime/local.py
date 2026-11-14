@@ -15,7 +15,7 @@ import re
 import signal
 import subprocess
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from contextvars import ContextVar
 from pathlib import Path
 from typing import Any
@@ -216,7 +216,13 @@ class ReceiptMiddleware(AgentMiddleware):
 
 class ProjectBackend(HarnessLocalShellBackend):
     def __init__(
-        self, project: Path, state: Path, emit: Callable[..., None], *, tool_path: str
+        self,
+        project: Path,
+        state: Path,
+        emit: Callable[..., None],
+        *,
+        tool_path: str,
+        previous_roots: Sequence[str] = (),
     ) -> None:
         super().__init__(
             root_dir=project,
@@ -227,6 +233,11 @@ class ProjectBackend(HarnessLocalShellBackend):
         )
         self.project, self.state, self.emit = project, state, emit
         self.tool_path = tool_path
+        self.previous_roots = sorted(
+            (p.replace("\\", "/").rstrip("/") for p in previous_roots if p),
+            key=len,
+            reverse=True,
+        )
         self.packages = os.environ.get("OCTOP_COMPANY_PACKAGES", "")
         self.processes: set[asyncio.subprocess.Process] = set()
         self.written_files: set[str] = set()
@@ -237,6 +248,17 @@ class ProjectBackend(HarnessLocalShellBackend):
         native = Path(key)
         if native.is_absolute() and native.is_relative_to(self.project):
             key = native.relative_to(self.project).as_posix()
+        else:
+            normalized = key.replace("\\", "/")
+            for root in self.previous_roots:
+                candidate, prefix = normalized, root
+                if len(root) > 1 and root[1] == ":":
+                    candidate, prefix = candidate.lower(), prefix.lower()
+                if candidate == prefix or candidate.startswith(prefix + "/"):
+                    key = normalized[len(root) :].lstrip("/") or "."
+                    if ".." in key.split("/"):
+                        raise ValueError("Path traversal outside project is not allowed")
+                    break
         return super()._resolve_path(key)
 
     def write(self, file_path: str, content: str) -> WriteResult:

@@ -19,6 +19,7 @@ import { MoreHorizontal, UserPlus } from "lucide-react";
 import { useCurrentUser } from "../../hooks/useCurrentUser";
 import { userCan } from "../../utils/permissions";
 import styles from "./GroupDetails.module.less";
+import GroupExpertsPanel from "./GroupExpertsPanel";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 import { communicationApi } from "../../api/modules/communication";
@@ -467,6 +468,13 @@ export default function GroupDetails({
               }}
             />
           </section>
+          {(isMember || user?.role === "admin") && (
+            <GroupExpertsPanel
+              key={`${id}:${organizationManagement}`}
+              group={id}
+              organization={organizationManagement && user?.role === "admin"}
+            />
+          )}
           <Collapse
             ghost
             className={styles.settings}

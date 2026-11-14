@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -56,6 +57,79 @@ func TestInstallationIdentitySurvivesBrowsingAndWorkerRestarts(t *testing.T) {
 	}
 	if data, _ := os.ReadFile(path); string(data) != `{"token":` {
 		t.Fatal("damaged installation record was overwritten")
+	}
+}
+
+func TestAccountProjectSyncPaginatesAndReadsLatestConversations(t *testing.T) {
+	var round, adoptions atomic.Int32
+	browser := testBrowser(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Octop-Device-Credential") != "octop-device.test" || r.Header.Get("Origin") != "" {
+			t.Error("missing native authentication")
+		}
+		if r.URL.Path == "/api/company-runtime/capabilities" {
+			_, _ = w.Write([]byte(`{"protocol_version":1,"features":["checkpoint_batches","multi_project_v1","account_projects_v1"]}`))
+			return
+		}
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		if body["installation_token"] != strings.Repeat("i", 43) {
+			t.Error("missing native installation")
+		}
+		switch r.URL.Path {
+		case "/api/company-runtime/projects/query":
+			_, _ = w.Write([]byte(`{"items":[{"project_id":"a","name":"Account project"}],"has_more":false}`))
+		case "/api/company-runtime/projects":
+			if round.Add(1) == 1 {
+				_, _ = w.Write([]byte(`{"project_id":"a","name":"Account project"}`))
+			} else {
+				_, _ = w.Write([]byte(`{"project_id":"a","name":"Updated name"}`))
+			}
+		case "/api/company-runtime/projects/a/adopt":
+			if body["thread_id"] != "first" {
+				t.Error("adopted a thread from a different local project", body)
+			}
+			adoptions.Add(1)
+			_, _ = w.Write([]byte(`{"thread_id":"first","project_id":"a"}`))
+		case "/api/company-runtime/projects/a/threads/query":
+			switch body["after_thread_id"] {
+			case "":
+				_, _ = w.Write([]byte(`{"items":[{"thread_id":"first","project_id":"a"}],"has_more":true}`))
+			case "first":
+				if round.Load() == 1 {
+					_, _ = w.Write([]byte(`{"items":[],"has_more":false}`))
+				} else {
+					_, _ = w.Write([]byte(`{"items":[{"thread_id":"new","project_id":"a"}],"has_more":false}`))
+				}
+			default:
+				t.Error("wrong sync cursor", body)
+			}
+		default:
+			t.Error("unexpected account project request", r.URL.Path)
+		}
+	})
+	ctx := context.Background()
+	projects, err := browser.AccountProjects(ctx)
+	if err != nil || len(projects) != 1 || projects[0].ID != "a" {
+		t.Fatal(projects, err)
+	}
+	project := Project{ID: "a", Name: "Local name", Legacy: true}
+	bindings := map[string]string{"first": "a", "unrelated": "b"}
+	name, threads, err := browser.ProjectConversations(ctx, project, bindings)
+	if err != nil || name != "Account project" || !slices.Equal(threads, []string{"first"}) {
+		t.Fatal(name, threads, err)
+	}
+	name, threads, err = browser.ProjectConversations(ctx, project, bindings)
+	if err != nil || name != "Updated name" || !slices.Equal(threads, []string{"first", "new"}) {
+		t.Fatal(name, threads, err)
+	}
+	if adoptions.Load() != 1 {
+		t.Fatal("a recorded legacy conversation should be adopted once per login")
+	}
+	browser.Close()
+	if _, _, err := browser.ProjectConversations(ctx, project, bindings); err == nil {
+		t.Fatal("sync continued after native account logout")
 	}
 }
 

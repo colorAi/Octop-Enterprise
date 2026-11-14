@@ -16,6 +16,7 @@ from octop.infra.db.repos._base import (
     now_ts,
     sql_unix_day_bucket,
 )
+from octop.infra.db.repos.token_accounting import quota_tokens
 
 _DAY_S = 86_400
 _DAY_WINDOW_RE = re.compile(r"^day:(\d{4}-\d{2}-\d{2})$")
@@ -498,8 +499,4 @@ class UsageRepo:
     def total_tokens_for_user(self, user_id: int) -> int:
         """Lifetime ``total_tokens`` for one user (all agents and sources)."""
         with self._db.connect() as conn:
-            row = conn.execute(
-                "SELECT COALESCE(SUM(total_tokens), 0) AS total FROM usage_log WHERE user_id = ?",
-                (user_id,),
-            ).fetchone()
-        return int(row["total"] if row is not None else 0)
+            return quota_tokens(conn, user_id)

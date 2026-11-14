@@ -22,7 +22,7 @@ async def register(client, project="project-a", name="项目 A"):
 
 
 @pytest.mark.asyncio
-async def test_project_catalog_is_scoped_and_does_not_disclose_installation(company):
+async def test_project_catalog_is_account_scoped_and_does_not_disclose_installation(company):
     server, client, credentials, owner = company
     try:
         first = await register(client)
@@ -39,17 +39,19 @@ async def test_project_catalog_is_scoped_and_does_not_disclose_installation(comp
         rest = await client.request("projects/query", {**IDENTITY, "limit": 2, "offset": 2})
         assert page["has_more"] and not rest["has_more"]
         assert len({row["project_id"] for row in page["items"] + rest["items"]}) == 3
-        assert not (await client.request("projects/query", {"installation_token": "other" * 8}))[
-            "items"
-        ]
-        wrong = {"installation_token": "other" * 8, "project_id": "project-a", "name": "hijack"}
-        assert (await client.http.post("projects", json=wrong)).status_code == 403
-        assert (await client.http.patch("projects", json=wrong)).status_code == 403
-        # A freshly paired device session from the same installation retains the catalog.
+        other_installation = {"installation_token": "other" * 8}
         response = await client.http.post(
-            "projects/query", json=IDENTITY, headers={"X-Octop-Device-Credential": credentials[1]}
+            "projects/query",
+            json=other_installation,
+            headers={"X-Octop-Device-Credential": credentials[1]},
         )
         assert len(response.json()["items"]) == 3
+        registered = await client.http.post(
+            "projects",
+            json={**other_installation, "project_id": "project-a", "name": "local name"},
+            headers={"X-Octop-Device-Credential": credentials[1]},
+        )
+        assert registered.json()["name"] == "重命名"
         other = server.services.user_repo.create(username="other", role="user")
         with server.services.db.transaction() as conn:
             conn.execute(
@@ -105,11 +107,13 @@ async def test_project_threads_are_atomic_idempotent_and_cross_expert(company):
         )
         assert bad.status_code == 403
         assert server.services.thread_repo.get("not-created") is None
-        assert (
-            await client.http.post(
-                "projects/project-a/threads/query", json={"installation_token": "other" * 8}
-            )
-        ).status_code == 403
+        other_installation_page = await client.request(
+            "projects/project-a/threads/query", {"installation_token": "other" * 8}
+        )
+        assert {x["thread_id"] for x in other_installation_page["items"]} == {
+            "project-thread",
+            "writer-thread",
+        }
         # New project conversations cannot be executed by a legacy client.
         install_agent(server)
         denied = await client.http.post(
@@ -199,7 +203,7 @@ def test_project_migration_preserves_legacy_records(tmp_path, monkeypatch):
         with db.connect() as conn:
             assert conn.execute("SELECT COUNT(*) FROM company_projects").fetchone()[0] == 0
             assert conn.execute("SELECT COUNT(*) FROM company_project_threads").fetchone()[0] == 0
-            assert conn.execute("SELECT version FROM _schema_version").fetchone()[0] == 31
+            assert conn.execute("SELECT version FROM _schema_version").fetchone()[0] == 32
         assert any(v == 31 for v, _ in discover("postgresql"))
     finally:
         db.close()
@@ -240,9 +244,9 @@ def test_atomic_project_creation_and_account_cleanup(backend, tmp_path):
         with ThreadPoolExecutor(max_workers=4) as workers:
             results = list(workers.map(create, range(4)))
         assert all(r == results[0] for r in results)
-        assert len(repo.threads(pid, owner, "installation", 25, 0)) == 1
+        assert len(repo.threads(pid, owner, 25, 0)) == 1
         UserRepo(db).delete(owner)
-        assert repo.list_projects(owner, "installation", 25, 0) == []
+        assert repo.list_projects(owner, 25, 0) == []
         assert ThreadRepo(db).get(tid) is None
         assert CompanyRuntimeRepo(db).binding(tid) is None
         with db.connect() as conn:

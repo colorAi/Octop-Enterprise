@@ -4,7 +4,9 @@
 
 This guide targets Linux with Docker Engine and Compose v2. Base single-host mode uses `docker/docker-compose.yml`. Enterprise mode includes the Octop control plane, the Go communication service, two PostgreSQL databases and isolated employee workspaces. Clients run project tools on employee computers; the server keeps accounts, model access, memory, history and recovery receipts.
 
-This guide corresponds to Octop Enterprise **1.0.1b4**, Harness **1.0.3**, main database schema **31**, device protocol **2** and company runtime protocol **1**. Server images and client tool environments must be built from matching source and protocol versions.
+This guide covers Octop Enterprise **1.0.1b4**, Harness **1.0.3**, main database schema **36**, Go communication database schema **21**, device protocol **2**, and company runtime protocol **1**. Build the server images and client tool environments from the same release source.
+
+Group experts require a [role-based PostgreSQL deployment](ROLES.md#群专家启用) with all workers reporting group expert protocol **2**. The feature starts disabled in each group. Enterprise administrators enable it in **Company Structure → Manage groups**. The `compose.yml` commands below apply to the monolithic deployment, where group experts stay disabled.
 
 ## Before you deploy
 
@@ -152,6 +154,8 @@ The table lists both Compose inputs and in-container process configuration. The 
 When migrating an existing deployment, first map the existing environment variables, databases and keys to this table; keep the existing data and keys and follow the upgrade section below. Do not run `prepare.py`.
 
 ## Upgrade and rollback
+
+For role-based deployments, follow the [worker stop confirmation, database migrations and startup procedure](ROLES.md#初始化与启动) and the [backup and rollback procedure](ROLES.md#分角色备份与回退). Validate the feature in a department or project group before enabling it in the company-wide group.
 
 The enterprise image includes Chromium and its system libraries for the workbench, installed at `/opt/octop-browser`. Each build launches the browser and captures a screenshot offline as UID 1000, and imports the knowledge embedding dependencies. Service readiness does not replace this check. To repeat it against a candidate image:
 

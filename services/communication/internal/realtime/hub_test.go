@@ -4,15 +4,92 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/coder/websocket"
 )
+
+type pipeListener struct {
+	incoming chan net.Conn
+	closed   chan struct{}
+	once     sync.Once
+}
+
+func (l *pipeListener) Accept() (net.Conn, error) {
+	select {
+	case c := <-l.incoming:
+		return c, nil
+	case <-l.closed:
+		return nil, net.ErrClosed
+	}
+}
+
+func (l *pipeListener) Close() error {
+	l.once.Do(func() { close(l.closed) })
+	return nil
+}
+
+func (l *pipeListener) Addr() net.Addr {
+	return &net.TCPAddr{}
+}
+
+func TestIdleConnectionSurvivesBeyondTenMinutes(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		hub := NewHub(slog.New(slog.NewTextHandler(io.Discard, nil)), 10, 4)
+		listener := &pipeListener{incoming: make(chan net.Conn), closed: make(chan struct{})}
+		server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			hub.Attach(w, r, "employee")
+		})}
+		go func() { _ = server.Serve(listener) }()
+		defer server.Close()
+		defer hub.Close()
+
+		transport := &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			remote, local := net.Pipe()
+			select {
+			case listener.incoming <- remote:
+				return local, nil
+			case <-ctx.Done():
+				_ = remote.Close()
+				_ = local.Close()
+				return nil, ctx.Err()
+			}
+		}}
+		defer transport.CloseIdleConnections()
+		ctx, cancel := context.WithTimeout(t.Context(), 13*time.Minute)
+		defer cancel()
+		ws, _, err := websocket.Dial(ctx, "ws://realtime.test", &websocket.DialOptions{
+			HTTPClient: &http.Client{Transport: transport},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer ws.CloseNow()
+		if _, _, err := ws.Read(ctx); err != nil {
+			t.Fatalf("read registration hint: %v", err)
+		}
+
+		received := make(chan string, 1)
+		go func() {
+			// Reading handles WebSocket pings while the app sends no frames.
+			_, data, _ := ws.Read(ctx)
+			received <- string(data)
+		}()
+		time.Sleep(12 * time.Minute)
+		hub.Wakeup("employee")
+		if hint := <-received; !strings.Contains(hint, `"type":"sync.available"`) {
+			t.Fatalf("connection stopped delivering notifications: %q", hint)
+		}
+	})
+}
 
 func TestPresenceTracksFirstAndLastConnection(t *testing.T) {
 	hub := NewHub(slog.New(slog.NewTextHandler(io.Discard, nil)), 10, 4)

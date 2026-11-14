@@ -91,6 +91,14 @@ func (a *App) transferRuntimeArtifact(nonce, base, method string, raw json.RawMe
 	a.companyMu.Lock()
 	workspace, epoch := a.workspacePath, a.runtimeEpoch
 	projectBound := false
+	if params.Path != "" {
+		resolved, err := a.resolveArtifactPathLocked(params.Path)
+		if err != nil {
+			a.companyMu.Unlock()
+			return nil, err
+		}
+		params.Path = resolved
+	}
 	sourceRoot, sourceErr := a.artifactRootLocked(params.Path)
 	if method == "upload_artifact" {
 		workspace = sourceRoot

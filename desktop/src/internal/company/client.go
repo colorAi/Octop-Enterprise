@@ -67,13 +67,13 @@ func (c *Client) Status() Status {
 }
 
 type hello struct {
-	Type            string           `json:"type"`
-	Credential      string           `json:"credential"`
-	ProtocolVersion int              `json:"protocol_version"`
-	Name            string           `json:"name"`
-	Platform        string           `json:"platform"`
-	Capabilities    []string         `json:"capabilities"`
-	Grants          []map[string]any `json:"grants,omitempty"`
+	Type            string   `json:"type"`
+	Credential      string   `json:"credential"`
+	ProtocolVersion int      `json:"protocol_version"`
+	Name            string   `json:"name"`
+	Platform        string   `json:"platform"`
+	Capabilities    []string `json:"capabilities"`
+	Grants          []Grant  `json:"grants,omitempty"`
 }
 
 type ready struct {
@@ -205,7 +205,7 @@ func (c *Client) run(ctx context.Context, base string, h hello, conn *websocket.
 				return
 			}
 			attempt, cancel := context.WithTimeout(ctx, 10*time.Second)
-			h.Grants = wireGrants(c.files.Grants())
+			h.Grants = c.files.Grants()
 			next, r, connectErr := c.connect(attempt, base, h)
 			cancel()
 			if connectErr == nil {

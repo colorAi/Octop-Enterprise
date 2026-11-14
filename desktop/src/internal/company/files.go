@@ -30,41 +30,6 @@ type Grant struct {
 	AllowCompany bool   `json:"allow_company"`
 }
 
-func (g *Grant) UnmarshalJSON(data []byte) error {
-	type plain Grant
-	var value struct {
-		plain
-		Company *bool `json:"allow_company"`
-		Legacy  *bool `json:"allow_h3c"`
-	}
-	if err := json.Unmarshal(data, &value); err != nil {
-		return err
-	}
-	if value.Company != nil && value.Legacy != nil && *value.Company != *value.Legacy {
-		return errors.New("conflicting directory consent")
-	}
-	*g = Grant(value.plain)
-	if value.Company != nil {
-		g.AllowCompany = *value.Company
-	} else if value.Legacy != nil {
-		g.AllowCompany = *value.Legacy
-	}
-	return nil
-}
-
-// Existing protocol-v2 servers reject unknown fields. Keep their wire spelling
-// while the native UI and new server use allow_company internally.
-func wireGrants(grants []Grant) []map[string]any {
-	out := make([]map[string]any, 0, len(grants))
-	for _, g := range grants {
-		out = append(out, map[string]any{
-			"id": g.ID, "name": g.Name, "version": g.Version,
-			"writable": g.Writable, "allow_h3c": g.AllowCompany,
-		})
-	}
-	return out
-}
-
 type directory struct {
 	Grant
 	root *os.Root
@@ -227,7 +192,7 @@ func (x *Files) Execute(ctx context.Context, f frame) FileResult {
 	}
 	d := x.dirs[f.GrantID]
 	if d == nil || d.Version != f.GrantVersion || !d.AllowCompany {
-		return failure("directory_permission_or_h3c_consent_required")
+		return failure("directory_permission_or_consent_required")
 	}
 	raw, _ := json.Marshal(f.Arguments)
 	var args fileArguments

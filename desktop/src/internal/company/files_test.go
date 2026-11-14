@@ -26,35 +26,23 @@ func fileFixture(t *testing.T, writable, share bool) (*Files, Grant, string) {
 	return files, grant, root
 }
 
-func TestGrantConsentCompatibility(t *testing.T) {
-	for _, field := range []string{"allow_company", "allow_h3c"} {
-		for _, consent := range []bool{false, true} {
-			payload, _ := json.Marshal(map[string]any{"id": "grant", field: consent})
-			var grant Grant
-			if err := json.Unmarshal(payload, &grant); err != nil || grant.AllowCompany != consent {
-				t.Fatalf("%s=%v: %+v %v", field, consent, grant, err)
-			}
-			wire := wireGrants([]Grant{grant})
-			if wire[0]["allow_h3c"] != consent {
-				t.Fatalf("legacy server consent changed: %+v", wire)
-			}
-			if _, ok := wire[0]["allow_company"]; ok {
-				t.Fatal("protocol-v2 servers reject unknown fields")
-			}
+func TestGrantConsentWireFormat(t *testing.T) {
+	for _, consent := range []bool{false, true} {
+		payload, _ := json.Marshal(map[string]any{"id": "grant", "allow_company": consent})
+		var grant Grant
+		if err := json.Unmarshal(payload, &grant); err != nil || grant.AllowCompany != consent {
+			t.Fatalf("allow_company=%v: %+v %v", consent, grant, err)
+		}
+		encoded, _ := json.Marshal(grant)
+		var wire map[string]any
+		_ = json.Unmarshal(encoded, &wire)
+		if wire["allow_company"] != consent {
+			t.Fatalf("consent changed on the wire: %+v", wire)
 		}
 	}
 	var grant Grant
-	if err := json.Unmarshal([]byte(`{"allow_company":false,"allow_h3c":true}`), &grant); err == nil {
-		t.Fatal("conflicting consent accepted")
-	}
 	if err := json.Unmarshal([]byte(`{}`), &grant); err != nil || grant.AllowCompany {
 		t.Fatal("missing consent must deny access")
-	}
-	encoded, _ := json.Marshal(Grant{AllowCompany: true})
-	var native map[string]any
-	_ = json.Unmarshal(encoded, &native)
-	if native["allow_company"] != true {
-		t.Fatal("native UI did not receive canonical consent")
 	}
 }
 func fileCall(g Grant, tool, path, content string) frame {

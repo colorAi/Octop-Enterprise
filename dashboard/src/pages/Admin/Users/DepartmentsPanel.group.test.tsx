@@ -44,6 +44,20 @@ beforeEach(() => {
   vi.spyOn(org, "users").mockResolvedValue({ items: [] });
   vi.spyOn(org, "directorySettings").mockResolvedValue({ name: "Company" });
   vi.spyOn(org, "jobTitles").mockResolvedValue({ items: [] });
+  vi.spyOn(communicationApi, "groupExperts").mockResolvedValue({
+    items: [],
+    candidates: [],
+    scope_sources: [],
+    scope_revision: 0,
+    experts_enabled: false,
+    ready: true,
+    syncing: false,
+    can_manage: true,
+    can_configure: true,
+    status: "active",
+    group_kind: "department",
+    department_id: "department",
+  });
   vi.spyOn(org, "createGroup").mockImplementation(async () => {
     fixture.department.conversation_id = "group";
     return { conversation_id: "group" };
@@ -69,6 +83,79 @@ function mount() {
     </App>,
   );
 }
+
+it("opens company and project management without joining a group", async () => {
+  vi.spyOn(communicationApi, "managedGroups").mockResolvedValue({
+    items: [
+      {
+        conversation_id: "company-group",
+        name: "Company group",
+        group_kind: "company",
+        status: "active",
+        is_member: false,
+        announcement: null,
+        owner_user_id: "employee",
+        mute_all: false,
+      },
+      {
+        conversation_id: "project-group",
+        name: "Project group",
+        group_kind: "project",
+        status: "active",
+        is_member: false,
+        announcement: null,
+        owner_user_id: "employee",
+        mute_all: false,
+      },
+    ],
+  });
+  const join = vi.spyOn(communicationApi, "groupMembers");
+  mount();
+  fireEvent.click(
+    await screen.findByRole("button", { name: "communication.manageGroups" }),
+  );
+  await screen.findByText("Company group");
+  await screen.findByText("Project group");
+  const controls = screen.getAllByRole("button", {
+    name: "communication.manageGroups",
+  });
+  fireEvent.click(controls[1]);
+  await waitFor(() =>
+    expect(org.group).toHaveBeenCalledWith(
+      "company-group",
+      expect.any(AbortSignal),
+    ),
+  );
+  expect(await screen.findByText("groupExperts.title")).toBeInTheDocument();
+  expect(join).not.toHaveBeenCalled();
+});
+
+it("lets a nonmember administrator configure group experts without joining", async () => {
+  fixture.department.conversation_id = "group";
+  const enable = vi
+    .spyOn(communicationApi, "enableExperts")
+    .mockResolvedValue({ experts_enabled: true });
+  const join = vi.spyOn(communicationApi, "groupMembers");
+  mount();
+  fireEvent.click(
+    await screen.findByRole("button", { name: "communication.manageGroup" }),
+  );
+  const toggle = await screen.findByRole("switch", {
+    name: "groupExperts.enable",
+  });
+  expect(toggle).not.toBeChecked();
+  expect(toggle).toBeEnabled();
+  expect(communicationApi.groupExperts).toHaveBeenCalledWith("group", true);
+  fireEvent.click(toggle);
+  await waitFor(() =>
+    expect(enable).toHaveBeenCalledWith("group", {
+      request_id: expect.any(String),
+      enabled: true,
+    }),
+  );
+  expect(join).not.toHaveBeenCalled();
+  expect(org.createGroup).not.toHaveBeenCalled();
+});
 
 it("acknowledges creation and explains why a managing nonmember has no chat entry", async () => {
   mount();

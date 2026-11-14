@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, Request
 
@@ -38,7 +38,33 @@ from octop.infra.history.service import HistoryArchive
 from octop.infra.history.trajectory.service import TrajectoryService
 from octop.infra.utils.locale import resolve_request_locale
 
-router = APIRouter()
+
+async def _require_web_thread(server: Any, user: Any, thread_id: str) -> None:
+    repo = getattr(server.services, "company_runtime_repo", None)
+    binding = await asyncio.to_thread(repo.binding, thread_id) if repo is not None else None
+    if binding and binding["owner_user_id"] == user.id:
+        raise OctopError(
+            ErrorCode.NOT_FOUND,
+            "This conversation belongs to the desktop client.",
+            details={"reason": "desktop_thread_not_available_in_web"},
+        )
+
+
+async def _web_chat_scope(
+    request: Request,
+    surface: Literal["web"] | None = None,
+    user: Any = Depends(current_user),
+    server: Any = Depends(get_server),
+) -> None:
+    # This selects the employee browser's history, not a new account boundary.
+    # Existing desktop requests and administrator inspection keep their scope.
+    if surface == "web" and not user.is_admin:
+        thread_id = request.path_params.get("thread_id")
+        if thread_id:
+            await _require_web_thread(server, user, thread_id)
+
+
+router = APIRouter(dependencies=[Depends(_web_chat_scope)])
 logger = logging.getLogger(__name__)
 
 
@@ -110,6 +136,7 @@ async def list_threads(
     as_user: int | None = None,
     user: Any = Depends(current_user),
     server: Any = Depends(get_server),
+    surface: Literal["web"] | None = None,
 ) -> list[dict[str, Any]]:
     """List conversation threads for an agent, including which thread is active for this user.
 
@@ -119,7 +146,12 @@ async def list_threads(
     require_agent_row(agent_id, user=user, as_user=as_user, server=server)
     thread_registry = server.app_runtime.gateway.thread_registry
     effective_uid = as_user if as_user is not None else user.id
-    rows = thread_registry.list_threads(agent_id=agent_id, user_id=effective_uid, limit=limit)
+    rows = thread_registry.list_threads(
+        agent_id=agent_id,
+        user_id=effective_uid,
+        limit=limit,
+        web_only=surface == "web" and not user.is_admin,
+    )
     bound = thread_registry.get_bound_thread_id(
         ThreadRegistry.dashboard_key(agent_id=agent_id, user_id=effective_uid)
     )
@@ -556,9 +588,12 @@ async def rebind_session(
     body: RebindSessionBody,
     user: Any = Depends(current_user),
     server: Any = Depends(get_server),
+    surface: Literal["web"] | None = None,
 ) -> dict[str, Any]:
     """Point the user's dashboard session at an existing thread."""
     _require_thread(server, agent_id, body.thread_id, user, as_user=None)
+    if surface == "web" and not user.is_admin:
+        await _require_web_thread(server, user, body.thread_id)
     sk = ThreadRegistry.dashboard_key(agent_id=agent_id, user_id=user.id)
     await server.app_runtime.gateway.thread_registry.rebind(
         session_key=sk, thread_id=body.thread_id, agent_id=agent_id

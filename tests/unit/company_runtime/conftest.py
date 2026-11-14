@@ -1,5 +1,6 @@
 import hashlib
 import json
+import os
 import time
 from types import SimpleNamespace
 
@@ -13,14 +14,23 @@ from octop.api.routers.company_runtime import router
 from octop.config import OctopConfig
 from octop.infra.company_runtime.client import CompanyClient
 from octop.infra.db.migrate import run_migrations
-from octop.infra.db.pool import SqlitePool
+from octop.infra.db.pool import PostgresPool, SqlitePool
 from octop.infra.db.services import build_shared_services
 from octop.infra.utils.paths import PathLayout
 
 
 @pytest.fixture
-def company(tmp_path):
-    db = SqlitePool(tmp_path / "company.db")
+def company(tmp_path, request):
+    if getattr(request, "param", "sqlite") == "postgresql":
+        url = os.environ.get("OCTOP_TEST_PROJECTS_DATABASE_URL")
+        if not url:
+            pytest.skip("set OCTOP_TEST_PROJECTS_DATABASE_URL to a dedicated test database")
+        db = PostgresPool(url)
+        with db.transaction() as conn:
+            conn.execute("DROP SCHEMA public CASCADE")
+            conn.execute("CREATE SCHEMA public")
+    else:
+        db = SqlitePool(tmp_path / "company.db")
     run_migrations(db)
     services = build_shared_services(
         paths=PathLayout(tmp_path), config=OctopConfig(company_runtime_enabled=True), db=db

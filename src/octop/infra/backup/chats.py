@@ -13,8 +13,10 @@ from octop.infra.db.pool import DatabasePool
 # Child-first for DELETE; reverse for INSERT.
 CHAT_TABLES_CHILD_FIRST = (
     "desktop_file_threads",
+    "company_project_threads",
     "company_runtime_operations",
     "company_runtime_writes",
+    "company_runtime_checkpoint_heads",
     "company_runtime_checkpoints",
     "company_runtime_events",
     "company_runtime_tasks",
@@ -100,7 +102,9 @@ def capture_chat_tables(pool: DatabasePool, dest: Path) -> Path:
     dest.parent.mkdir(parents=True, exist_ok=True)
     spool = sqlite3.connect(dest)
     try:
-        with pool.connect() as conn:
+        with pool.transaction() as conn:
+            if pool.dialect == "postgresql":
+                conn.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
             _spool_users(conn, spool, dialect=pool.dialect)
             for table in CHAT_TABLES_PARENT_FIRST:
                 if not _table_exists(conn, table, dialect=pool.dialect):
@@ -138,6 +142,7 @@ def restore_preserved_chats(pool: DatabasePool, spool_path: Path) -> tuple[int, 
         old_id_to_name = _load_spooled_users(spool)
         with pool.transaction() as conn:
             agent_ids = _id_set(conn, "agents", "agent_id", dialect=dialect)
+            project_ids = _id_set(conn, "company_projects", "project_id", dialect=dialect)
             new_name_to_id = _load_live_usernames(conn, dialect=dialect)
 
             for table in CHAT_TABLES_CHILD_FIRST:
@@ -169,6 +174,12 @@ def restore_preserved_chats(pool: DatabasePool, spool_path: Path) -> tuple[int, 
                             kept_threads=kept_threads,
                         )
                         if mapped is None:
+                            skipped += 1
+                            continue
+                        if (
+                            table == "company_project_threads"
+                            and mapped[col_index["project_id"]] not in project_ids
+                        ):
                             skipped += 1
                             continue
                         if table.startswith("company_runtime_"):
@@ -346,6 +357,7 @@ def _remap_chat_row(
             "thread_messages",
             "thread_history_projection",
             "desktop_file_threads",
+            "company_project_threads",
         )
         and "thread_id" in col_index
         and str(values[col_index["thread_id"]]) not in kept_threads

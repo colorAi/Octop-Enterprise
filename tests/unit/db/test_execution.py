@@ -5,7 +5,11 @@ import pytest
 from octop.infra.db.migrate import run_migrations
 from octop.infra.db.pool import SqlitePool
 from octop.infra.db.repos.agents import AgentRepo
-from octop.infra.db.repos.execution import ExecutionConflict, ExecutionRepo
+from octop.infra.db.repos.execution import (
+    DESKTOP_MODEL_UNKNOWN_HOLD_SECONDS,
+    ExecutionConflict,
+    ExecutionRepo,
+)
 from octop.infra.db.repos.threads import ThreadRepo
 from octop.infra.db.repos.users import UserRepo
 
@@ -119,7 +123,10 @@ def test_reconciliation_requires_stop_and_every_model_receipt_even_after_replace
     assert repo.reconciliation(run["run_id"])["models"] == []
 
 
-def test_desktop_model_proxy_shares_slots_and_honors_the_desktop_lease(execution):
+@pytest.mark.parametrize(("actual", "cancel_requested"), [(12, False), (12, True), (None, False)])
+def test_desktop_model_proxy_shares_slots_and_honors_the_desktop_lease(
+    execution, actual, cancel_requested
+):
     from octop.infra.db.repos.company_runtime import CompanyRuntimeRepo
 
     pool, repo, user = execution
@@ -152,11 +159,42 @@ def test_desktop_model_proxy_shares_slots_and_honors_the_desktop_lease(execution
         repo.reserve_model(
             *fence(server), key="server-model", provider="test", tokens=30, quota_remaining=100
         )
-    repo.settle_model(*fence(run), key="desktop-model", actual=12)
-    repo.transition(*fence(run), "completed")
+    if actual is None:
+        from octop.infra.db.repos.user_policies import UserPolicyRepo
+
+        UserPolicyRepo(pool).set(user, "token_quota", "50")
+        # Use the two-write sequence from previous versions to exercise existing rows.
+        repo.settle_model(*fence(run), key="desktop-model", actual=None)
+        repo.transition(*fence(run), "unknown")
+        # A recently interrupted stream still counts against both limits.
+        with pytest.raises(ExecutionConflict, match="model_capacity_exceeded"):
+            repo.reserve_model(
+                *fence(server), key="server-model", provider="test", tokens=30, quota_remaining=50
+            )
+        repo.configure(running=2, models=0, queued=8, user_queued=4)
+        with pytest.raises(ExecutionConflict, match="token_quota_exceeded"):
+            repo.reserve_model(
+                *fence(server), key="server-model", provider="test", tokens=30, quota_remaining=50
+            )
+        with pool.transaction() as conn:
+            conn.execute(
+                "UPDATE execution_runs SET updated_at=updated_at-? WHERE run_id=?",
+                (DESKTOP_MODEL_UNKNOWN_HOLD_SECONDS + 1, run["run_id"]),
+            )
+        repo.configure(running=2, models=1, queued=8, user_queued=4)
+        assert repo.reconciliation(run["run_id"])["models"][0]["state"] == "unknown"
+        # The slot expires, but unconfirmed legacy usage remains charged.
+        UserPolicyRepo(pool).set(user, "token_quota", "80")
+    else:
+        if cancel_requested:
+            repo.command(run["run_id"], user=user, key="cancel", kind="cancel", payload={})
+        repo.transition(*fence(run), "completed", model_receipt=("desktop-model", actual))
+        assert repo.get(run["run_id"])["state"] == (
+            "cancelled" if cancel_requested else "completed"
+        )
     assert desktop.task("desktop")["status"] == "running"
     repo.reserve_model(
-        *fence(server), key="server-model", provider="test", tokens=30, quota_remaining=100
+        *fence(server), key="server-model", provider="test", tokens=30, quota_remaining=50
     )
 
 
@@ -496,3 +534,63 @@ def test_runtime_host_and_new_boot_require_verified_stop(execution):
     assert next_run["token"] > run["token"]
     with pytest.raises(ExecutionConflict, match="fenced"):
         repo.append(*fence(run), key="late", payload={})
+
+
+def test_unknown_desktop_estimate_survives_slot_expiry_and_reconciles(execution):
+    from octop.infra.db.repos.company_runtime import CompanyRuntimeRepo
+    from octop.infra.db.repos.usage import UsageRepo
+    from octop.infra.db.repos.user_policies import UserPolicyRepo
+
+    pool, repo, user = execution
+    UserPolicyRepo(pool).set(user, "token_quota", "100")
+    with pool.transaction() as conn:
+        conn.execute("UPDATE threads SET last_active=0 WHERE thread_id='one'")
+    CompanyRuntimeRepo(pool).acquire(
+        task_id="desktop",
+        thread_id="one",
+        owner=user,
+        agent_id="expert",
+        device_id="device",
+        request={},
+        expert={},
+        installation_hash="installation",
+        recovery_hash="recovery",
+    )
+    run = repo.proxy_run(
+        task="desktop", user=user, device="device", node="worker", incarnation="boot1"
+    )
+    repo.reserve_model(
+        *fence(run), key="partial", provider="test", tokens=100, quota_remaining=None
+    )
+    repo.transition(*fence(run), "unknown", model_receipt=("partial", None), model_estimate=12)
+    assert UsageRepo(pool).total_tokens_for_user(user) == 12
+    with pool.transaction() as conn:
+        conn.execute(
+            "UPDATE execution_runs SET updated_at=updated_at-? WHERE run_id=?",
+            (DESKTOP_MODEL_UNKNOWN_HOLD_SECONDS + 1, run["run_id"]),
+        )
+    again = repo.proxy_run(
+        task="desktop", user=user, device="device", node="worker", incarnation="boot1"
+    )
+    with pytest.raises(ExecutionConflict, match="token_quota_exceeded"):
+        repo.reserve_model(
+            *fence(again), key="new", provider="test", tokens=100, quota_remaining=None
+        )
+    repo.reserve_model(*fence(again), key="new", provider="test", tokens=88, quota_remaining=None)
+    repo.transition(*fence(again), "completed", model_receipt=("new", 0))
+    assert repo.reconciliation(run["run_id"])["models"][0]["estimated"] == 12
+    repo.record_stop(
+        "worker",
+        "boot1",
+        {"container_id": "container1", "running": False, "finished_at": "verified"},
+    )
+    repo.reconcile(
+        run["run_id"],
+        outcome="cancelled",
+        evidence={
+            "reason": "Provider confirms the final token receipt",
+            "models": {"partial": 5},
+            "tools": {},
+        },
+    )
+    assert UsageRepo(pool).total_tokens_for_user(user) == 5

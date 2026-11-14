@@ -23,7 +23,7 @@ from octop.infra.utils.immutable_files import read_object, store_object
 
 logger = logging.getLogger(__name__)
 _draft: ContextVar[bool] = ContextVar("octop_source_draft", default=False)
-_FORMAT = "octop.source-resources.v3"
+_FORMAT = "octop.source-resources.v4"
 
 
 class SourcePublication:
@@ -69,7 +69,12 @@ class SourcePublication:
                 value = json.loads(raw)
                 if (
                     value.get("format")
-                    not in {_FORMAT, "octop.source-resources.v1", "octop.source-resources.v2"}
+                    not in {
+                        _FORMAT,
+                        "octop.source-resources.v1",
+                        "octop.source-resources.v2",
+                        "octop.source-resources.v3",
+                    }
                     or value.get("source_user_id") != user
                 ):
                     raise ValueError("source_manifest_invalid")
@@ -134,6 +139,13 @@ class SourcePublication:
         if raw != self.encode(await self.capture(user)):
             raise denied("resource_source_changed", 409)
         digest = await self.resources._read(store_object, self.root, raw)
+        from octop.infra.group_experts.publication import prepare_publication
+
+        group_objects = (
+            await prepare_publication(self.resources.services, value)
+            if self.executor is not None
+            else None
+        )
         await self.resources._read(
             self.repo.publish,
             user,
@@ -141,6 +153,7 @@ class SourcePublication:
             revision=head["dirty_revision"],
             digest=digest,
             executor=self.executor,
+            group_objects=group_objects,
         )
         self._cached = digest, value
 

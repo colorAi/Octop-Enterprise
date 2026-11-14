@@ -54,10 +54,10 @@ Login bundles, `company-dashboard.zip` and generated manifests are not distribut
 ## Release checklist
 
 - Identity of the corresponding commit or candidate snapshot, source archive and SHA-256; directory and archive contents match file by file.
-- Version, Harness version, main and communication schema, and device/company-runtime protocol requirements.
+- Version, Harness version, main and communication database schemas, device and company runtime protocols, and group expert prerequisites.
 - Build platforms and architectures, dependency versions, build commands, server deployment and client installation instructions.
 - Platforms and architectures actually verified, plus unverified installation, signing, notarization, capacity, upgrade and recovery items.
-- Known limitations, data boundaries, pre-upgrade backup and rollback steps; planned capabilities such as group bots are not listed as delivered.
+- Known limitations, data boundaries, pre-upgrade backups and rollback steps. See the [role-based deployment guide](../docker/enterprise/ROLES.md#群专家启用) for group expert prerequisites and pilot checks.
 - LICENSE, NOTICE, communication service and third-party licenses. When distributing installers, include the licenses for FFmpeg, WebView2, Python and other components actually shipped; a source-package check does not replace a binary distribution check.
 - If images or installers are provided, publish the unique tag/digest, architectures, SHA-256, signing and notarization status; do not reuse the same formal tag for different source.
 

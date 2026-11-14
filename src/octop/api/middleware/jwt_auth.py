@@ -68,6 +68,21 @@ def install(app: Any, server: Any) -> None:
             return JSONResponse(status_code=exc.status, content=exc.to_envelope())
 
         response = await call_next(request)
+        groups = getattr(server, "group_experts", None)
+        if (
+            groups is not None
+            and request.state.octop_user.is_admin
+            and request.method not in {"GET", "HEAD", "OPTIONS"}
+            and 200 <= response.status_code < 300
+        ):
+            try:
+                syncing = await management_read(server, groups.repo.syncing)
+            except Exception:
+                # The mutation already committed. Keep its pending marker if the
+                # acknowledgement store is temporarily unavailable.
+                syncing = True
+            if syncing:
+                response.headers["X-Octop-Group-Expert-Syncing"] = "1"
         if raw is not None:
             try:
                 renewed = await management_read(

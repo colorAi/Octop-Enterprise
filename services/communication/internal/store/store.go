@@ -176,6 +176,19 @@ var shapeChecks = []struct {
 	{desc: "sync", table: "user_sync_heads", column: "min_seq", want: true},
 	{desc: "job lease fencing", table: "background_jobs", column: "lease_token", want: true},
 	{desc: "delivery lease fencing", table: "delivery_outbox", column: "lease_token", want: true},
+	{desc: "group expert admission flag", table: "group_settings", column: "experts_enabled", want: true},
+	{desc: "message sender type", table: "messages", column: "sender_type", want: true},
+	{desc: "expert mentions", table: "messages", column: "mention_expert_id", want: true},
+	{desc: "group expert bindings", table: "group_expert_bindings", want: true},
+	{desc: "group expert calls", table: "group_expert_calls", want: true},
+	{desc: "group expert text limit", table: "group_expert_calls", column: "max_text_chars", want: true},
+	{desc: "group expert scopes", table: "group_expert_scopes", want: true},
+	{desc: "group expert authorizations", table: "group_expert_authorizations", want: true},
+	{desc: "group expert dependencies", table: "group_expert_call_authorizations", want: true},
+	{desc: "group expert outbox", table: "group_expert_outbox", want: true},
+	{desc: "group expert runtime proof", table: "group_expert_runtime", want: true},
+	{desc: "group expert binding revocations", table: "group_expert_binding_revocations", want: true},
+	{desc: "group expert artifacts", table: "group_expert_artifacts", want: true},
 }
 
 // CheckShape verifies the database has the shape this binary was built for.
@@ -184,7 +197,7 @@ func (s *Store) CheckShape(ctx context.Context) error {
 	if e := s.Pool.QueryRow(ctx, `SELECT COALESCE(MAX(version),0),count(*) FROM schema_migrations`).Scan(&version, &count); e != nil {
 		return e
 	}
-	if version != 16 || count != 16 {
+	if version != 21 || count != 21 {
 		return fmt.Errorf("communication schema version mismatch; apply the matching migrations without rebuilding data")
 	}
 

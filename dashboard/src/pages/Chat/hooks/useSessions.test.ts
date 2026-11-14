@@ -1,5 +1,6 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as chatStore from "./chatStore";
 import {
   resetSessionStoreForTests,
   sortSessions,
@@ -96,7 +97,71 @@ describe("useSessions agent switch", () => {
   });
 
   afterEach(() => {
+    localStorage.removeItem("auth_token");
     resetSessionStoreForTests();
+  });
+
+  it("isolates drafts and pending prefills when another account opens the same expert", async () => {
+    listMock.mockResolvedValue([]);
+    localStorage.setItem("auth_token", "draft-login-a");
+    const first = renderHook(() => useSessions("shared-expert"));
+    await waitFor(() => expect(first.result.current.loading).toBe(false));
+    chatStore.writeInputDraft("shared-expert", null, "private draft");
+    chatStore.setPendingPrefillText("private prefill");
+    first.unmount();
+    localStorage.setItem("auth_token", "draft-login-b");
+    // ChatPage consumes prefill before useSessions runs.
+    expect(chatStore.consumePendingPrefillText()).toBe("");
+    const second = renderHook(() => useSessions("shared-expert"));
+    await waitFor(() => expect(second.result.current.loading).toBe(false));
+    expect(chatStore.readInputDraft("shared-expert", null)).toBe("");
+    chatStore.writeInputDraft("shared-expert", null, "B's draft");
+    chatStore.writeInputDraft(
+      "shared-expert",
+      null,
+      "late A draft",
+      "draft-login-a",
+    );
+    expect(chatStore.readInputDraft("shared-expert", null)).toBe("B's draft");
+  });
+
+  it("clears old account history and drops late responses for the same expert", async () => {
+    localStorage.setItem("auth_token", "login-a");
+    listMock.mockResolvedValueOnce([threadRow("account-a")]);
+    const { result, rerender } = renderHook(() => useSessions("shared-expert"));
+    await waitFor(() =>
+      expect(result.current.sessions[0]?.id).toBe("account-a"),
+    );
+    chatStore.setHistoryPage(
+      "account-a",
+      [{ id: "cached", role: "user", content: "private", timestamp: 1 }],
+      { hasMore: false, nextOffset: 1 },
+    );
+    let resolveOld!: (rows: ReturnType<typeof threadRow>[]) => void;
+    listMock.mockReturnValueOnce(
+      new Promise((resolve) => (resolveOld = resolve)),
+    );
+    let pending!: ReturnType<typeof result.current.fetchSessions>;
+    act(() => {
+      pending = result.current.fetchSessions();
+    });
+
+    localStorage.setItem("auth_token", "login-b");
+    listMock.mockResolvedValueOnce([threadRow("account-b")]);
+    rerender();
+    expect(result.current.sessions).toEqual([]);
+    expect(chatStore.getSnapshot("account-a").messages).toEqual([]);
+    await waitFor(() =>
+      expect(result.current.sessions[0]?.id).toBe("account-b"),
+    );
+
+    await act(async () => {
+      resolveOld([threadRow("account-a")]);
+      expect(await pending).toEqual([]);
+    });
+    expect(result.current.sessions.map((session) => session.id)).toEqual([
+      "account-b",
+    ]);
   });
 
   it("clears previous-agent threads on the first render of a new agent", async () => {

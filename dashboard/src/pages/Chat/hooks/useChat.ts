@@ -17,6 +17,8 @@ import type {
 } from "../../../api/types";
 import type { HitlSessionPolicy } from "../../../api/types/hitl";
 import type { ThreadArtifact } from "../../../api/modules/octopThreads";
+import { getAuthToken } from "../../../api/request";
+import { tokenSessionIdentity } from "../../../utils/authSession";
 import * as chatStore from "./chatStore";
 import { shouldBlockHistoryRefresh } from "./wsResumeGate";
 import {
@@ -768,6 +770,7 @@ async function loadThreadHistory(
   projectionLoading: boolean;
   retryAfterMs: number;
 }> {
+  const authSession = tokenSessionIdentity(getAuthToken());
   const { octopThreadsApi, CHAT_HISTORY_PAGE_SIZE, normalizeThreadArtifacts } =
     await import("../../../api/modules/octopThreads");
   const {
@@ -782,6 +785,8 @@ async function loadThreadHistory(
     offset,
     cursor: params.cursor,
   });
+  if (tokenSessionIdentity(getAuthToken()) !== authSession)
+    throw new DOMException("Login changed while loading history", "AbortError");
   const artifacts = normalizeThreadArtifacts(
     history.artifacts,
     agentId,

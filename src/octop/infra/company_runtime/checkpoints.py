@@ -52,7 +52,7 @@ class LocalCheckpointSaver(RemoteCheckpointSaver):
         super().__init__(client, task_id, thread_id)
         self.directory = directory
         self.store: AsyncSqliteSaver | None = None
-        self.loaded: set[str] = set()
+        self.heads: dict[str, str | None] = {}
         self.lock = asyncio.Lock()
         self.sequence = 0
 
@@ -70,7 +70,7 @@ class LocalCheckpointSaver(RemoteCheckpointSaver):
     async def _seed(self, config: Any) -> None:
         namespace = self.scope(config)["namespace"]
         async with self.lock:
-            if namespace in self.loaded:
+            if namespace in self.heads:
                 return
             await self._store()
             current = await super().aget_tuple(
@@ -78,7 +78,7 @@ class LocalCheckpointSaver(RemoteCheckpointSaver):
             )
             if current is not None:
                 await self._cache(current)
-            self.loaded.add(namespace)
+            self.heads[namespace] = current.checkpoint["id"] if current is not None else None
 
     async def _cache(self, current: CheckpointTuple) -> None:
         parent: RunnableConfig = current.parent_config or {
@@ -99,8 +99,19 @@ class LocalCheckpointSaver(RemoteCheckpointSaver):
 
     async def aget_tuple(self, config: Any) -> Any:
         await self._seed(config)
-        current = await (await self._store()).aget_tuple(config)
-        if current is None and self.scope(config)["checkpoint_id"]:
+        scope = self.scope(config)
+        checkpoint_id = scope["checkpoint_id"] or self.heads[scope["namespace"]]
+        if checkpoint_id is None:
+            return None
+        # SQLite's default lookup orders by checkpoint ID, including a seed
+        # generated on a computer whose clock may be ahead of this one.
+        current = await (await self._store()).aget_tuple(
+            {
+                **config,
+                "configurable": {**config["configurable"], "checkpoint_id": checkpoint_id},
+            }
+        )
+        if current is None and scope["checkpoint_id"]:
             current = await super().aget_tuple(config)
             if current is not None:
                 async with self.lock:
@@ -147,7 +158,9 @@ class LocalCheckpointSaver(RemoteCheckpointSaver):
                     "payload": payload,
                 }
             )
-            return await (await self._store()).aput(config, checkpoint, metadata, new_versions)
+            saved = await (await self._store()).aput(config, checkpoint, metadata, new_versions)
+            self.heads[scope["namespace"]] = checkpoint["id"]
+            return saved
 
     async def aput_writes(
         self, config: Any, writes: Any, task_id: str, task_path: str = ""

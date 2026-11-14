@@ -6,12 +6,63 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"octop.desktop/internal/companyprojects"
 )
+
+func TestImportedProjectStartsSyncAndCanRetryAfterConnectionFailure(t *testing.T) {
+	var requests atomic.Int32
+	app := startupTestApp(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/company-runtime/capabilities":
+			_, _ = w.Write([]byte(`{"protocol_version":1,"features":["checkpoint_batches","multi_project_v1","account_projects_v1"]}`))
+		case "/api/company-runtime/projects":
+			_, _ = w.Write([]byte(`{"project_id":"account-project","name":"Existing project"}`))
+		case "/api/company-runtime/projects/account-project/threads/query":
+			if requests.Add(1) == 1 {
+				w.WriteHeader(http.StatusServiceUnavailable)
+				_, _ = w.Write([]byte(`{"detail":"reconnecting"}`))
+				return
+			}
+			_, _ = w.Write([]byte(`{"items":[{"thread_id":"original-chat","project_id":"account-project"}],"has_more":false}`))
+		default:
+			t.Error("unexpected request while importing project", r.URL.Path)
+		}
+	}))
+	defer func() { app.companyMu.Lock(); app.stopCompanyRuntimeLocked(); app.companyMu.Unlock() }()
+	store, err := app.projectStoreLocked(app.companyURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	directory := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(directory, "projects", "account-project"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.ImportCatalog(directory, companyprojects.ArchiveManifest{
+		Projects: []companyprojects.Project{{ID: "account-project", Name: "Existing project"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	result, err := app.importedProjectResult("nonce", app.companyURL, app.runtimeEpoch, store, directory, []string{"account-project"})
+	if err != nil || requests.Load() != 1 || result.(map[string]any)["sync_pending"] != true {
+		t.Fatal("automatic sync did not preserve pending import", result, err)
+	}
+	if project, err := store.ForID("account-project"); err != nil || !project.SyncPending {
+		t.Fatal("connection failure lost the local folder", project, err)
+	}
+	synced, err := app.performProjectAction("nonce", app.companyURL, "project_sync", json.RawMessage(`{"project_ids":["account-project"]}`))
+	if err != nil || synced.(projectSyncResult).Count != 1 {
+		t.Fatal("manual retry failed", synced, err)
+	}
+	if project, err := store.ForThread("original-chat"); err != nil || project.SyncPending {
+		t.Fatal("original conversation was not linked to the imported directory", project, err)
+	}
+}
 
 func TestProjectBrowserDiscardsRepliesAfterAccountChange(t *testing.T) {
 	entered := make(chan struct{})
@@ -279,5 +330,53 @@ func TestProjectRelocationAndRevocationRejectActiveOverlappingRoots(t *testing.T
 	}
 	if err := checkProjectIdle(json.RawMessage(`{"active_tasks":[{"thread_id":"thread-a","status":"completed"}]}`), catalog, child); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestProjectLocalArtifactAllowsNativeFilename(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("colon is a POSIX filename character")
+	}
+	app := startupTestApp(t)
+	app.projectSupported = true
+	store, err := app.projectStoreLocked(app.companyURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	project, err := store.Register(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Bind("thr_target", project.ID); err != nil {
+		t.Fatal(err)
+	}
+	name := "report:final.txt"
+	original := filepath.Join(project.Path, name)
+	if err := os.WriteFile(original, []byte("source"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	content, err := companyprojects.ReadFile(project.Path, name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := app.resolveArtifactPathLocked(original)
+	if err != nil || resolved != original {
+		t.Fatal(resolved, err)
+	}
+	if opened, err := checkedRuntimeArtifact(project.Path, resolved, content.SHA256, false); err != nil || opened != original {
+		t.Fatal(opened, err)
+	}
+	result, err := app.transferRuntimeArtifact("nonce", app.companyURL, "import_attachment", forwardParams(t, map[string]string{"path": original, "sha256": content.SHA256}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if data, err := os.ReadFile(result.(runtimeForwardFile).Path); err != nil || string(data) != "source" {
+		t.Fatal(string(data), err)
+	}
+	if err := store.Update(project.ID, "", false, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := app.resolveArtifactPathLocked(original); err == nil {
+		t.Fatal("revoked directory was still authorized")
 	}
 }

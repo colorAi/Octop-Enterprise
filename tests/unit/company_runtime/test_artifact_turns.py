@@ -16,6 +16,21 @@ def message(kind, ident):
     return {"type": kind, "data": {"id": ident, "content": ""}}
 
 
+@pytest.mark.parametrize("old", ["/old computer/project", r"C:\Old computer\project"])
+def test_imported_project_file_tools_rebase_old_paths_without_escaping(tmp_path, old):
+    root = tmp_path / "new location"
+    root.mkdir()
+    backend = ProjectBackend(
+        root, tmp_path / "state", lambda event: None, tool_path="", previous_roots=[old]
+    )
+    result = backend.write(old + "/report.txt", "restored")
+    assert not result.error
+    assert (root / "report.txt").read_text() == "restored"
+    assert backend.artifact_metadata(old + "/report.txt")["path"] == str(root / "report.txt")
+    with pytest.raises(ValueError):
+        backend.artifact_metadata(old + "/../private.txt")
+
+
 def test_explicit_delivery_accepts_project_paths_but_rejects_escape_and_directories(tmp_path):
     project = tmp_path / "project"
     project.mkdir()

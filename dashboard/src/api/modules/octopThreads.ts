@@ -1,8 +1,16 @@
 import type { HitlPendingPayload, HitlSessionPolicy } from "../types/hitl";
-import { request } from "../request";
+import { request as apiRequest } from "../request";
 import { createRuntimeTaskId, isCompanyDesktop } from "../desktopRuntime";
 import { notifyProjectsChanged } from "../desktopProjects";
 import { createDesktopProjectThread } from "../desktopProjects";
+
+/** Browser history has its own scope; native and administrator access is retained. */
+function request<T>(path: string, options?: RequestInit): Promise<T> {
+  if (!isCompanyDesktop()) {
+    path += `${path.includes("?") ? "&" : "?"}surface=web`;
+  }
+  return options ? apiRequest<T>(path, options) : apiRequest<T>(path);
+}
 
 /** Workspace file produced in a thread; ``agent_id`` is the producer. */
 export type ThreadArtifact = {

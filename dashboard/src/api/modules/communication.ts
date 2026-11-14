@@ -10,6 +10,7 @@ import type {
   Department,
   GroupInfo,
   GroupKind,
+  GroupExperts,
   GroupMember,
   ImageUpload,
   ImageUploadStatus,
@@ -48,11 +49,16 @@ export function communicationError(error: unknown): CommunicationError {
   );
   try {
     const json = JSON.parse(text.slice(text.indexOf("{"))) as {
-      error?: { code?: string; message?: string; retryable?: boolean };
+      error?: {
+        code?: string;
+        message?: string;
+        retryable?: boolean;
+        details?: { reason?: string };
+      };
     };
     if (json.error)
       return new CommunicationError(
-        json.error.code ?? "unavailable",
+        json.error.details?.reason ?? json.error.code ?? "unavailable",
         status,
         json.error.retryable ?? status >= 500,
         json.error.message ?? text,
@@ -95,6 +101,65 @@ const query = (values: Record<string, string | undefined>) =>
     ),
   ).toString();
 export const communicationApi = {
+  groupExperts: (group: string, organization = false, signal?: AbortSignal) =>
+    call<GroupExperts>(
+      `${organization ? "/organization" : ""}/groups/${id(group)}/experts`,
+      "GET",
+      undefined,
+      signal,
+    ),
+  inviteExpert: (
+    group: string,
+    body: {
+      request_id: string;
+      source_agent_id: string;
+      source_row_id: number;
+      revision: number;
+    },
+    organization = false,
+  ) =>
+    call(
+      `${organization ? "/organization" : ""}/groups/${id(group)}/experts`,
+      "POST",
+      body,
+    ),
+  removeExpert: (
+    group: string,
+    binding: string,
+    body: { request_id: string; generation: number },
+    organization = false,
+  ) =>
+    call(
+      `${organization ? "/organization" : ""}/groups/${id(group)}/experts/${id(
+        binding,
+      )}`,
+      "DELETE",
+      body,
+    ),
+  expertScope: (
+    group: string,
+    body: {
+      request_id: string;
+      revision: number;
+      sources: { source_agent_id: string; source_row_id: number }[];
+    },
+  ) =>
+    call<{ revision: number; syncing: boolean }>(
+      `/organization/groups/${id(group)}/expert-scope`,
+      "PUT",
+      body,
+    ),
+  enableExperts: (
+    group: string,
+    body: { request_id: string; enabled: boolean },
+  ) => call(`/organization/groups/${id(group)}/experts-enabled`, "PUT", body),
+  expertAuthorizationStatus: (signal?: AbortSignal) =>
+    call<{ syncing: boolean }>(
+      "/organization/expert-authorization-status",
+      "GET",
+      undefined,
+      signal,
+    ),
   directorySettings: (signal?: AbortSignal) =>
     call<{ name: string }>("/directory-settings", "GET", undefined, signal),
   contacts: (signal?: AbortSignal) =>

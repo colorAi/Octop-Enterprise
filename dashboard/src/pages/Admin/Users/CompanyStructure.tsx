@@ -10,7 +10,6 @@ import {
   App,
   Avatar,
   Button,
-  Collapse,
   Drawer,
   Form,
   Input,
@@ -23,15 +22,14 @@ import {
   Tabs,
   Tag,
   Tooltip,
+  Tree,
 } from "antd";
+import type { DataNode } from "antd/es/tree";
 import {
-  ArrowUpRight,
-  Building2,
   ChevronDown,
-  ChevronsUpDown,
-  FolderOpen,
   GraduationCap,
   Inbox,
+  Info,
   LockKeyhole,
   Plus,
   Puzzle,
@@ -57,6 +55,7 @@ import { useCommunication } from "../../Messaging/hooks/CommunicationContext";
 import { useCurrentUser } from "../../../hooks/useCurrentUser";
 import { communicationError } from "../../../api/modules/communication";
 import { communicationErrorText } from "../../Messaging/communicationUi";
+import { departmentPath } from "../../Contacts/directoryTree";
 import {
   ExpertAssignmentSource,
   useExpertAssignments,
@@ -67,6 +66,7 @@ import EmployeeResourceDrawer, {
 } from "./EmployeeResourceDrawer";
 import ResourcePicker from "./ResourcePicker";
 import BatchResourceDrawer from "./BatchResourceDrawer";
+import CompanyGroupDirectory from "./CompanyGroupDirectory";
 import styles from "./expertAssignments.module.less";
 
 const org = communicationApi.organization;
@@ -74,6 +74,8 @@ type DepartmentForm = Pick<
   Department,
   "name" | "parent_id" | "sort_order" | "enabled"
 >;
+/** Show the department filter only when the tree no longer fits at a glance. */
+const TREE_SEARCH_THRESHOLD = 8;
 
 export default function CompanyStructure({
   renderGroup,
@@ -98,9 +100,10 @@ export default function CompanyStructure({
   const [preparing, setPreparing] = useState(false);
   const [error, setError] = useState("");
   const [search, setSearch] = useState("");
+  const [treeSearch, setTreeSearch] = useState("");
   const [status, setStatus] = useState("all");
-  const [expanded, setExpanded] = useState<string[]>();
-  const [activeScope, setActiveScope] = useState<string>();
+  const [current, setCurrent] = useState<string>();
+  const [treeExpanded, setTreeExpanded] = useState<string[]>();
   const [selected, setSelected] = useState<string[]>([]);
   const [batch, setBatch] = useState<"experts" | "skills" | "department">();
   const [editor, setEditor] = useState<{
@@ -114,6 +117,7 @@ export default function CompanyStructure({
   }>();
   const [editing, setEditing] = useState<Department | null | undefined>();
   const [group, setGroup] = useState("");
+  const [groupDirectory, setGroupDirectory] = useState(false);
   const [openingGroup, setOpeningGroup] = useState("");
   const [installed, setInstalled] = useState(false);
   const [form] = Form.useForm<DepartmentForm>();
@@ -162,7 +166,8 @@ export default function CompanyStructure({
     detailRequest.current++;
     setSelected([]);
     setGroup("");
-    setExpanded(undefined);
+    setCurrent(undefined);
+    setTreeExpanded(undefined);
     void load().catch(() => {});
     return () => controller.current.abort();
   }, [load, t, user?.id]);
@@ -261,6 +266,8 @@ export default function CompanyStructure({
   const scopeName = (id: string) =>
     scopes.find((s) => s.id === id)?.name ?? t("communication.unassigned");
   const poolFor = (id: string) => data?.pools?.find((p) => p.scope_id === id);
+  const headcount = (id: string) =>
+    users.filter((p) => scopeFor(p) === id).length;
   const matches = (p: CommunicationUser) => {
     const e = employeeFor(p);
     const resources = e
@@ -284,15 +291,99 @@ export default function CompanyStructure({
     );
   };
   const filtered = users.filter(matches);
-  const visible = scopes.filter(
-    (s) => !search || filtered.some((p) => scopeFor(p) === s.id),
+  // Selection falls back to the first populated scope, so a deleted or moved
+  // department never leaves the detail pane empty.
+  const scope =
+    scopes.find((s) => s.id === current) ??
+    scopes.find((s) => users.some((p) => scopeFor(p) === s.id)) ??
+    scopes[0];
+  const searching = !!search;
+  const members = searching
+    ? filtered
+    : filtered.filter((p) => scopeFor(p) === scope.id);
+  const pool = poolFor(scope.id);
+  const selectScope = (id: string) => {
+    setCurrent(id);
+    setSearch("");
+    setSelected([]);
+  };
+  const departmentIds = new Set(departments.map((d) => d.department_id));
+  const sortedDepartments = [...departments].sort(
+    (a, b) => a.sort_order - b.sort_order || a.name.localeCompare(b.name),
   );
-  const keys = search
-    ? visible.map((s) => s.id)
-    : expanded ?? [
-        scopes.find((s) => users.some((p) => scopeFor(p) === s.id))?.id ??
-          "unassigned",
+  const childrenOf = (parent: string | null) =>
+    sortedDepartments.filter((d) =>
+      parent === null
+        ? !d.parent_id ||
+          d.parent_id === d.department_id ||
+          !departmentIds.has(d.parent_id)
+        : d.parent_id === parent && d.department_id !== parent,
+    );
+  const treeQuery = treeSearch.trim().toLocaleLowerCase();
+  const treeTitle = (
+    id: string,
+    label: string,
+    options: { disabled?: boolean; icon?: ReactNode; warn?: boolean } = {},
+  ) => {
+    const count = headcount(id);
+    return (
+      <span
+        className={`${styles.treeNode} ${
+          options.disabled ? styles.treeNodeDisabled : ""
+        }`}
+      >
+        {options.icon}
+        <span className={styles.treeName}>{label}</span>
+        {options.disabled && (
+          <Tag className={styles.treeTag}>{t("communication.disabled")}</Tag>
+        )}
+        <span
+          className={`${styles.treeCount} ${
+            options.warn && count ? styles.treeCountWarn : ""
+          }`}
+        >
+          {count || ""}
+        </span>
+      </span>
+    );
+  };
+  const branch = (parent: string | null, seen: Set<string>): DataNode[] =>
+    childrenOf(parent).flatMap((d) => {
+      if (seen.has(d.department_id)) return [];
+      const next = new Set(seen).add(d.department_id);
+      const children = branch(d.department_id, next);
+      if (
+        treeQuery &&
+        !children.length &&
+        !d.name.toLocaleLowerCase().includes(treeQuery)
+      )
+        return [];
+      return [
+        {
+          key: d.department_id,
+          title: treeTitle(d.department_id, d.name, {
+            disabled: !d.enabled,
+          }),
+          children: children.length ? children : undefined,
+        },
       ];
+    });
+  const treeData: DataNode[] = [
+    ...branch(null, new Set()),
+    ...scopes
+      .filter((s) => !s.department && s.id !== "unassigned")
+      .filter(
+        (s) => !treeQuery || s.name.toLocaleLowerCase().includes(treeQuery),
+      )
+      .map((s) => ({ key: s.id, title: treeTitle(s.id, s.name) })),
+  ];
+  const parents = departments
+    .filter((d) => departments.some((c) => c.parent_id === d.department_id))
+    .map((d) => d.department_id);
+  const expandedKeys = treeQuery ? parents : treeExpanded ?? parents;
+  const path = scope.department
+    ? departmentPath(scope.department.parent_id, departments)
+    : [];
   const selectedEmployees = selected
     .map((id) => users.find((p) => p.user_id === id))
     .filter((p): p is CommunicationUser => !!p)
@@ -382,21 +473,27 @@ export default function CompanyStructure({
     );
     setEditing(undefined);
   };
+  const employeeDisabled = (p: CommunicationUser) =>
+    preparing || !assignments.catalogReady || !employeeFor(p);
+  const resourceName = (kind: "experts" | "skills", id: string) =>
+    (kind === "experts"
+      ? data?.experts.find((e) => e.agent_id === id)?.name
+      : data?.skills?.find((s) => s.id === id)?.name) ??
+    t("expertAccess.unavailable");
   return (
     <div className={styles.structure}>
       <div className={styles.sectionHeading}>
-        <div>
-          <h2>{t("communication.companyStructure")}</h2>
-          <p>{t("employeeResources.structureDescription")}</p>
-        </div>
-        <Space>
-          <Tooltip title={t("employeeResources.companySettings")}>
-            <Button
-              type="text"
-              icon={<Settings2 size={16} />}
-              onClick={() => setCompanySettings(true)}
-            />
-          </Tooltip>
+        <p>{t("employeeResources.structureDescription")}</p>
+        <Space wrap>
+          <Button onClick={() => setGroupDirectory(true)}>
+            {t("communication.manageGroups")}
+          </Button>
+          <Button
+            icon={<Settings2 size={15} />}
+            onClick={() => setCompanySettings(true)}
+          >
+            {t("employeeResources.companySettings")}
+          </Button>
           <Button
             type="primary"
             icon={<Plus size={15} />}
@@ -416,584 +513,495 @@ export default function CompanyStructure({
               {t("common.retry")}
             </Button>
           }
-          style={{ marginBottom: 16 }}
+          className={styles.notice}
         />
       )}
-      {isAdmin && data && (
-        <ExpertAssignmentSource
-          data={data}
-          onSaved={assignments.reload}
-          onInstalled={() => setInstalled(true)}
-          catalogReady={assignments.catalogReady}
+      {isAdmin && data && data.source.source_user_id == null && (
+        <Alert
+          type="warning"
+          showIcon
+          message={t("employeeResources.sourceMissing")}
+          action={
+            <Button size="small" onClick={() => setCompanySettings(true)}>
+              {t("employeeResources.openCompanySettings")}
+            </Button>
+          }
+          className={styles.notice}
         />
       )}
-      <div className={styles.departmentTiles}>
-        {scopes.map((scope, index) => {
-          const pool = poolFor(scope.id);
-          return (
-            <button
-              className={`${styles.departmentTile} ${
-                (activeScope ?? keys[0]) === scope.id ? styles.activeTile : ""
-              }`}
-              key={scope.id}
-              onClick={() => {
-                setActiveScope(scope.id);
-                setExpanded([scope.id]);
-                requestAnimationFrame(
-                  () =>
-                    document
-                      .getElementById(`assignment-scope-${scope.id}`)
-                      ?.scrollIntoView({ behavior: "smooth", block: "start" }),
-                );
-              }}
-            >
-              <div className={styles.tileHeading}>
-                <span className={styles.tileIcon}>
-                  {scope.id === "unassigned" ? (
-                    <Inbox size={18} />
-                  ) : index === 1 ? (
-                    <Building2 size={18} />
-                  ) : (
-                    <FolderOpen size={18} />
-                  )}
-                </span>
-                <strong>{scope.name}</strong>
-                <ArrowUpRight size={14} />
-              </div>
-              <div className={styles.tileStats}>
-                <b>{users.filter((p) => scopeFor(p) === scope.id).length}</b>{" "}
-                {t("communication.people")}
-                <span>·</span>
-                {pool?.expert_ids.length ?? 0}{" "}
-                {t("employeeResources.expertUnit")}
-                <span>·</span>
-                {pool?.skill_ids.length ?? 0} {t("employeeResources.skillUnit")}
-              </div>
-            </button>
-          );
-        })}
-      </div>
-      <div className={styles.peopleToolbar}>
-        <h3>
-          {t("communication.assignPeople")} <Tag>{users.length}</Tag>
-        </h3>
-        <Space wrap>
-          <Input
-            prefix={<Search size={14} />}
-            aria-label={t("employeeResources.searchPeople")}
-            placeholder={t("employeeResources.searchPeople")}
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            allowClear
-            style={{ width: 240 }}
-          />
-          <Select
-            aria-label={t("communication.status")}
-            value={status}
-            onChange={setStatus}
-            options={[
-              { value: "all", label: t("employeeResources.allStatuses") },
-              { value: "active", label: t("communication.active") },
-              { value: "disabled", label: t("communication.disabled") },
-            ]}
-          />
-          <Button
-            type="text"
-            icon={<ChevronsUpDown size={15} />}
-            onClick={() =>
-              setExpanded(
-                keys.length === scopes.length ? [] : scopes.map((s) => s.id),
-              )
-            }
-          >
-            {t(
-              keys.length === scopes.length
-                ? "employeeResources.collapseAll"
-                : "employeeResources.expandAll",
-            )}
-          </Button>
-          <Tooltip title={t("communication.refresh")}>
-            <Button
-              type="text"
-              aria-label={t("communication.refresh")}
-              icon={<RefreshCw size={14} />}
-              loading={loading}
-              onClick={() =>
-                void refresh().catch((e) =>
-                  setError(communicationErrorText(e, t)),
-                )
-              }
+      <div className={styles.layout}>
+        <aside
+          className={styles.treePane}
+          aria-label={t("communication.companyStructure")}
+        >
+          {scopes.length > TREE_SEARCH_THRESHOLD && (
+            <Input
+              size="small"
+              prefix={<Search size={13} />}
+              aria-label={t("employeeResources.searchDepartments")}
+              placeholder={t("employeeResources.searchDepartments")}
+              value={treeSearch}
+              onChange={(e) => setTreeSearch(e.target.value)}
+              allowClear
+              className={styles.treeSearch}
             />
-          </Tooltip>
-        </Space>
-      </div>
-      {!!selected.length && (
-        <div className={styles.batchBar}>
-          <span>
-            {t("employeeResources.batchCount", { count: selected.length })}
-          </span>
-          <Button
-            size="small"
-            onClick={() => void openBatch("experts")}
-            disabled={
-              preparing ||
-              !assignments.catalogReady ||
-              selectedEmployees.length !== selected.length
+          )}
+          <Tree
+            blockNode
+            className={styles.tree}
+            treeData={treeData}
+            expandedKeys={expandedKeys}
+            onExpand={(keys) => setTreeExpanded(keys.map(String))}
+            selectedKeys={searching ? [] : [scope.id]}
+            onSelect={(keys, info) =>
+              selectScope(String(keys[0] ?? info.node.key))
             }
-          >
-            {t("employeeResources.batch.experts")}
-          </Button>
-          <Button
-            size="small"
-            onClick={() => void openBatch("skills")}
-            disabled={
-              preparing ||
-              !assignments.catalogReady ||
-              selectedEmployees.length !== selected.length
+          />
+          <Tree
+            blockNode
+            className={`${styles.tree} ${styles.unassignedTree}`}
+            treeData={[
+              {
+                key: "unassigned",
+                title: treeTitle("unassigned", t("communication.unassigned"), {
+                  icon: <Inbox size={14} />,
+                  warn: true,
+                }),
+              },
+            ]}
+            selectedKeys={
+              !searching && scope.id === "unassigned" ? ["unassigned"] : []
             }
-          >
-            {t("employeeResources.batch.skills")}
-          </Button>
-          <Button
-            size="small"
-            onClick={() => void openBatch("department")}
-            disabled={
-              preparing ||
-              !assignments.catalogReady ||
-              selectedEmployees.length !== selected.length
-            }
-          >
-            {t("employeeResources.batch.department")}
-          </Button>
-          <Button size="small" type="text" onClick={() => setSelected([])}>
-            {t("expertAccess.clear")}
-          </Button>
-        </div>
-      )}
-      <Collapse
-        className={styles.peopleGroups}
-        activeKey={keys}
-        onChange={(values) =>
-          setExpanded(Array.isArray(values) ? values : [values])
-        }
-        items={visible.map((scope) => {
-          const pool = poolFor(scope.id);
-          const members = filtered.filter((p) => scopeFor(p) === scope.id);
-          return {
-            key: scope.id,
-            label: (
-              <Space
-                id={`assignment-scope-${scope.id}`}
-                className={styles.groupLabel}
-              >
-                <FolderOpen size={17} />
-                <strong>{scope.name}</strong>
-                <Tag>
-                  {members.length} {t("communication.people")}
-                </Tag>
-                {scope.id === "unassigned" && (
-                  <span className={styles.hint}>
-                    {t("employeeResources.unassignedHint")}
-                  </span>
-                )}
-              </Space>
-            ),
-            extra: (
-              <Space size="middle" className={styles.groupActions}>
-                <span>
-                  <GraduationCap size={13} />
-                  {pool?.expert_ids.length ?? 0}{" "}
-                  {t("employeeResources.expertUnit")}
-                </span>
-                <span>
-                  <Puzzle size={13} />
-                  {pool?.skill_ids.length ?? 0}{" "}
-                  {t("employeeResources.skillUnit")}
-                </span>
-                {scope.department && (
-                  <Button
-                    type="text"
-                    size="small"
-                    icon={<SlidersHorizontal size={14} />}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      edit(scope.department!);
-                    }}
-                  >
-                    {t("employeeResources.departmentSettings")}
-                  </Button>
-                )}
-                {scope.department && (
-                  <Button
-                    type="text"
-                    size="small"
-                    disabled={busy || !scope.department.enabled}
-                    loading={openingGroup === scope.id}
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      void openGroup(scope.department!);
-                    }}
-                  >
-                    {t(
-                      scope.department.conversation_id
-                        ? "communication.manageGroup"
-                        : "communication.createGroup",
+            onSelect={() => selectScope("unassigned")}
+          />
+        </aside>
+        <section className={styles.detail}>
+          <div className={styles.detailHeading}>
+            <div>
+              {searching ? (
+                <h3>
+                  {t("employeeResources.searchResults", {
+                    count: members.length,
+                  })}
+                </h3>
+              ) : (
+                <>
+                  {!!path.length && (
+                    <span className={styles.breadcrumb}>
+                      {path.map((d) => d.name).join(" / ")} /
+                    </span>
+                  )}
+                  <h3>
+                    {scope.name}
+                    {scope.department && !scope.department.enabled && (
+                      <Tag>{t("communication.disabled")}</Tag>
                     )}
-                  </Button>
-                )}
-              </Space>
-            ),
-            children: (
-              <>
-                {isAdmin && data && (
-                  <div className={styles.departmentPool}>
-                    {(["experts", "skills"] as const).map((kind) => {
-                      const ids =
-                        kind === "experts"
-                          ? pool?.expert_ids ?? []
-                          : pool?.skill_ids ?? [];
-                      return (
-                        <div key={kind} className={styles.poolRow}>
-                          <div className={styles.poolHeading}>
-                            <span>
-                              {kind === "experts" ? (
-                                <ShieldCheck size={14} />
-                              ) : (
-                                <Puzzle size={14} />
-                              )}{" "}
-                              {t(
-                                kind === "experts"
-                                  ? "employeeResources.departmentExperts"
-                                  : "employeeResources.departmentSkills",
-                              )}
-                              <Tag>{ids.length}</Tag>
-                            </span>
-                            <Button
-                              type="link"
-                              size="small"
-                              icon={<Plus size={14} />}
-                              disabled={!assignments.catalogReady}
-                              onClick={() =>
-                                setPicker({ scope: scope.id, kind })
-                              }
-                            >
-                              {t(
-                                kind === "experts"
-                                  ? "employeeResources.manageExperts"
-                                  : "employeeResources.manageSkills",
-                              )}
-                            </Button>
-                          </div>
-                          <div className={styles.poolContent}>
-                            <Space size={[4, 6]} wrap>
-                              {ids.map((id) => (
-                                <Tag
-                                  className={
-                                    kind === "experts"
-                                      ? styles.expertChip
-                                      : styles.skillChip
-                                  }
-                                  key={id}
-                                >
-                                  {kind === "experts"
-                                    ? data.experts.find(
-                                        (e) => e.agent_id === id,
-                                      )?.name ?? t("expertAccess.unavailable")
-                                    : data.skills?.find((s) => s.id === id)
-                                        ?.name ?? t("expertAccess.unavailable")}
-                                </Tag>
-                              ))}
-                              {!ids.length && (
-                                <span className={styles.hint}>
-                                  {t("employeeResources.noDepartmentResources")}
-                                </span>
-                              )}
-                            </Space>
-                            <span className={styles.poolNote}>
-                              {t(
-                                kind === "experts"
-                                  ? "employeeResources.poolExpertNote"
-                                  : "employeeResources.poolSkillNote",
-                              )}
-                            </span>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-                <Table<CommunicationUser>
-                  className={styles.employeeTable}
-                  rowKey="user_id"
-                  size="middle"
-                  loading={loading}
-                  dataSource={members}
-                  scroll={{ x: isAdmin ? 960 : 620 }}
-                  pagination={{ pageSize: 20, hideOnSinglePage: true }}
-                  rowSelection={
-                    isAdmin
-                      ? {
-                          selectedRowKeys: selected,
-                          onChange: (values) => setSelected(values.map(String)),
-                          getCheckboxProps: (person) => ({
-                            disabled:
-                              preparing ||
-                              !assignments.catalogReady ||
-                              !employeeFor(person) ||
-                              (selected.length > 0 &&
-                                !selected.includes(person.user_id) &&
-                                scopeFor(
-                                  users.find((p) => p.user_id === selected[0]),
-                                ) !== scope.id),
-                          }),
-                        }
-                      : undefined
-                  }
-                  columns={[
-                    {
-                      title: t("employeeResources.employee"),
-                      width: 178,
-                      render: (_, p) => (
-                        <div className={styles.employeeIdentity}>
-                          <Avatar shape="square" size={32}>
-                            {p.nickname.slice(0, 2)}
-                          </Avatar>
-                          <div>
-                            <strong>{p.nickname}</strong>
-                            <small>
-                              {employeeFor(p)?.username ??
-                                p.user_id.split(":").at(-1)}
-                            </small>
-                          </div>
-                        </div>
-                      ),
-                    },
-                    {
-                      title: t("communication.status"),
-                      width: 85,
-                      render: (_, p) => (
-                        <span className={styles.statusLabel}>
-                          <i
-                            className={
-                              p.status === "active"
-                                ? styles.activeDot
-                                : styles.inactiveDot
-                            }
-                          />
-                          {t(
-                            p.status === "active"
-                              ? "communication.active"
-                              : "communication.disabled",
-                          )}
-                        </span>
-                      ),
-                    },
-                    {
-                      title: t("communication.jobTitle"),
-                      width: 135,
-                      render: (_, p) =>
-                        isAdmin ? (
-                          <Button
-                            type="text"
-                            size="small"
-                            className={styles.positionButton}
-                            disabled={
-                              preparing ||
-                              !assignments.catalogReady ||
-                              !employeeFor(p)
-                            }
-                            onClick={() => openEmployee(p, "basic")}
-                          >
-                            {p.job_title || t("communication.noJobTitle")}
-                            <ChevronDown size={12} />
-                          </Button>
-                        ) : (
-                          <span>
-                            {p.job_title || t("communication.noJobTitle")}
-                          </span>
-                        ),
-                    },
-                    ...(isAdmin
-                      ? [
-                          {
-                            title: t("expertAccess.experts"),
-                            width: 240,
-                            render: (_: unknown, p: CommunicationUser) => {
-                              const e = employeeFor(p);
-                              if (!e) return "—";
-                              if (
-                                e.membership_status &&
-                                e.membership_status !== "current"
-                              )
-                                return (
-                                  <Tag color="gold">
-                                    {t("employeeResources.membershipPending")}
-                                  </Tag>
-                                );
-                              if (e.mode === "legacy")
-                                return <Tag>{t("expertAccess.legacy")}</Tag>;
-                              if (!e.expert_ids.length)
-                                return (
-                                  <span className={styles.waiting}>
-                                    {t("employeeResources.noExpertAssigned")}
-                                  </span>
-                                );
-                              return (
-                                <Space size={[3, 4]} wrap>
-                                  {e.expert_ids.slice(0, 2).map((id) => (
-                                    <Tag className={styles.expertChip} key={id}>
-                                      {data?.experts.find(
-                                        (e) => e.agent_id === id,
-                                      )?.name ?? t("expertAccess.unavailable")}
-                                    </Tag>
-                                  ))}
-                                  {e.expert_ids.length > 2 && (
-                                    <Tooltip
-                                      title={e.expert_ids
-                                        .slice(2)
-                                        .map(
-                                          (id) =>
-                                            data?.experts.find(
-                                              (e) => e.agent_id === id,
-                                            )?.name ?? id,
-                                        )
-                                        .join("、")}
-                                    >
-                                      <Tag>+{e.expert_ids.length - 2}</Tag>
-                                    </Tooltip>
-                                  )}
-                                </Space>
-                              );
-                            },
-                          },
-                          {
-                            title: t("employeeResources.skillPermissions"),
-                            width: 170,
-                            render: (_: unknown, p: CommunicationUser) => {
-                              const e = employeeFor(p);
-                              if (!e || !data) return "—";
-                              if (
-                                e.membership_status &&
-                                e.membership_status !== "current"
-                              )
-                                return (
-                                  <Tag color="gold">
-                                    {t("employeeResources.membershipPending")}
-                                  </Tag>
-                                );
-                              if (!assignments.catalogReady)
-                                return (
-                                  <span className={styles.hint}>
-                                    {t("employeeResources.catalogPending")}
-                                  </span>
-                                );
-                              if (e.mode === "legacy")
-                                return (
-                                  <span className={styles.hint}>
-                                    {t("expertAccess.legacy")}
-                                  </span>
-                                );
-                              const skills = effectiveSkills(
-                                data,
-                                e.expert_ids,
-                                e.skill_ids ?? [],
-                              );
-                              return (
-                                <button
-                                  className={styles.skillSummary}
-                                  onClick={() => openEmployee(p, "skills")}
-                                >
-                                  <span>
-                                    <Puzzle size={16} />
-                                    {t("employeeResources.skillTotal", {
-                                      count: skills.total,
-                                    })}
-                                  </span>
-                                  <small>
-                                    {t("employeeResources.breakdown", {
-                                      defaults: skills.defaults.length,
-                                      provided: skills.provided.length,
-                                      extra: skills.extra.length,
-                                    })}
-                                  </small>
-                                </button>
-                              );
-                            },
-                          },
-                          {
-                            title: t("communication.actions"),
-                            width: 210,
-                            render: (_: unknown, p: CommunicationUser) => (
-                              <Space size={6}>
-                                <Button
-                                  size="small"
-                                  type="link"
-                                  disabled={
-                                    preparing ||
-                                    !assignments.catalogReady ||
-                                    !employeeFor(p) ||
-                                    busy
-                                  }
-                                  onClick={() => openEmployee(p, "experts")}
-                                >
-                                  {t("employeeResources.expertManagement")}
-                                </Button>
-                                <Button
-                                  size="small"
-                                  type="link"
-                                  className={styles.skillAction}
-                                  disabled={
-                                    preparing ||
-                                    !assignments.catalogReady ||
-                                    !employeeFor(p) ||
-                                    busy
-                                  }
-                                  onClick={() => openEmployee(p, "skills")}
-                                >
-                                  {t("employeeResources.skillManagement")}
-                                </Button>
-                                <Tooltip
-                                  title={t("employeeResources.tabs.basic")}
-                                >
-                                  <Button
-                                    type="text"
-                                    size="small"
-                                    aria-label={`${p.nickname} ${t(
-                                      "employeeResources.tabs.basic",
-                                    )}`}
-                                    icon={<SlidersHorizontal size={15} />}
-                                    disabled={
-                                      preparing ||
-                                      !assignments.catalogReady ||
-                                      !employeeFor(p) ||
-                                      busy
-                                    }
-                                    onClick={() => openEmployee(p, "basic")}
-                                  />
-                                </Tooltip>
-                              </Space>
-                            ),
-                          },
-                        ]
-                      : []),
-                  ]}
-                />
-                <div className={styles.groupFooter}>
-                  <span>
+                  </h3>
+                  <span className={styles.detailMeta}>
                     {t("employeeResources.groupSummary", {
                       count: members.length,
                       assigned: members.filter(
                         (p) => (employeeFor(p)?.expert_ids.length ?? 0) > 0,
                       ).length,
                     })}
+                    {scope.id === "unassigned" &&
+                      ` · ${t("employeeResources.unassignedHint")}`}
                   </span>
-                  <span>{t("employeeResources.poolDoesNotAssign")}</span>
-                </div>
-              </>
-            ),
-          };
-        })}
-      />
+                </>
+              )}
+            </div>
+            {!searching && scope.department && (
+              <Space wrap>
+                <Button
+                  disabled={busy || !scope.department.enabled}
+                  loading={openingGroup === scope.id}
+                  onClick={() => void openGroup(scope.department!)}
+                >
+                  {t(
+                    scope.department.conversation_id
+                      ? "communication.manageGroup"
+                      : "communication.createGroup",
+                  )}
+                </Button>
+                <Button
+                  icon={<SlidersHorizontal size={14} />}
+                  onClick={() => edit(scope.department!)}
+                >
+                  {t("employeeResources.departmentSettings")}
+                </Button>
+              </Space>
+            )}
+          </div>
+          {isAdmin && data && !searching && (
+            <div className={styles.departmentPool}>
+              {(["experts", "skills"] as const).map((kind) => {
+                const ids =
+                  kind === "experts"
+                    ? pool?.expert_ids ?? []
+                    : pool?.skill_ids ?? [];
+                const label = t(
+                  kind === "experts"
+                    ? "employeeResources.departmentExperts"
+                    : "employeeResources.departmentSkills",
+                );
+                const total = t(
+                  kind === "experts"
+                    ? "employeeResources.expertTotal"
+                    : "employeeResources.skillTotal",
+                  { count: ids.length },
+                );
+                const tags = ids.map((id) => (
+                  <Tag
+                    className={
+                      kind === "experts" ? styles.expertChip : styles.skillChip
+                    }
+                    key={id}
+                  >
+                    {resourceName(kind, id)}
+                  </Tag>
+                ));
+                return (
+                  <div key={kind} className={styles.poolRow}>
+                    <span className={styles.poolLabel}>
+                      {kind === "experts" ? (
+                        <ShieldCheck size={14} />
+                      ) : (
+                        <Puzzle size={14} />
+                      )}
+                      {label}
+                      <Tooltip
+                        title={t(
+                          kind === "experts"
+                            ? "employeeResources.poolExpertNote"
+                            : "employeeResources.poolSkillNote",
+                        )}
+                      >
+                        <Info size={13} className={styles.poolInfo} />
+                      </Tooltip>
+                    </span>
+                    <div className={styles.poolContent}>
+                      {ids.length > 1 ? (
+                        <details
+                          key={scope.id}
+                          className={styles.poolResources}
+                        >
+                          <summary
+                            className={styles.poolResourcesSummary}
+                            aria-label={`${label} · ${total}`}
+                          >
+                            <span className={styles.poolResourcesPreview}>
+                              {ids
+                                .map((id) => resourceName(kind, id))
+                                .join(" · ")}
+                            </span>
+                            <span className={styles.poolResourcesCount}>
+                              {total}
+                              <ChevronDown size={14} aria-hidden="true" />
+                            </span>
+                          </summary>
+                          <div className={styles.poolResourcesList}>{tags}</div>
+                        </details>
+                      ) : (
+                        tags
+                      )}
+                      {!ids.length && (
+                        <span className={styles.hint}>
+                          {t("employeeResources.noDepartmentResources")}
+                        </span>
+                      )}
+                    </div>
+                    <Button
+                      type="link"
+                      size="small"
+                      icon={<Plus size={14} />}
+                      disabled={!assignments.catalogReady}
+                      onClick={() => setPicker({ scope: scope.id, kind })}
+                    >
+                      {t(
+                        kind === "experts"
+                          ? "employeeResources.manageExperts"
+                          : "employeeResources.manageSkills",
+                      )}
+                    </Button>
+                  </div>
+                );
+              })}
+              <p className={styles.poolFootnote}>
+                {t("employeeResources.poolDoesNotAssign")}
+              </p>
+            </div>
+          )}
+          <div className={styles.peopleToolbar}>
+            <Input
+              prefix={<Search size={14} />}
+              aria-label={t("employeeResources.searchPeople")}
+              placeholder={t("employeeResources.searchPeople")}
+              value={search}
+              onChange={(e) => {
+                setSearch(e.target.value);
+                setSelected([]);
+              }}
+              allowClear
+              className={styles.peopleSearch}
+            />
+            <Select
+              aria-label={t("communication.status")}
+              value={status}
+              onChange={setStatus}
+              options={[
+                { value: "all", label: t("employeeResources.allStatuses") },
+                { value: "active", label: t("communication.active") },
+                { value: "disabled", label: t("communication.disabled") },
+              ]}
+            />
+            <Tooltip title={t("communication.refresh")}>
+              <Button
+                aria-label={t("communication.refresh")}
+                icon={<RefreshCw size={14} />}
+                loading={loading}
+                onClick={() =>
+                  void refresh().catch((e) =>
+                    setError(communicationErrorText(e, t)),
+                  )
+                }
+              />
+            </Tooltip>
+          </div>
+          {!!selected.length && (
+            <div className={styles.batchBar}>
+              <span>
+                {t("employeeResources.batchCount", { count: selected.length })}
+              </span>
+              {(["experts", "skills", "department"] as const).map((kind) => (
+                <Button
+                  key={kind}
+                  size="small"
+                  onClick={() => void openBatch(kind)}
+                  disabled={
+                    preparing ||
+                    !assignments.catalogReady ||
+                    selectedEmployees.length !== selected.length
+                  }
+                >
+                  {t(`employeeResources.batch.${kind}`)}
+                </Button>
+              ))}
+              <Button size="small" type="text" onClick={() => setSelected([])}>
+                {t("expertAccess.clear")}
+              </Button>
+            </div>
+          )}
+          <Table<CommunicationUser>
+            className={styles.employeeTable}
+            rowKey="user_id"
+            size="middle"
+            loading={loading}
+            dataSource={members}
+            scroll={{ x: isAdmin ? (searching ? 900 : 780) : 420 }}
+            pagination={{ pageSize: 20, hideOnSinglePage: true }}
+            rowSelection={
+              isAdmin
+                ? {
+                    selectedRowKeys: selected,
+                    onChange: (values) => setSelected(values.map(String)),
+                    getCheckboxProps: (person) => ({
+                      disabled:
+                        employeeDisabled(person) ||
+                        (selected.length > 0 &&
+                          !selected.includes(person.user_id) &&
+                          scopeFor(
+                            users.find((p) => p.user_id === selected[0]),
+                          ) !== scopeFor(person)),
+                    }),
+                  }
+                : undefined
+            }
+            columns={[
+              {
+                title: t("employeeResources.employee"),
+                width: 200,
+                render: (_, p) => (
+                  <div className={styles.employeeIdentity}>
+                    <Avatar shape="square" size={32}>
+                      {p.nickname.slice(0, 2)}
+                    </Avatar>
+                    <div>
+                      <strong>
+                        {p.nickname}
+                        {p.status !== "active" && (
+                          <Tag className={styles.statusTag}>
+                            {t("communication.disabled")}
+                          </Tag>
+                        )}
+                      </strong>
+                      <small>
+                        {employeeFor(p)?.username ??
+                          p.user_id.split(":").at(-1)}
+                      </small>
+                    </div>
+                  </div>
+                ),
+              },
+              ...(searching
+                ? [
+                    {
+                      title: t("communication.department"),
+                      width: 130,
+                      render: (_: unknown, p: CommunicationUser) => (
+                        <button
+                          className={styles.linkText}
+                          onClick={() => selectScope(scopeFor(p))}
+                        >
+                          {scopeName(scopeFor(p))}
+                        </button>
+                      ),
+                    },
+                  ]
+                : []),
+              {
+                title: t("communication.jobTitle"),
+                width: 130,
+                render: (_, p) =>
+                  isAdmin ? (
+                    <Button
+                      type="text"
+                      size="small"
+                      className={styles.positionButton}
+                      disabled={employeeDisabled(p)}
+                      onClick={() => openEmployee(p, "basic")}
+                    >
+                      {p.job_title || t("communication.noJobTitle")}
+                      <ChevronDown size={12} />
+                    </Button>
+                  ) : (
+                    <span>{p.job_title || t("communication.noJobTitle")}</span>
+                  ),
+              },
+              ...(isAdmin
+                ? [
+                    {
+                      title: t("expertAccess.experts"),
+                      width: 220,
+                      render: (_: unknown, p: CommunicationUser) => {
+                        const e = employeeFor(p);
+                        if (!e) return "—";
+                        if (
+                          e.membership_status &&
+                          e.membership_status !== "current"
+                        )
+                          return (
+                            <Tag color="gold">
+                              {t("employeeResources.membershipPending")}
+                            </Tag>
+                          );
+                        if (e.mode === "legacy")
+                          return <Tag>{t("expertAccess.legacy")}</Tag>;
+                        if (!e.expert_ids.length)
+                          return (
+                            <span className={styles.waiting}>
+                              {t("employeeResources.noExpertAssigned")}
+                            </span>
+                          );
+                        return (
+                          <Space size={[4, 4]} wrap>
+                            {e.expert_ids.slice(0, 2).map((id) => (
+                              <Tag className={styles.expertChip} key={id}>
+                                {resourceName("experts", id)}
+                              </Tag>
+                            ))}
+                            {e.expert_ids.length > 2 && (
+                              <Tooltip
+                                title={e.expert_ids
+                                  .slice(2)
+                                  .map(
+                                    (id) =>
+                                      data?.experts.find(
+                                        (x) => x.agent_id === id,
+                                      )?.name ?? id,
+                                  )
+                                  .join("、")}
+                              >
+                                <Tag>+{e.expert_ids.length - 2}</Tag>
+                              </Tooltip>
+                            )}
+                          </Space>
+                        );
+                      },
+                    },
+                    {
+                      title: t("employeeResources.skillPermissions"),
+                      width: 150,
+                      render: (_: unknown, p: CommunicationUser) => {
+                        const e = employeeFor(p);
+                        if (!e || !data) return "—";
+                        if (
+                          e.membership_status &&
+                          e.membership_status !== "current"
+                        )
+                          return (
+                            <Tag color="gold">
+                              {t("employeeResources.membershipPending")}
+                            </Tag>
+                          );
+                        if (!assignments.catalogReady)
+                          return (
+                            <span className={styles.hint}>
+                              {t("employeeResources.catalogPending")}
+                            </span>
+                          );
+                        if (e.mode === "legacy")
+                          return (
+                            <span className={styles.hint}>
+                              {t("expertAccess.legacy")}
+                            </span>
+                          );
+                        const skills = effectiveSkills(
+                          data,
+                          e.expert_ids,
+                          e.skill_ids ?? [],
+                        );
+                        return (
+                          <Tooltip
+                            title={t("employeeResources.breakdown", {
+                              defaults: skills.defaults.length,
+                              provided: skills.provided.length,
+                              extra: skills.extra.length,
+                            })}
+                          >
+                            <button
+                              className={styles.skillSummary}
+                              onClick={() => openEmployee(p, "skills")}
+                            >
+                              <Puzzle size={14} />
+                              {t("employeeResources.skillTotal", {
+                                count: skills.total,
+                              })}
+                            </button>
+                          </Tooltip>
+                        );
+                      },
+                    },
+                    {
+                      title: t("communication.actions"),
+                      width: 80,
+                      fixed: "right" as const,
+                      render: (_: unknown, p: CommunicationUser) => (
+                        <Button
+                          size="small"
+                          aria-label={`${p.nickname} ${t("common.edit")}`}
+                          disabled={employeeDisabled(p) || busy}
+                          onClick={() => openEmployee(p, "experts")}
+                        >
+                          {t("common.edit")}
+                        </Button>
+                      ),
+                    },
+                  ]
+                : []),
+            ]}
+          />
+        </section>
+      </div>
       <p className={styles.pageFootnote}>
         <LockKeyhole size={13} />
         {t("employeeResources.pageFootnote")}
@@ -1097,6 +1105,7 @@ export default function CompanyStructure({
       </Modal>
       <Modal
         open={companySettings}
+        width={600}
         title={t("employeeResources.companySettings")}
         onCancel={() => setCompanySettings(false)}
         confirmLoading={busy}
@@ -1118,6 +1127,20 @@ export default function CompanyStructure({
           onChange={(e) => setName(e.target.value)}
         />
         <p className={styles.hint}>{t("communication.directoryNameHint")}</p>
+        {isAdmin && data && (
+          <div className={styles.settingsSource}>
+            <ExpertAssignmentSource
+              data={data}
+              onSaved={assignments.reload}
+              onInstalled={() => {
+                setCompanySettings(false);
+                setInstalled(true);
+              }}
+              catalogReady={assignments.catalogReady}
+            />
+            <p className={styles.hint}>{t("expertAccess.sourceHint")}</p>
+          </div>
+        )}
       </Modal>
       <Drawer
         open={installed}
@@ -1192,6 +1215,12 @@ export default function CompanyStructure({
           ]}
         />
       </Drawer>
+      {groupDirectory && (
+        <CompanyGroupDirectory
+          close={() => setGroupDirectory(false)}
+          manage={setGroup}
+        />
+      )}
       {group && renderGroup(group, () => setGroup(""))}
     </div>
   );

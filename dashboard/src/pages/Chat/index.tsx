@@ -260,6 +260,10 @@ function ChatPageInner() {
     () => selectEnabledExperts(agents, resolvedAgentId, { pinActive: false }),
     [agents, resolvedAgentId],
   );
+  const historyAgents = useMemo(
+    () => agents.filter((agent) => !agent.requires_private_instance),
+    [agents],
+  );
 
   const {
     status: memoryMaint,
@@ -304,6 +308,10 @@ function ChatPageInner() {
   const handleLoadMoreSessions = useCallback(() => {
     void loadMoreSessions(activeThreadId ?? undefined);
   }, [loadMoreSessions, activeThreadId]);
+
+  const handleRefreshSessions = useCallback(() => {
+    void fetchSessions(activeThreadId ?? undefined);
+  }, [fetchSessions, activeThreadId]);
 
   const handleFetchAllSessions = useCallback(() => {
     void fetchAllSessions(activeThreadId ?? undefined);
@@ -559,8 +567,22 @@ function ChatPageInner() {
     [sessions, activeThreadId],
   );
 
+  const boundProjectId =
+    activeThreadId && desktopProjects.state?.threads[activeThreadId];
+  const boundProject = boundProjectId
+    ? desktopProjects.state?.projects[boundProjectId]
+    : undefined;
+  const hasSavedHistory = Boolean(
+    activeThreadId && (composerSession?.hasMessages || messages.length),
+  );
+  const desktopProjectHistoryReadOnly =
+    desktopProjects.available &&
+    desktopProjects.state?.supported !== false &&
+    hasSavedHistory &&
+    (!boundProject?.authorized || !agentChatReady);
   const companyHistoryReadOnly =
     Boolean(activeAgent?.history_only) ||
+    desktopProjectHistoryReadOnly ||
     (isCompanyDesktop() &&
       composerSession?.executionLocation === "server" &&
       Boolean(composerSession.hasMessages));
@@ -769,6 +791,7 @@ function ChatPageInner() {
       attachments?: ChatAttachment[],
       overrides?: ChatSendOverrides,
     ) => {
+      if (companyHistoryReadOnly) return;
       if (interceptUserMessage(text)) {
         // The workflow intercepted the message — don't send it to the agent
         return;
@@ -806,6 +829,7 @@ function ChatPageInner() {
       handleSend(text, attachments, overrides);
     },
     [
+      companyHistoryReadOnly,
       interceptUserMessage,
       handleSend,
       pendingAsk,
@@ -1189,11 +1213,13 @@ function ChatPageInner() {
   );
 
   const [forking, setForking] = useState(false);
-  const forkDisabled = forking || isStreaming || hasPendingHitlPause;
-  const forkDisabledHint =
-    !forking && (isStreaming || hasPendingHitlPause)
-      ? t("chat.forkDisabledWhileBusy")
-      : undefined;
+  const forkDisabled =
+    companyHistoryReadOnly || forking || isStreaming || hasPendingHitlPause;
+  const forkDisabledHint = companyHistoryReadOnly
+    ? t("chat.forkNeedsProject")
+    : !forking && (isStreaming || hasPendingHitlPause)
+    ? t("chat.forkDisabledWhileBusy")
+    : undefined;
   const hasAssistantReply = useMemo(
     () =>
       messages.some(
@@ -1347,11 +1373,13 @@ function ChatPageInner() {
       isSidebarResizing={isSidebarResizing}
       sidebarElRef={sidebarElRef}
       agents={sidebarAgents}
+      historyAgents={historyAgents}
       sessions={sessions}
       activeThreadId={activeThreadId}
       resolvedAgentId={resolvedAgentId}
       sessionsHasMore={sessionsHasMore}
       sessionsLoadingMore={sessionsLoadingMore}
+      onRefreshSessions={handleRefreshSessions}
       onLoadMoreSessions={handleLoadMoreSessions}
       onFetchAllSessions={handleFetchAllSessions}
       onSelectSession={(sessionId, agentId) => {
@@ -1552,7 +1580,7 @@ function ChatPageInner() {
               />
             )}
             <div className={styles.chatContent}>
-              {!agentChatReady || noAgents ? (
+              {(!agentChatReady && !companyHistoryReadOnly) || noAgents ? (
                 <AgentNotReadyScreen
                   agent={activeAgent}
                   noAgents={noAgents}
@@ -1615,19 +1643,31 @@ function ChatPageInner() {
                     thinkingStartedAt={thinkingStartedAt}
                     localPreparing={localPreparing}
                     sessionKey={activeThreadId ?? undefined}
-                    onRegenerate={handleRegenerate}
+                    onRegenerate={
+                      companyHistoryReadOnly ? undefined : handleRegenerate
+                    }
                     onDisableStreamUsage={
                       userCan(user, "providers")
                         ? handleDisableStreamUsage
                         : undefined
                     }
-                    onEditUserMessage={handleEditUserMessage}
-                    onWithdrawSteer={handleWithdrawSteer}
+                    onEditUserMessage={
+                      companyHistoryReadOnly ? undefined : handleEditUserMessage
+                    }
+                    onWithdrawSteer={
+                      companyHistoryReadOnly ? undefined : handleWithdrawSteer
+                    }
                     onForkAssistantMessage={handleForkAssistantMessage}
                     forkDisabled={forkDisabled}
                     forkDisabledHint={forkDisabledHint}
-                    onAcpPermissionSelect={handleAcpPermissionSelect}
-                    onHitlDecision={handleHitlDecision}
+                    onAcpPermissionSelect={
+                      companyHistoryReadOnly
+                        ? undefined
+                        : handleAcpPermissionSelect
+                    }
+                    onHitlDecision={
+                      companyHistoryReadOnly ? undefined : handleHitlDecision
+                    }
                     onTurnRailVisibilityChange={setTurnRailVisible}
                     onOpenBrowser={hasBrowserTool ? openBrowserTab : undefined}
                     onEditFile={
@@ -1813,7 +1853,7 @@ function ChatPageInner() {
                 </div>
               )}
 
-            {pendingAsk ? (
+            {pendingAsk && !companyHistoryReadOnly ? (
               <div className={styles.askQuestionDock}>
                 <div className={styles.askQuestionDockInner}>
                   <AskQuestionCard
@@ -1833,7 +1873,9 @@ function ChatPageInner() {
                 </div>
               </div>
             ) : null}
-            {conversationMode === "plan" && pendingPlanPath ? (
+            {conversationMode === "plan" &&
+            pendingPlanPath &&
+            !companyHistoryReadOnly ? (
               <div className={styles.askQuestionDock}>
                 <div className={styles.askQuestionDockInner}>
                   <PlanReadyCard

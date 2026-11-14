@@ -21,6 +21,7 @@ from octop.infra.db.repos.devices import DeviceRepo
 from octop.infra.db.repos.employee_resources import EmployeeResourceRepo
 from octop.infra.db.repos.execution import ExecutionRepo
 from octop.infra.db.repos.expert_assignments import ExpertAssignmentRepo
+from octop.infra.db.repos.group_experts import GroupExpertRepo
 from octop.infra.db.repos.invites import InviteRepo
 from octop.infra.db.repos.knowledge import KnowledgeRepo
 from octop.infra.db.repos.proactive_care_config import ProactiveCareConfigRepo
@@ -54,6 +55,10 @@ class RepoBundle:
     @property
     def execution_repo(self) -> ExecutionRepo:
         return ExecutionRepo(self.db)
+
+    @property
+    def group_expert_repo(self) -> GroupExpertRepo:
+        return GroupExpertRepo(self.db)
 
     @property
     def resource_manifest_repo(self) -> ResourceManifestRepo:
@@ -146,6 +151,10 @@ class SharedServices:
     @property
     def execution_repo(self) -> ExecutionRepo:
         return self.repos.execution_repo
+
+    @property
+    def group_expert_repo(self) -> GroupExpertRepo:
+        return self.repos.group_expert_repo
 
     @property
     def resource_manifest_repo(self) -> ResourceManifestRepo:

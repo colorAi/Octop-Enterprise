@@ -1,6 +1,6 @@
 # 资源快照落盘与发布边界
 
-员工实例准备和桌面导出使用的定义、技能及附件固定为同一份不可变 manifest。schema 28 建立员工运行快照；schema 29 进一步增加隔离 worker 的管理员源发布指针。单体继续使用 `legacy_content` 内容校验，产品版本不变。
+员工实例准备和桌面导出使用的定义、技能及附件固定为同一份不可变 manifest。schema 28 建立员工运行快照；schema 29 进一步增加隔离 worker 的管理员源发布指针。单体继续使用 `legacy_content` 内容校验。
 
 ## 隔离 worker 的发布路径（schema 29）
 

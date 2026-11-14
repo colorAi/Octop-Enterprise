@@ -2,7 +2,7 @@
 
 [中文](updates.md)
 
-Octop Enterprise is built and upgraded by administrators from this repository's source. Configuration updates refresh permissions, model access and feature settings; software updates upgrade the server, client interface and tool environment.
+Administrators build and upgrade the Octop Enterprise server from this repository's source and distribute matching client installers. Configuration updates refresh permissions, model access and feature settings; software updates upgrade the server, client interface and tool environment.
 
 ## Routine permission and feature configuration
 

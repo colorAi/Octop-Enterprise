@@ -98,7 +98,7 @@ async def test_previous_publication_upgrades_display_data_without_a_manual_save(
     assert (await publication.current())[1]["format"] == "octop.source-resources.v1"
     monkeypatch.setattr(publication, "capture", capture)
     await publication.refresh()
-    assert (await publication.current())[1]["format"] == "octop.source-resources.v3"
+    assert (await publication.current())[1]["format"] == "octop.source-resources.v4"
     assert "presentation" in (await e.service.definition("source"))
 
 

@@ -142,19 +142,20 @@ func (h *Hub) register(user string, c *websocket.Conn) {
 }
 
 func (h *Hub) writeLoop(cn *conn) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
-	defer cancel()
 	ticker := time.NewTicker(45 * time.Second)
 	defer ticker.Stop()
 	for {
 		select {
 		case msg := <-cn.send:
-			if err := cn.c.Write(ctx, websocket.MessageText, msg); err != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			err := cn.c.Write(ctx, websocket.MessageText, msg)
+			cancel()
+			if err != nil {
 				cn.shutdown(websocket.StatusNormalClosure, "")
 				return
 			}
 		case <-ticker.C:
-			pingCtx, pingCancel := context.WithTimeout(ctx, 10*time.Second)
+			pingCtx, pingCancel := context.WithTimeout(context.Background(), 10*time.Second)
 			err := cn.c.Ping(pingCtx)
 			pingCancel()
 			if err != nil {
@@ -169,9 +170,8 @@ func (h *Hub) writeLoop(cn *conn) {
 
 func (h *Hub) readLoop(cn *conn) {
 	for {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-		_, data, err := cn.c.Read(ctx)
-		cancel()
+		// The writer's ping timeout detects dead peers while this read handles pongs.
+		_, data, err := cn.c.Read(context.Background())
 		if err != nil {
 			return
 		}

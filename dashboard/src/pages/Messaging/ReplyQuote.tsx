@@ -25,6 +25,7 @@ export default function ReplyQuote({
   const [unavailable, setUnavailable] = useState(false);
   const preview = message.reply_preview;
   const sender = (item: CommunicationMessage) =>
+    item.expert?.display_name ||
     state.contacts[item.sender_id]?.nickname ||
     (item.sender_id === state.profile?.user_id
       ? state.profile.nickname

@@ -205,12 +205,19 @@ class ThreadRepo:
         return map_rows(rows, ThreadRow)
 
     def list_by_agent_user(
-        self, *, agent_id: str, user_id: int, limit: int = 50
+        self, *, agent_id: str, user_id: int, limit: int = 50, web_only: bool = False
     ) -> list[ThreadRow]:
+        scope = (
+            "AND NOT EXISTS (SELECT 1 FROM company_runtime_threads local "
+            "WHERE local.thread_id=threads.thread_id) "
+            if web_only
+            else ""
+        )
         with self._db.connect() as conn:
             rows = conn.execute(
                 "SELECT * FROM threads WHERE agent_id = ? AND user_id = ? "
-                "ORDER BY pinned DESC, "
+                + scope
+                + "ORDER BY pinned DESC, "
                 "CASE WHEN last_active > 0 THEN last_active ELSE created_at END DESC, "
                 "thread_id DESC LIMIT ?",
                 (agent_id, user_id, limit),

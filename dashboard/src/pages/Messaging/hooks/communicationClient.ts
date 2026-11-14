@@ -88,7 +88,7 @@ export class CommunicationClient {
   private visibility = 0;
   private histories = new Map<
     string,
-    { promise: Promise<void>; controller: AbortController }
+    { promise: Promise<void>; controller: AbortController; refresh?: boolean }
   >();
   private readonly identity: string;
   private readonly hasContacts: boolean;
@@ -323,6 +323,7 @@ export class CommunicationClient {
     let resnapshot = false,
       changed = false;
     const affected = new Set<string>();
+    const expertMessages = new Map<string, Set<string>>();
     try {
       for (;;) {
         const page = await communicationApi.sync(
@@ -362,7 +363,17 @@ export class CommunicationClient {
               },
             });
           }
-          if (typeof conv === "string") affected.add(conv);
+          if (typeof conv === "string") {
+            if (event.type === "group.expert.call") {
+              const ids = expertMessages.get(conv) ?? new Set<string>();
+              ids.add(
+                typeof event.payload.message_id === "string"
+                  ? event.payload.message_id
+                  : event.object_id,
+              );
+              expertMessages.set(conv, ids);
+            } else affected.add(conv);
+          }
           if (event.type === "message.recall") {
             const histories = { ...this.state.histories };
             for (const [id, items] of Object.entries(histories))
@@ -407,12 +418,15 @@ export class CommunicationClient {
         if (changed) await this.refreshMetadata();
         if (this.focused && affected.has(this.focused))
           await this.loadHistory(this.focused);
+        for (const [conv, ids] of expertMessages)
+          await this.refreshExpertMessages(conv, ids);
         if (!this.valid()) return;
         this.cursor = page.cursor;
         this.update({ error: null, sequence });
         if (!page.has_more) break;
         changed = false;
         affected.clear();
+        expertMessages.clear();
       }
     } catch (error) {
       if (communicationError(error).code === "sync_cursor_expired") {
@@ -422,6 +436,82 @@ export class CommunicationClient {
       }
       throw error;
     }
+  }
+  private refreshExpertMessages(conv: string, ids: Set<string>): Promise<void> {
+    // Serialize with history reads so late page responses cannot overwrite the
+    // event's state. Unloaded messages get current state when paged into view.
+    if (!this.valid()) return Promise.resolve();
+    const existing = this.histories.get(conv);
+    if (existing)
+      return existing.promise.then(() => this.refreshExpertMessages(conv, ids));
+    const revision = this.visibility;
+    const cached = (this.state.histories[conv] ?? []).filter((message) =>
+      ids.has(message.message_id),
+    );
+    if (!cached.length) return Promise.resolve();
+    const controller = new AbortController();
+    const abort = () => controller.abort();
+    this.controller.signal.addEventListener("abort", abort, { once: true });
+    const task = (async () => {
+      try {
+        for (let start = 0; start < cached.length; start += 4) {
+          const updates = new Map<string, CommunicationMessage | null>(
+            await Promise.all(
+              cached.slice(start, start + 4).map(async ({ message_id }) => {
+                try {
+                  const message = await communicationApi.message(
+                    conv,
+                    message_id,
+                    controller.signal,
+                  );
+                  return [message_id, message] as const;
+                } catch (error) {
+                  // A clear on another device can take effect before its sync
+                  // event reaches this page. Keep pulling past the stale event.
+                  if (communicationError(error).status !== 404) throw error;
+                  return [message_id, null] as const;
+                }
+              }),
+            ),
+          );
+          if (
+            controller.signal.aborted ||
+            !this.valid() ||
+            this.visibility !== revision
+          )
+            return;
+          // Keep quote and mention fields from history. The single-message
+          // endpoint supplies the call state and can confirm a recall.
+          this.update({
+            histories: {
+              ...this.state.histories,
+              [conv]: (this.state.histories[conv] ?? []).flatMap((message) => {
+                const current = updates.get(message.message_id);
+                if (current === null) return [];
+                if (!current) return [message];
+                const updated = {
+                  ...message,
+                  expert_call: current.expert_call ?? message.expert_call,
+                };
+                if (current.recalled)
+                  return [
+                    { ...updated, recalled: true, text: null, attachments: [] },
+                  ];
+                return [updated];
+              }),
+            },
+          });
+        }
+      } catch (error) {
+        if (!controller.signal.aborted) throw error;
+      } finally {
+        this.controller.signal.removeEventListener("abort", abort);
+        if (this.histories.get(conv)?.controller === controller)
+          this.histories.delete(conv);
+      }
+    })();
+    this.histories.set(conv, { promise: task, controller, refresh: true });
+    return task;
   }
   focus(conv: string | null) {
     this.focused = conv;
@@ -435,9 +525,9 @@ export class CommunicationClient {
     if (!this.valid()) return Promise.resolve();
     const existing = this.histories.get(conv);
     if (existing)
-      return older
+      return older && !existing.refresh
         ? existing.promise
-        : existing.promise.then(() => this.loadHistory(conv));
+        : existing.promise.then(() => this.loadHistory(conv, older));
     const rev = this.visibility;
     const controller = new AbortController();
     const abort = () => controller.abort();
@@ -590,6 +680,8 @@ export class CommunicationClient {
         client_message_id: body.client_message_id,
         mention_user_ids: body.mention_user_ids,
         mention_all: body.mention_all,
+        mention_expert_id: body.mention_expert_id,
+        expert_call: receipt.expert_call,
         attachments: body.asset_ids?.map(
           (asset_id) =>
             this.state.assets[asset_id] ?? {

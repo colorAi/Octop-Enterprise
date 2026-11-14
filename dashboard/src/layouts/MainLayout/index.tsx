@@ -29,6 +29,7 @@ import { routeNeedsPermission } from "../../utils/permissions";
 import { useLayoutMode } from "../../context/LayoutModeContext";
 import { useDashboardPushToast } from "../../hooks/useDashboardPushToast";
 import { useCurrentUser } from "../../hooks/useCurrentUser";
+import GroupExpertSyncBanner from "../../components/GroupExpertSyncBanner";
 import { isConversationPath } from "../ConversationNavigation";
 import ConversationRoutes from "../ConversationRoutes";
 
@@ -330,6 +331,7 @@ export default function MainLayout() {
                     }}
                   >
                     <PwaUpdatePrompt />
+                    {user?.role === "admin" && <GroupExpertSyncBanner />}
                     <ClientConfigUpdatePrompt />
                     <PwaAutoPrompt />
 

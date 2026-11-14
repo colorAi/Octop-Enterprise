@@ -19,6 +19,48 @@ class RuntimeConflict(ValueError):
     pass
 
 
+def latest_checkpoint_id(conn: Any, thread: str, namespace: str) -> str | None:
+    scope = (thread, namespace)
+    row = conn.execute(
+        "SELECT COALESCE("
+        "(SELECT checkpoint_id FROM company_runtime_checkpoint_heads WHERE thread_id=? AND namespace=?),"
+        "(SELECT MAX(checkpoint_id) FROM company_runtime_checkpoints WHERE thread_id=? AND namespace=?))",
+        (*scope, *scope),
+    ).fetchone()
+    checkpoint_id: str | None = row[0]
+    return checkpoint_id
+
+
+def save_checkpoint(
+    conn: Any, thread: str, namespace: str, checkpoint_id: str, payload: dict[str, Any]
+) -> None:
+    scope = (thread, namespace, checkpoint_id)
+    wire = encode(payload)
+    inserted = conn.execute(
+        "INSERT INTO company_runtime_checkpoints(thread_id,namespace,checkpoint_id,payload) "
+        "VALUES(?,?,?,?) ON CONFLICT(thread_id,namespace,checkpoint_id) DO NOTHING "
+        "RETURNING checkpoint_id",
+        (*scope, wire),
+    ).fetchone()
+    if inserted is None:
+        old = conn.execute(
+            "SELECT payload FROM company_runtime_checkpoints "
+            "WHERE thread_id=? AND namespace=? AND checkpoint_id=?",
+            scope,
+        ).fetchone()
+        if old["payload"] != wire:
+            raise RuntimeConflict("checkpoint_identity_conflict")
+        return
+    # A replay of an existing row never rewinds the head. Device UUID clocks
+    # are unrelated to the order in which the task commits its checkpoints.
+    conn.execute(
+        "INSERT INTO company_runtime_checkpoint_heads(thread_id,namespace,checkpoint_id) "
+        "VALUES(?,?,?) ON CONFLICT(thread_id,namespace) DO UPDATE "
+        "SET checkpoint_id=excluded.checkpoint_id",
+        scope,
+    )
+
+
 class CompanyRuntimeRepo:
     def __init__(self, db: DatabasePool) -> None:
         self.db = db
@@ -97,7 +139,7 @@ class CompanyRuntimeRepo:
             if not thread or thread["user_id"] != owner or thread["agent_id"] != agent_id:
                 raise RuntimeConflict("thread_not_owned")
             project = conn.execute(
-                "SELECT p.project_id,p.installation_hash,p.owner_user_id FROM company_project_threads t "
+                "SELECT p.project_id,p.owner_user_id FROM company_project_threads t "
                 "JOIN company_projects p ON p.project_id=t.project_id WHERE t.thread_id=?",
                 (thread_id,),
             ).fetchone()
@@ -106,7 +148,6 @@ class CompanyRuntimeRepo:
                     raise RuntimeConflict("project_runtime_required")
                 if (
                     request["project_id"] != project["project_id"]
-                    or project["installation_hash"] != installation_hash
                     or project["owner_user_id"] != owner
                 ):
                     raise RuntimeConflict("thread_project_conflict")
@@ -120,15 +161,19 @@ class CompanyRuntimeRepo:
                     existing["thread_id"] != thread_id
                     or existing["device_id"] != device_id
                     or existing["request_json"] != encode(request)
+                    or existing["installation_hash"] not in (None, installation_hash)
                 ):
                     raise RuntimeConflict("task_identity_conflict")
                 return dict(existing)
             if (
                 project
                 and conn.execute(
-                    "SELECT 1 FROM company_runtime_tasks t JOIN company_project_threads p ON p.thread_id=t.thread_id "
-                    "WHERE p.project_id=? AND t.status IN ('running','cancel_requested','unknown') LIMIT 1",
-                    (project["project_id"],),
+                    "SELECT 1 FROM company_runtime_tasks t "
+                    "JOIN company_runtime_threads b ON b.thread_id=t.thread_id "
+                    "JOIN company_project_threads p ON p.thread_id=t.thread_id "
+                    "WHERE p.project_id=? AND COALESCE(t.installation_hash,b.installation_hash)=? "
+                    "AND t.status IN ('running','cancel_requested','unknown') LIMIT 1",
+                    (project["project_id"], installation_hash),
                 ).fetchone()
             ):
                 raise RuntimeConflict("project_already_running")
@@ -139,7 +184,7 @@ class CompanyRuntimeRepo:
             binding = conn.execute(
                 "SELECT * FROM company_runtime_threads WHERE thread_id=?", (thread_id,)
             ).fetchone()
-            if binding and binding["installation_hash"] != installation_hash:
+            if not project and binding and binding["installation_hash"] != installation_hash:
                 raise RuntimeConflict("project_on_another_device")
             if not binding:
                 has_history = conn.execute(
@@ -172,25 +217,18 @@ class CompanyRuntimeRepo:
                     "SELECT task_id FROM company_runtime_tasks WHERE thread_id=? ORDER BY id DESC LIMIT 1",
                     (thread_id,),
                 ).fetchone()
-                previous_checkpoint = conn.execute(
-                    "SELECT checkpoint_id FROM company_runtime_checkpoints WHERE thread_id=? AND namespace='' ORDER BY checkpoint_id DESC LIMIT 1",
-                    (thread_id,),
-                ).fetchone()
+                previous_checkpoint = latest_checkpoint_id(conn, thread_id, "")
                 if (
                     not target
                     or target["role"] != "human"
                     or head != edit["head"]
                     or (latest["task_id"] if latest else None) != edit["task_id"]
-                    or (previous_checkpoint["checkpoint_id"] if previous_checkpoint else None)
-                    != edit["checkpoint_id"]
+                    or previous_checkpoint != edit["checkpoint_id"]
                 ):
                     raise RuntimeConflict("edit_history_changed")
                 checkpoint = edit["checkpoint"]
                 checkpoint_id = checkpoint["config"]["configurable"]["checkpoint_id"]
-                conn.execute(
-                    "INSERT INTO company_runtime_checkpoints VALUES(?,?,?,?)",
-                    (thread_id, "", checkpoint_id, encode(checkpoint)),
-                )
+                save_checkpoint(conn, thread_id, "", checkpoint_id, checkpoint)
                 conn.execute(
                     "DELETE FROM thread_messages WHERE thread_id=? AND seq>=?",
                     (thread_id, target["seq"]),
@@ -200,7 +238,8 @@ class CompanyRuntimeRepo:
                 (device_id, thread_id),
             )
             conn.execute(
-                "INSERT INTO company_runtime_tasks(task_id,thread_id,device_id,status,request_json,expert_json,recovery_hash,started_at,updated_at) VALUES(?,?,?,'running',?,?,?,?,?)",
+                "INSERT INTO company_runtime_tasks(task_id,thread_id,device_id,status,request_json,expert_json,recovery_hash,started_at,updated_at,installation_hash) "
+                "VALUES(?,?,?,'running',?,?,?,?,?,?)",
                 (
                     task_id,
                     thread_id,
@@ -210,6 +249,7 @@ class CompanyRuntimeRepo:
                     recovery_hash,
                     now,
                     now,
+                    installation_hash,
                 ),
             )
             row = conn.execute(
@@ -236,15 +276,12 @@ class CompanyRuntimeRepo:
                 "SELECT task_id FROM company_runtime_tasks WHERE thread_id=? ORDER BY id DESC LIMIT 1",
                 (thread_id,),
             ).fetchone()
-            checkpoint = conn.execute(
-                "SELECT checkpoint_id FROM company_runtime_checkpoints WHERE thread_id=? AND namespace='' ORDER BY checkpoint_id DESC LIMIT 1",
-                (thread_id,),
-            ).fetchone()
+            checkpoint = latest_checkpoint_id(conn, thread_id, "")
         return {
             "head": head,
             "task_id": latest["task_id"] if latest else None,
             "messages": [json.loads(row["message_json"]) for row in rows],
-            "checkpoint_id": checkpoint["checkpoint_id"] if checkpoint else None,
+            "checkpoint_id": checkpoint,
         }
 
     def append_event(
@@ -407,21 +444,18 @@ class CompanyRuntimeRepo:
         self, thread: str, namespace: str, checkpoint_id: str | None
     ) -> dict[str, Any] | None:
         with self.db.connect() as conn:
-            if checkpoint_id:
-                row = conn.execute(
-                    "SELECT checkpoint_id,payload FROM company_runtime_checkpoints WHERE thread_id=? AND namespace=? AND checkpoint_id=?",
-                    (thread, namespace, checkpoint_id),
-                ).fetchone()
-            else:
-                row = conn.execute(
-                    "SELECT checkpoint_id,payload FROM company_runtime_checkpoints WHERE thread_id=? AND namespace=? ORDER BY checkpoint_id DESC LIMIT 1",
-                    (thread, namespace),
-                ).fetchone()
+            checkpoint_id = checkpoint_id or latest_checkpoint_id(conn, thread, namespace)
+            if checkpoint_id is None:
+                return None
+            row = conn.execute(
+                "SELECT payload FROM company_runtime_checkpoints WHERE thread_id=? AND namespace=? AND checkpoint_id=?",
+                (thread, namespace, checkpoint_id),
+            ).fetchone()
             if not row:
                 return None
             writes = conn.execute(
                 "SELECT payload FROM company_runtime_writes WHERE thread_id=? AND namespace=? AND checkpoint_id=? ORDER BY task_key,idx",
-                (thread, namespace, row["checkpoint_id"]),
+                (thread, namespace, checkpoint_id),
             ).fetchall()
         return {
             **json.loads(row["payload"]),
@@ -432,18 +466,7 @@ class CompanyRuntimeRepo:
         self, thread: str, namespace: str, checkpoint_id: str, payload: dict[str, Any]
     ) -> None:
         with self.db.transaction() as conn:
-            old = conn.execute(
-                "SELECT payload FROM company_runtime_checkpoints WHERE thread_id=? AND namespace=? AND checkpoint_id=?",
-                (thread, namespace, checkpoint_id),
-            ).fetchone()
-            if old:
-                if old["payload"] != encode(payload):
-                    raise RuntimeConflict("checkpoint_identity_conflict")
-                return
-            conn.execute(
-                "INSERT INTO company_runtime_checkpoints VALUES(?,?,?,?)",
-                (thread, namespace, checkpoint_id, encode(payload)),
-            )
+            save_checkpoint(conn, thread, namespace, checkpoint_id, payload)
 
     def checkpoint_batch(self, task_id: str, thread: str, operations: list[dict[str, Any]]) -> None:
         """Commit a device's ordered outbox atomically while its task owns the thread."""
@@ -464,19 +487,7 @@ class CompanyRuntimeRepo:
             for item in operations:
                 namespace, checkpoint_id = item["namespace"], item["checkpoint_id"]
                 if item["action"] == "put":
-                    payload = encode(item["payload"])
-                    old = conn.execute(
-                        "SELECT payload FROM company_runtime_checkpoints WHERE thread_id=? AND namespace=? AND checkpoint_id=?",
-                        (thread, namespace, checkpoint_id),
-                    ).fetchone()
-                    if old:
-                        if old["payload"] != payload:
-                            raise RuntimeConflict("checkpoint_identity_conflict")
-                    else:
-                        conn.execute(
-                            "INSERT INTO company_runtime_checkpoints VALUES(?,?,?,?)",
-                            (thread, namespace, checkpoint_id, payload),
-                        )
+                    save_checkpoint(conn, thread, namespace, checkpoint_id, item["payload"])
                 else:
                     for write in item["writes"]:
                         conn.execute(
@@ -604,7 +615,9 @@ class CompanyRuntimeRepo:
             if (
                 not binding
                 or binding["owner_user_id"] != owner
-                or not hmac.compare_digest(binding["installation_hash"], installation_hash)
+                or not hmac.compare_digest(
+                    task["installation_hash"] or binding["installation_hash"], installation_hash
+                )
                 or not hmac.compare_digest(task["recovery_hash"], recovery_hash)
             ):
                 raise RuntimeConflict("recovery_not_owned")
@@ -628,8 +641,9 @@ class CompanyRuntimeRepo:
                 (device_id, status, int(time.time()), task_id),
             )
             conn.execute(
-                "UPDATE company_runtime_threads SET device_id=? WHERE thread_id=?",
-                (device_id, task["thread_id"]),
+                "UPDATE company_runtime_threads SET device_id=? WHERE thread_id=? "
+                "AND NOT EXISTS (SELECT 1 FROM company_runtime_tasks WHERE thread_id=? AND id>?)",
+                (device_id, task["thread_id"], task["thread_id"], task["id"]),
             )
         return {**dict(task), "device_id": device_id, "status": status}
 

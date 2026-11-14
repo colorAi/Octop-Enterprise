@@ -75,7 +75,7 @@ GitHub 下载较慢时，可使用[夸克网盘下载](https://pan.quark.cn/s/6d
 
 员工默认没有模型使用权限，首次使用前须由管理员分配至少一个可用对话模型；仅添加模型提供商不会自动授权。
 
-自行编译客户端见[中文构建指南](docs/client-build.md)，详细操作见[企业客户端指南](docs/enterprise-client.md)。
+自行编译客户端见[客户端构建指南](docs/client-build.md)，详细操作见[企业客户端指南](docs/enterprise-client.md)。
 
 ## 文档
 
@@ -88,8 +88,6 @@ GitHub 下载较慢时，可使用[夸克网盘下载](https://pan.quark.cn/s/6d
 | [架构](docs/architecture.md)（English）/ [API](docs/api.md)（English）/ [通信服务](services/communication/README.md)（English） | 系统结构、接口与企业通信                 |
 | [更新说明](docs/updates.md)                                                                     | 配置变更、服务器升级与客户端更新         |
 
-开发、API 与桌面构建类文档当前以英文维护；员工与部署文档提供中英文两版。
-
 ## 交流群
 
 **Octop 企业版交流群**。扫码加入。
@@ -101,7 +99,6 @@ GitHub 下载较慢时，可使用[夸克网盘下载](https://pan.quark.cn/s/6d
 </div>
 
 ## 开源与致谢
-
 
 主项目和自有通信模块采用 [MIT License](LICENSE)，保留 Octop 的原始版权和许可声明。第三方依赖、素材与模板遵循各自许可证；公开源码的分发范围见 [NOTICE](NOTICE.md)。
 

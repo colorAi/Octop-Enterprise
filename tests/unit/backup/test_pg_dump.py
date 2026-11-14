@@ -97,13 +97,15 @@ def test_real_postgres_company_archive_relations(tmp_path, include_chats):
         services = build_shared_services(db=pool, paths=paths, config=OctopConfig())
         owner = services.user_repo.create(username="employee", role="user")
         services.agent_repo.create(agent_id="expert", user_id=owner, name="Expert")
-        services.thread_repo.insert(
+        services.company_project_repo.register("project", owner, "installation", "Project")
+        services.company_project_repo.create_thread(
+            "project",
+            owner,
+            "installation",
             thread_id="thread",
             agent_id="expert",
-            user_id=owner,
-            channel_type="dashboard",
-            session_key="thread",
-            last_active=0,
+            device_id="device",
+            title="Conversation",
         )
         repo = CompanyRuntimeRepo(pool)
         repo.acquire(
@@ -112,12 +114,13 @@ def test_real_postgres_company_archive_relations(tmp_path, include_chats):
             owner=owner,
             agent_id="expert",
             device_id="device",
-            request={},
+            request={"project_id": "project"},
             expert={},
             installation_hash="installation",
             recovery_hash="recovery",
         )
         repo.append_event("task", "event", 1, {"kind": "note"})
+        repo.put_checkpoint("thread", "", "z-older-checkpoint", {"saved": False})
         repo.put_checkpoint("thread", "", "checkpoint", {"saved": True})
         repo.put_writes("thread", "", "checkpoint", "write", [{"idx": 0, "value": "write"}])
         repo.begin_operation("task", "operation", "hash")
@@ -139,7 +142,8 @@ def test_real_postgres_company_archive_relations(tmp_path, include_chats):
         )
         assert repo.task("task")["status"] == ("running" if include_chats else "completed")
         assert len(repo.events("task")) == 1
-        assert repo.checkpoint("thread", "", None)["pending_writes"] == ["write"]
+        assert repo.checkpoint("thread", "", None) == {"saved": True, "pending_writes": ["write"]}
+        assert repo.thread_state("thread")["project_id"] == "project"
         assert repo.begin_operation("task", "operation", "hash")["status"] == "running"
         with pool.connect() as conn:
             assert conn.execute("SELECT COUNT(*) FROM desktop_file_threads").fetchone()[0] == 1

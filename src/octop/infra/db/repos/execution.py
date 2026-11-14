@@ -13,10 +13,13 @@ from contextlib import contextmanager
 from typing import Any
 
 from octop.infra.db.pool import DatabasePool
+from octop.infra.db.repos.token_accounting import quota_tokens
 from octop.infra.utils.ulid import new_ulid
 
 TERMINAL = frozenset({"completed", "failed", "cancelled"})
 MAX_PAYLOAD = 1024 * 1024
+DESKTOP_MODEL_UNKNOWN_HOLD_SECONDS = 30
+GROUP_EXPERT_UNKNOWN_HOLD_SECONDS = 30
 
 
 class ExecutionConflict(ValueError):
@@ -45,13 +48,17 @@ class ExecutionRepo:
         return int(conn.execute(sql).fetchone()[0])
 
     @contextmanager
-    def _transaction(self) -> Iterator[tuple[Any, int]]:
+    def _transaction(self, *, notify: bool = True) -> Iterator[tuple[Any, int]]:
         with self.db.transaction() as conn:
             conn.execute("UPDATE execution_control SET id=id WHERE id=1")
             yield conn, self._now(conn)
-            if self.db.dialect == "postgresql":
-                # Payload is intentionally constant: no content, identity or secrets.
-                conn.execute("SELECT pg_notify('octop_execution','changed')")
+            if notify:
+                self._notify(conn)
+
+    def _notify(self, conn: Any) -> None:
+        if self.db.dialect == "postgresql":
+            # Payload is intentionally constant: no content, identity or secrets.
+            conn.execute("SELECT pg_notify('octop_execution','changed')")
 
     def configure(self, *, running: int, models: int = 0, queued: int, user_queued: int) -> None:
         if min(running, queued, user_queued) < 1 or running > 256 or models < 0:
@@ -359,7 +366,7 @@ class ExecutionRepo:
             if not row:
                 raise ExecutionConflict("execution_not_found")
             models = conn.execute(
-                "SELECT reservation_id,provider,reserved,state FROM execution_reservations WHERE run_id=? AND state<>'settled'",
+                "SELECT reservation_id,provider,reserved,estimated,state FROM execution_reservations WHERE run_id=? AND state<>'settled'",
                 (run,),
             ).fetchall()
             operations = conn.execute(
@@ -434,13 +441,22 @@ class ExecutionRepo:
             )
 
     def register(
-        self, node: str, incarnation: str, role: str, *, container_id: str = "", ttl: int = 30
+        self,
+        node: str,
+        incarnation: str,
+        role: str,
+        *,
+        container_id: str = "",
+        ttl: int = 30,
+        group_expert_protocol: int = 0,
     ) -> None:
         if (
             not node
             or not incarnation
             or role not in {"web", "worker", "monolith"}
             or not 5 <= ttl <= 300
+            or group_expert_protocol not in {0, 1, 2}
+            or (group_expert_protocol and role != "worker")
         ):
             raise ValueError("invalid_execution_node")
         with self._transaction() as (conn, now):
@@ -473,6 +489,10 @@ class ExecutionRepo:
                 "incarnation=excluded.incarnation,role=excluded.role,state='ready',container_id=excluded.container_id,"
                 "lease_until=excluded.lease_until,stop_evidence=NULL,updated_at=excluded.updated_at",
                 (node, incarnation, role, container_id, now + ttl, now),
+            )
+            conn.execute(
+                "UPDATE execution_nodes SET group_expert_protocol=? WHERE node_id=? AND incarnation=?",
+                (group_expert_protocol, node, incarnation),
             )
 
     def _node(
@@ -651,6 +671,14 @@ class ExecutionRepo:
             raise ExecutionConflict("thread_not_owned")
         return row
 
+    def _subject(self, conn: Any, run: Any) -> None:
+        if run["operation"] != "group_expert":
+            self._thread(conn, run["user_id"], run["agent_id"], run["thread_id"])
+            return
+        from octop.infra.db.repos.group_experts import check_call
+
+        check_call(conn, run)
+
     def submit(
         self,
         *,
@@ -688,48 +716,69 @@ class ExecutionRepo:
                     if old["user_id"] != user or old["request_json"] != encoded:
                         raise ExecutionConflict("execution_identity_conflict")
                     return dict(old)
-            if conn.execute(
-                "SELECT 1 FROM execution_sessions WHERE thread_id=?", (thread,)
-            ).fetchone():
-                raise ExecutionConflict("thread_already_running")
-            if conn.execute(
-                "SELECT 1 FROM company_runtime_tasks WHERE thread_id=? AND status IN ('running','cancel_requested','unknown')",
-                (thread,),
-            ).fetchone():
-                raise ExecutionConflict("thread_already_running")
-            limits = conn.execute("SELECT * FROM execution_control WHERE id=1").fetchone()
-            queued = conn.execute(
-                "SELECT COUNT(*) FROM execution_runs WHERE state IN ('queued','awaiting_approval')"
-            ).fetchone()[0]
-            user_queued = conn.execute(
-                "SELECT COUNT(*) FROM execution_runs WHERE state IN ('queued','awaiting_approval') AND user_id=?",
-                (user,),
-            ).fetchone()[0]
-            if queued >= limits["max_queued"] or user_queued >= limits["max_user_queued"]:
-                raise ExecutionConflict("execution_queue_full")
-            run = new_ulid()
-            conn.execute(
-                "INSERT INTO execution_runs(run_id,user_id,agent_id,thread_id,operation,request_key,request_json,state,created_at,updated_at) VALUES(?,?,?,?,?,?,?,'queued',?,?)",
-                (run, user, agent, thread, operation, key, encoded, now, now),
+            return self._enqueue(
+                conn,
+                now,
+                user=user,
+                agent=agent,
+                thread=thread,
+                operation=operation,
+                key=key,
+                encoded=encoded,
+                schedule=schedule,
             )
-            conn.execute(
-                "INSERT INTO execution_sessions(thread_id,run_id) VALUES(?,?)", (thread, run)
-            )
-            conn.execute(
-                "INSERT INTO execution_fairness(user_id) VALUES(?) ON CONFLICT(user_id) DO NOTHING",
-                (user,),
-            )
-            if schedule:
-                conn.execute("INSERT INTO execution_schedules VALUES(?,?,?)", (*schedule, run))
-            self._event(conn, now, run, "admitted", {"type": "execution.state", "state": "queued"})
-            return dict(
-                conn.execute("SELECT * FROM execution_runs WHERE run_id=?", (run,)).fetchone()
-            )
+
+    def _enqueue(
+        self,
+        conn: Any,
+        now: int,
+        *,
+        user: int,
+        agent: str,
+        thread: str,
+        operation: str,
+        key: str,
+        encoded: str,
+        schedule: tuple[str, str] | None = None,
+    ) -> dict[str, Any]:
+        """Insert an already-authorized task under the shared admission lock."""
+        if conn.execute("SELECT 1 FROM execution_sessions WHERE thread_id=?", (thread,)).fetchone():
+            raise ExecutionConflict("thread_already_running")
+        if conn.execute(
+            "SELECT 1 FROM company_runtime_tasks WHERE thread_id=? AND status IN ('running','cancel_requested','unknown')",
+            (thread,),
+        ).fetchone():
+            raise ExecutionConflict("thread_already_running")
+        limits = conn.execute("SELECT * FROM execution_control WHERE id=1").fetchone()
+        queued = conn.execute(
+            "SELECT COUNT(*) FROM execution_runs WHERE state IN ('queued','awaiting_approval')"
+        ).fetchone()[0]
+        user_queued = conn.execute(
+            "SELECT COUNT(*) FROM execution_runs WHERE state IN ('queued','awaiting_approval') AND user_id=?",
+            (user,),
+        ).fetchone()[0]
+        if queued >= limits["max_queued"] or user_queued >= limits["max_user_queued"]:
+            raise ExecutionConflict("execution_queue_full")
+        run = new_ulid()
+        conn.execute(
+            "INSERT INTO execution_runs(run_id,user_id,agent_id,thread_id,operation,request_key,request_json,state,created_at,updated_at) VALUES(?,?,?,?,?,?,?,'queued',?,?)",
+            (run, user, agent, thread, operation, key, encoded, now, now),
+        )
+        conn.execute("INSERT INTO execution_sessions(thread_id,run_id) VALUES(?,?)", (thread, run))
+        conn.execute(
+            "INSERT INTO execution_fairness(user_id) VALUES(?) ON CONFLICT(user_id) DO NOTHING",
+            (user,),
+        )
+        if schedule:
+            conn.execute("INSERT INTO execution_schedules VALUES(?,?,?)", (*schedule, run))
+        self._event(conn, now, run, "admitted", {"type": "execution.state", "state": "queued"})
+        return dict(conn.execute("SELECT * FROM execution_runs WHERE run_id=?", (run,)).fetchone())
 
     def claim(
         self, node: str, incarnation: str, *, run_id: str | None = None
     ) -> dict[str, Any] | None:
-        with self._transaction() as (conn, now):
+        # An empty claim must not wake the worker that just found no work.
+        with self._transaction(notify=False) as (conn, now):
             process = self._node(conn, now, node, incarnation, ready=True)
             if process["role"] == "web":
                 raise ExecutionConflict("executor_role_invalid")
@@ -737,7 +786,9 @@ class ExecutionRepo:
                 0
             ]
             active = conn.execute(
-                "SELECT COUNT(*) FROM execution_runs WHERE state IN ('running','cancel_requested','unknown') AND operation<>'desktop'"
+                "SELECT COUNT(*) FROM execution_runs WHERE state IN ('running','cancel_requested','unknown') AND operation<>'desktop' "
+                "AND (state<>'unknown' OR operation<>'group_expert' OR updated_at>?)",
+                (now - GROUP_EXPERT_UNKNOWN_HOLD_SECONDS,),
             ).fetchone()[0]
             if active >= limit:
                 return None
@@ -751,24 +802,46 @@ class ExecutionRepo:
                 "LEFT JOIN execution_owners o ON o.user_id=r.user_id "
                 "LEFT JOIN execution_nodes n ON n.node_id=o.node_id "
                 "WHERE r.state='queued' AND (CAST(? AS TEXT) IS NULL OR r.run_id=?) "
+                "AND (r.operation<>'group_expert' OR (?=2 AND EXISTS("
+                "SELECT 1 FROM group_expert_calls g JOIN group_expert_controls c ON c.call_id=g.call_id "
+                "WHERE g.run_id=r.run_id AND g.admission_state='accepted' AND c.dispatch_seq IS NOT NULL AND c.cancelled=0))) "
                 "AND (o.node_id IS NULL OR (o.node_id=? AND o.incarnation=?) OR (n.state='stopped' AND n.incarnation=o.incarnation)) "
                 "AND (?=0 OR (u.role='admin' AND ?=0) OR (u.role<>'admin' AND MOD(r.user_id-1,?)=?)) "
                 "ORDER BY f.last_dispatch,r.created_at,r.run_id LIMIT 32",
-                (run_id, run_id, node, incarnation, len(nodes), index, max(1, len(nodes)), index),
+                (
+                    run_id,
+                    run_id,
+                    process["group_expert_protocol"],
+                    node,
+                    incarnation,
+                    len(nodes),
+                    index,
+                    max(1, len(nodes)),
+                    index,
+                ),
             ).fetchall()
             run = None
+            changed = False
             for candidate in runs:
                 target = self._worker_for(conn, candidate["user_id"])
                 if target is not None and target != node:
                     continue
+                if candidate["operation"] == "group_expert":
+                    from octop.infra.db.repos.group_experts import require_unknown_cooldown_expired
+
+                    try:
+                        require_unknown_cooldown_expired(conn, now, candidate["user_id"])
+                    except ExecutionConflict:
+                        # A brief cooldown must not cancel already accepted
+                        # questions in other groups. Leave them queued.
+                        continue
                 try:
-                    self._thread(
-                        conn, candidate["user_id"], candidate["agent_id"], candidate["thread_id"]
-                    )
-                except ExecutionConflict:
+                    self._subject(conn, candidate)
+                except ExecutionConflict as exc:
+                    state = "cancelled" if candidate["operation"] == "group_expert" else "failed"
                     conn.execute(
-                        "UPDATE execution_runs SET state='failed',updated_at=? WHERE run_id=?",
-                        (now, candidate["run_id"]),
+                        "UPDATE execution_runs SET state=?,updated_at=? WHERE run_id=?",
+                        (state, now, candidate["run_id"]),
                     )
                     conn.execute(
                         "DELETE FROM execution_sessions WHERE run_id=?", (candidate["run_id"],)
@@ -780,14 +853,17 @@ class ExecutionRepo:
                         "terminal",
                         {
                             "type": "execution.state",
-                            "state": "failed",
-                            "reason": "thread_not_owned",
+                            "state": state,
+                            "reason": str(exc),
                         },
                     )
+                    changed = True
                     continue
                 run = dict(candidate)
                 break
             if run is None:
+                if changed:
+                    self._notify(conn)
                 return None
             self._own_user(conn, now, run["user_id"], node, incarnation)
             owner = conn.execute(
@@ -814,6 +890,7 @@ class ExecutionRepo:
             self._event(
                 conn, now, run["run_id"], "claimed", {"type": "execution.state", "state": "running"}
             )
+            self._notify(conn)
             return dict(
                 conn.execute(
                     "SELECT * FROM execution_runs WHERE run_id=?", (run["run_id"],)
@@ -835,7 +912,7 @@ class ExecutionRepo:
     def check(self, run_id: str, node: str, incarnation: str, token: int) -> dict[str, Any]:
         with self.db.connect() as conn:
             run = self._fence(conn, self._now(conn), run_id, node, incarnation, token)
-            self._thread(conn, run["user_id"], run["agent_id"], run["thread_id"])
+            self._subject(conn, run)
             if run["state"] != "running":
                 raise ExecutionConflict("execution_" + run["state"])
             return dict(run)
@@ -843,7 +920,14 @@ class ExecutionRepo:
     def get(self, run_id: str, *, user: int | None = None) -> dict[str, Any] | None:
         with self.db.connect() as conn:
             row = conn.execute("SELECT * FROM execution_runs WHERE run_id=?", (run_id,)).fetchone()
-            return dict(row) if row and (user is None or row["user_id"] == user) else None
+            return (
+                dict(row)
+                if row
+                and (
+                    user is None or (row["user_id"] == user and row["operation"] != "group_expert")
+                )
+                else None
+            )
 
     def active(self, thread: str) -> dict[str, Any] | None:
         with self.db.connect() as conn:
@@ -854,6 +938,8 @@ class ExecutionRepo:
             return dict(row) if row else None
 
     def by_request(self, *, user: int, operation: str, key: str) -> dict[str, Any] | None:
+        if operation == "group_expert":
+            return None  # Group visibility is checked by the communication service.
         with self.db.connect() as conn:
             row = conn.execute(
                 "SELECT * FROM execution_runs WHERE user_id=? AND operation=? AND request_key=?",
@@ -870,6 +956,20 @@ class ExecutionRepo:
             return dict(row) if row else None
 
     def _event(self, conn: Any, now: int, run: str, key: str, payload: dict[str, Any]) -> int:
+        if payload.get("type") == "execution.state" and payload.get("state") in TERMINAL | {
+            "unknown"
+        }:
+            current = conn.execute(
+                "SELECT operation,state FROM execution_runs WHERE run_id=?", (run,)
+            ).fetchone()
+            if (
+                current
+                and current["operation"] == "group_expert"
+                and current["state"] == payload["state"]
+            ):
+                from octop.infra.db.repos.group_experts import record_state
+
+                record_state(conn, now, run, payload["state"], reason=payload.get("reason", ""))
         encoded = wire(payload, limit=256 * 1024)
         old = conn.execute(
             "SELECT seq,payload FROM execution_events WHERE run_id=? AND event_key=?", (run, key)
@@ -912,7 +1012,7 @@ class ExecutionRepo:
             raise ValueError("invalid_event_page")
         with self.db.connect() as conn:
             rows = conn.execute(
-                "SELECT e.* FROM execution_events e JOIN execution_runs r ON r.run_id=e.run_id WHERE e.run_id=? AND r.user_id=? AND e.seq>? ORDER BY e.seq LIMIT ?",
+                "SELECT e.* FROM execution_events e JOIN execution_runs r ON r.run_id=e.run_id WHERE e.run_id=? AND r.user_id=? AND r.operation<>'group_expert' AND e.seq>? ORDER BY e.seq LIMIT ?",
                 (run, user, after, limit),
             ).fetchall()
             return [{**dict(row), "payload": json.loads(row["payload"])} for row in rows]
@@ -921,11 +1021,17 @@ class ExecutionRepo:
         """Persist policy-change cancellation for every worker owning this user's runs."""
         with self.db.connect() as conn:
             runs = conn.execute(
-                "SELECT run_id FROM execution_runs WHERE user_id=? AND operation<>'desktop' "
+                "SELECT run_id,operation,request_key FROM execution_runs WHERE user_id=? AND operation<>'desktop' "
                 "AND state IN ('queued','running','awaiting_approval','cancel_requested')",
                 (user,),
             ).fetchall()
         for row in runs:
+            if row["operation"] == "group_expert":
+                from octop.infra.db.repos.group_experts import cancel_call
+
+                with self._transaction() as (conn, now):
+                    cancel_call(conn, now, row["request_key"], self)
+                continue
             try:
                 self.command(
                     row["run_id"],
@@ -951,6 +1057,8 @@ class ExecutionRepo:
             ).fetchone()
             if not row:
                 raise ExecutionConflict("execution_not_found")
+            if row["operation"] == "group_expert":
+                raise ExecutionConflict("group_expert_internal_control_required")
             self._thread(conn, user, row["agent_id"], row["thread_id"])
             old = conn.execute(
                 "SELECT * FROM execution_commands WHERE run_id=? AND command_key=?", (run, key)
@@ -1042,7 +1150,9 @@ class ExecutionRepo:
                     "SELECT max_running FROM execution_control WHERE id=1"
                 ).fetchone()[0]
                 active = conn.execute(
-                    "SELECT COUNT(*) FROM execution_runs WHERE state IN ('running','cancel_requested','unknown') AND operation<>'desktop'"
+                    "SELECT COUNT(*) FROM execution_runs WHERE state IN ('running','cancel_requested','unknown') AND operation<>'desktop' "
+                    "AND (state<>'unknown' OR operation<>'group_expert' OR updated_at>?)",
+                    (now - GROUP_EXPERT_UNKNOWN_HOLD_SECONDS,),
                 ).fetchone()[0]
                 if active >= limit:
                     raise ExecutionConflict("execution_capacity_exceeded")
@@ -1065,6 +1175,11 @@ class ExecutionRepo:
         *,
         approval_id: str | None = None,
         final_frames: list[dict[str, Any]] | None = None,
+        model_receipt: tuple[str, int | None] | None = None,
+        model_estimate: int | None = None,
+        group_result: dict[str, Any] | None = None,
+        group_usage: dict[str, Any] | None = None,
+        group_reason: str = "",
     ) -> None:
         if state not in TERMINAL | {"awaiting_approval", "unknown"} or (
             state == "awaiting_approval" and not approval_id
@@ -1072,12 +1187,31 @@ class ExecutionRepo:
             raise ValueError("invalid_execution_transition")
         with self._transaction() as (conn, now):
             row = self._fence(conn, now, run, node, incarnation, token)
-            if row["state"] == "cancel_requested" and state not in {
-                "cancelled",
-                "failed",
-                "unknown",
-            }:
-                raise ExecutionConflict("execution_cancel_requested")
+            if row["operation"] == "group_expert":
+                if state == "awaiting_approval":
+                    raise ExecutionConflict("group_expert_approval_not_supported")
+                from octop.infra.db.repos.group_experts import record_state
+
+            elif group_result is not None or group_usage is not None or group_reason:
+                raise ExecutionConflict("invalid_group_result_transition")
+            if row["state"] == "cancel_requested":
+                if model_receipt is not None and state == "completed":
+                    state = "cancelled"
+                    group_result = None
+                elif state not in {"cancelled", "failed", "unknown"}:
+                    raise ExecutionConflict("execution_cancel_requested")
+            if model_receipt is not None:
+                if (
+                    row["operation"] not in {"desktop", "group_expert"}
+                    or state == "awaiting_approval"
+                ):
+                    raise ExecutionConflict("invalid_model_receipt_transition")
+                key, actual = model_receipt
+                self._settle_model(conn, run, key=key, actual=actual, estimated=model_estimate)
+            if row["operation"] == "group_expert":
+                record_state(
+                    conn, now, run, state, group_result, reason=group_reason, usage=group_usage
+                )
             conn.execute(
                 "UPDATE execution_runs SET state=?,approval_id=?,updated_at=? WHERE run_id=?",
                 (state, approval_id, now, run),
@@ -1135,18 +1269,34 @@ class ExecutionRepo:
             row = self._fence(conn, now, run, node, incarnation, token)
             if row["state"] != "running":
                 raise ExecutionConflict("execution_not_running")
+            if row["operation"] == "group_expert":
+                from octop.infra.db.repos.group_experts import require_unknown_cooldown_expired
+
+                require_unknown_cooldown_expired(conn, now, row["user_id"])
+                self._subject(conn, row)
             old = conn.execute(
                 "SELECT * FROM execution_reservations WHERE reservation_id=?", (key,)
             ).fetchone()
             if old:
                 # A duplicate is never permission to send the model request again.
                 raise ExecutionConflict("model_request_already_reserved")
+            # A desktop proxy run owns one provider stream. Keep its unresolved
+            # receipt for reconciliation and bound the provisional admission hold.
+            active_reservations = (
+                "FROM execution_reservations s JOIN execution_runs r ON r.run_id=s.run_id "
+                "WHERE s.state IN ('reserved','unknown') "
+                "AND (s.state='reserved' OR r.operation NOT IN ('desktop','group_expert') "
+                "OR (r.operation='desktop' AND r.updated_at>?) "
+                "OR (r.operation='group_expert' AND r.updated_at>?))"
+            )
+            hold_cutoff = now - DESKTOP_MODEL_UNKNOWN_HOLD_SECONDS
             limit = conn.execute("SELECT max_models FROM execution_control WHERE id=1").fetchone()[
                 0
             ]
             if limit > 0:
                 count = conn.execute(
-                    "SELECT COUNT(*) FROM execution_reservations WHERE state IN ('reserved','unknown')"
+                    "SELECT COUNT(*) " + active_reservations,
+                    (hold_cutoff, now - GROUP_EXPERT_UNKNOWN_HOLD_SECONDS),
                 ).fetchone()[0]
                 if count >= limit:
                     raise ExecutionConflict("model_capacity_exceeded")
@@ -1159,28 +1309,23 @@ class ExecutionRepo:
                     quota = int(policy["value"])
                 except (TypeError, ValueError):
                     raise ExecutionConflict("token_quota_invalid") from None
-                used = conn.execute(
-                    "SELECT COALESCE(SUM(total_tokens),0) FROM usage_log l WHERE user_id=? AND (execution_run_id IS NULL OR NOT EXISTS(SELECT 1 FROM execution_runs r WHERE r.run_id=l.execution_run_id))",
-                    (row["user_id"],),
-                ).fetchone()[0]
-                charged = conn.execute(
-                    "SELECT COALESCE(SUM(CASE WHEN COALESCE(s.total,0)>COALESCE(l.total,0) THEN s.total ELSE COALESCE(l.total,0) END),0) "
-                    "FROM execution_runs r LEFT JOIN (SELECT run_id,SUM(actual) total FROM execution_reservations WHERE state='settled' GROUP BY run_id) s ON s.run_id=r.run_id "
-                    "LEFT JOIN (SELECT execution_run_id,SUM(total_tokens) total FROM usage_log WHERE execution_run_id IS NOT NULL GROUP BY execution_run_id) l ON l.execution_run_id=r.run_id WHERE r.user_id=?",
-                    (row["user_id"],),
-                ).fetchone()[0]
-                remaining = max(0, quota - used - charged)
+                remaining = max(0, quota - quota_tokens(conn, row["user_id"]))
                 quota_remaining = (
                     remaining if quota_remaining is None else min(quota_remaining, remaining)
                 )
-            held = conn.execute(
-                "SELECT COALESCE(SUM(s.reserved),0) FROM execution_reservations s JOIN execution_runs r ON r.run_id=s.run_id WHERE r.user_id=? AND s.state IN ('reserved','unknown')",
-                (row["user_id"],),
-            ).fetchone()[0]
-            if quota_remaining is not None and held + tokens > quota_remaining:
-                raise ExecutionConflict("token_quota_exceeded")
+            if quota_remaining is not None:
+                held = conn.execute(
+                    "SELECT COALESCE(SUM(CASE WHEN s.state='unknown' AND r.operation IN ('desktop','group_expert') "
+                    "THEN CASE WHEN s.reserved>COALESCE(s.estimated,s.reserved) "
+                    "THEN s.reserved-COALESCE(s.estimated,s.reserved) ELSE 0 END ELSE s.reserved END),0) "
+                    + active_reservations
+                    + " AND r.user_id=?",
+                    (hold_cutoff, now - GROUP_EXPERT_UNKNOWN_HOLD_SECONDS, row["user_id"]),
+                ).fetchone()[0]
+                if held + tokens > quota_remaining:
+                    raise ExecutionConflict("token_quota_exceeded")
             conn.execute(
-                "INSERT INTO execution_reservations VALUES(?,?,?,?,NULL,'reserved',?)",
+                "INSERT INTO execution_reservations(reservation_id,run_id,provider,reserved,actual,state,created_at) VALUES(?,?,?,?,NULL,'reserved',?)",
                 (key, run, provider, tokens, now),
             )
 
@@ -1252,25 +1397,34 @@ class ExecutionRepo:
     def settle_model(
         self, run: str, node: str, incarnation: str, token: int, *, key: str, actual: int | None
     ) -> None:
-        if actual is not None and actual < 0:
-            raise ValueError("invalid_token_usage")
         with self._transaction() as (conn, now):
             self._fence(conn, now, run, node, incarnation, token)
-            row = conn.execute(
-                "SELECT * FROM execution_reservations WHERE reservation_id=? AND run_id=?",
-                (key, run),
-            ).fetchone()
-            if not row:
-                raise ExecutionConflict("reservation_not_found")
-            state = "unknown" if actual is None else "settled"
-            if row["state"] == "settled":
-                if row["actual"] != actual:
-                    raise ExecutionConflict("reservation_identity_conflict")
-                return
-            conn.execute(
-                "UPDATE execution_reservations SET state=?,actual=? WHERE reservation_id=?",
-                (state, actual, key),
-            )
+            self._settle_model(conn, run, key=key, actual=actual)
+
+    def _settle_model(
+        self, conn: Any, run: str, *, key: str, actual: int | None, estimated: int | None = None
+    ) -> None:
+        if (actual is not None and actual < 0) or (estimated is not None and estimated < 0):
+            raise ValueError("invalid_token_usage")
+        row = conn.execute(
+            "SELECT * FROM execution_reservations WHERE reservation_id=? AND run_id=?",
+            (key, run),
+        ).fetchone()
+        if not row:
+            raise ExecutionConflict("reservation_not_found")
+        if row["state"] == "settled":
+            if row["actual"] != actual:
+                raise ExecutionConflict("reservation_identity_conflict")
+            return
+        conn.execute(
+            "UPDATE execution_reservations SET state=?,actual=?,estimated=? WHERE reservation_id=?",
+            (
+                "unknown" if actual is None else "settled",
+                actual,
+                estimated if actual is None else None,
+                key,
+            ),
+        )
 
     def leader(self, name: str, node: str, incarnation: str, *, ttl: int = 15) -> bool:
         if not 5 <= ttl <= 60:
