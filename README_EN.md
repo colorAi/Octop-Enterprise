@@ -19,8 +19,8 @@
 
 <p>
   <a href="docker/enterprise/README_EN.md">Deployment</a> ·
-  <a href="docs/enterprise-client_EN.md">Employee guide</a> ·
-  <a href="docs/user-guide_EN.md">Quick start</a> ·
+  <a href="docs/user/enterprise-client_EN.md">Employee guide</a> ·
+  <a href="docs/user/user-guide_EN.md">Quick start</a> ·
   <a href="CONTRIBUTING_EN.md">Contributing</a> ·
   <a href="README.md">中文</a>
 </p>
@@ -43,7 +43,7 @@
 | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Assigned experts and skills**<br>Use administrator-assigned experts and skills, switch per task, and receive centrally maintained definition and skill updates.<br><br>**Local tasks and approvals**<br>Read and write authorized project files, run Python and terminal tasks, and work with spreadsheets, documents and code; commands matching dangerous-command rules require approval before execution.<br><br>**Images, audio, video and search**<br>Use configured and authorized company services for image generation and editing, video generation, speech recognition and synthesis, and web search; process media with local tools.<br><br>**Long-term memory and task records**<br>Recall relevant memory from the server and upload pending task records after reconnecting, without repeating completed operations.<br><br>**Company knowledge bases**<br>Browse assigned or company-wide shared material and select knowledge bases in chat to search internal documents. | **Company directory**<br>Find colleagues by organization and see who is online.<br><br>**Direct messages and groups**<br>Company, department and project groups with text, images and files.<br><br>**Message and result sharing**<br>Forward messages and files between conversations; hand AI output to a colleague or another expert. | **Department and employee resources**<br>Manage accounts, organization and roles; define department expert and skill scopes, update employee grants in bulk, and withdraw resources outside the permitted scope after transfers or scope changes.<br><br>**Model and knowledge access**<br>Administrators maintain model services and knowledge bases, assigning available models and knowledge read/search permissions per employee.<br><br>**Company capabilities and configuration updates**<br>Grant image, video, speech and search capabilities separately; notify employees of configuration updates, with change detection after reconnecting.<br><br>**Self-hosted deployment**<br>Operate services, accounts, conversations and knowledge yourself, with server workspace isolation plus backup and recovery tools.<br><br>**Server extensions**<br>Scheduled tasks, multi-platform IM channels, connectors (OAuth + MCP), plugins and ACP coding-tool integration. |
 
-Server extensions (scheduled tasks, multi-platform IM channels, connectors, plugins and ACP) depend on deployment, permissions and isolation policy; the local client does not load external connectors or ACP. See the [employee guide](docs/enterprise-client_EN.md).
+Server extensions (scheduled tasks, multi-platform IM channels, connectors, plugins and ACP) depend on deployment, permissions and isolation policy; the local client does not load external connectors or ACP. See the [employee guide](docs/user/enterprise-client_EN.md).
 
 ## Use cases
 
@@ -61,7 +61,7 @@ Server extensions (scheduled tasks, multi-platform IM channels, connectors, plug
 | **Model services** | Company-configured internal or external inference, image and video generation, speech processing and related capabilities |
 
 > [!NOTE]
-> Local execution still connects to company services and their configured models; task context and tool results are sent to these services as needed. Local tools run with the employee&rsquo;s OS permissions, and a project folder is not an OS sandbox. Viewing history across devices does not synchronize project files. See the [employee guide](docs/enterprise-client_EN.md) for data boundaries and limitations.
+> Local execution still connects to company services and their configured models; task context and tool results are sent to these services as needed. Local tools run with the employee&rsquo;s OS permissions, and a project folder is not an OS sandbox. Viewing history across devices does not synchronize project files. See the [employee guide](docs/user/enterprise-client_EN.md) for data boundaries and limitations.
 
 ## Getting started
 
@@ -75,26 +75,30 @@ If GitHub downloads are slow, use the [Quark Drive mirror](https://pan.quark.cn/
 
 Employees have no model access by default. An administrator must assign at least one available chat model before first use; adding a provider alone does not grant access.
 
-For client builds see the [desktop instructions](desktop/README.md); for detailed steps see the [employee guide](docs/enterprise-client_EN.md).
+To invite experts into groups, use the [role-based deployment](docker/enterprise/ROLES.md) and enable the feature with the [group expert guide](docs/user/group-experts_EN.md). The enterprise monolith supports ordinary group messages.
+
+For client builds see the [desktop instructions](desktop/README.md); for detailed steps see the [employee guide](docs/user/enterprise-client_EN.md).
 
 ## Documentation
 
 | Document                                                                                                              | Contents                                                    |
 | :-------------------------------------------------------------------------------------------------------------------- | :---------------------------------------------------------- |
+| [Documentation index](docs/README.md) | Guides organized for employees, administrators, developers and maintainers |
 | [Deployment and recovery](docker/enterprise/README_EN.md)                                                                | Prerequisites, installation, upgrades, backups and recovery |
-| [Employee quick start](docs/user-guide_EN.md)                                                                            | First login, experts and everyday tasks                     |
-| [Employee guide](docs/enterprise-client_EN.md)                                                                           | Tasks, results, supported scope and data boundaries         |
+| [Employee quick start](docs/user/user-guide_EN.md)                                                                            | First login, experts and everyday tasks                     |
+| [Employee guide](docs/user/enterprise-client_EN.md)                                                                           | Tasks, results, supported scope and data boundaries         |
+| [Group experts](docs/user/group-experts_EN.md) | Deployment requirements, enabling, invitations and troubleshooting |
 | [Contributing](CONTRIBUTING_EN.md) / [Desktop builds](desktop/README.md)                                                 | Development setup, source builds and client packaging       |
-| [Architecture](docs/architecture.md) / [API](docs/api.md) / [Communication service](services/communication/README.md) | System structure, interfaces and company messaging          |
-| [Update procedures](docs/updates_EN.md)                                                                                  | Configuration changes, server upgrades and client updates   |
+| [Architecture](docs/developer/architecture.md) / [API](docs/developer/api.md) / [Communication service](services/communication/README.md) | System structure, interfaces and company messaging          |
+| [Update procedures](docs/user/updates_EN.md)                                                                                  | Configuration changes, server upgrades and client updates   |
 
 ## Community
 
-**Octop Enterprise community group** (Chinese-language). Scan the QR code to join.
+**Octop Enterprise community group** (Chinese-language). Scan the QR code to join. The supplied invite image states that it is valid **before November 23, 2026**.
 
 <div align="center">
 
-<img src="docs/assets/community/octop-group-20261110.png" alt="Octop Enterprise community group QR code" width="300">
+<img src="docs/assets/community/octop-group-20261116.png" alt="Octop Enterprise community group QR code" width="300">
 
 </div>
 

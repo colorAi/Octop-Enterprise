@@ -20,4 +20,4 @@ This project sets no fixed response or fix deadline; supported versions and main
 - Backups may contain credentials, sessions and business files; require access control and encryption off-host.
 - Self-hosting does not mean all inference is on the intranet; models and external services are configured by the deployer.
 
-See [Enterprise deployment](docker/enterprise/README_EN.md) and [Employee and expert isolation](docs/employee-isolation.md).
+See [Enterprise deployment](docker/enterprise/README_EN.md) and [Employee and expert isolation](docs/user/employee-isolation.md).

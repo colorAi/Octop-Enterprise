@@ -1,8 +1,8 @@
 # Octop Enterprise desktop (Wails v3 + green portable)
 
-[中文企业客户端构建指南](../docs/client-build.md)
+[中文企业客户端构建指南](../docs/developer/client-build.md)
 
-> For employee setup and everyday use, see [the employee guide](../docs/enterprise-client_EN.md). This document covers building the enterprise client and the base-mode desktop packages from source.
+> For employee setup and everyday use, see [the employee guide](../docs/user/enterprise-client_EN.md). This document covers building the enterprise client and the base-mode desktop packages from source.
 
 All desktop-client code lives here. This is **not** `src/octop/infra/desktop`
 (remote desktop streaming).
@@ -272,7 +272,7 @@ checksums. Build staging is outside the repository, beside the output directory.
 Employees configure the server address at sign-in. Developer ID signing is
 optional; notarization and Windows Authenticode signing are separate release
 steps. Windows installation still requires validation on a Windows machine.
-See [the enterprise client guide](../docs/enterprise-client_EN.md)
+See [the enterprise client guide](../docs/user/enterprise-client_EN.md)
 for setup, supported workflows and data boundaries.
 
 ### Development build
@@ -373,7 +373,7 @@ GitHub Release names follow `Octop-<kind>-<os>-<arch>-<version>.<ext>`:
 - PyPI wheels stay `octop-<version>-py3-none-any.whl` (PEP 427)
 
 The Linux tar.gz contains only the GUI binary; it has no separate portable zip or
-server terminal process. Octop Enterprise uses [manual upgrades](../docs/updates_EN.md);
+server terminal process. Octop Enterprise uses [manual upgrades](../docs/user/updates_EN.md);
 the CLI/API online update paths are disabled for this distribution.
 
 The base-mode Wails shell requires macOS 12+; enterprise employee installers

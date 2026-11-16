@@ -235,7 +235,7 @@ Prepare portable Python and base dependencies from the same source with `desktop
 
 After unpacking the four architectures, use `make check-enterprise ARGS='--section packaging --manifest-dir /path/to/unpacked'` to check the version matrix. Supported build targets are macOS arm64/amd64 and Windows amd64/arm64. Each release should record build and manifest results, native tool smoke tests, install/upgrade/uninstall, signing/notarization, and sign-in/disconnect/revocation, with dates. Matrix checks and in-package target smoke tests are not real installation or signing acceptance; actual status follows the corresponding release record.
 
-For employee operations and feature scope, see the [employee guide](../../docs/enterprise-client_EN.md).
+For employee operations and feature scope, see the [employee guide](../../docs/user/enterprise-client_EN.md).
 
 
 The separate `compose.roles.yml` entry provides `init`, `web` and `worker` roles. The `4g`, `8g` and `16g` profiles configure 2 web + 1 worker, 2 web + 2 workers, and 3 web + 3 workers respectively. Topology changes require a maintenance window, confirmed stops for the old workers and their sandboxes, and new worker boot identifiers; duplicating a worker with `--scale` is not supported. Use `backup.py --roles --profile <profile>` with the matching profile; it leaves writers stopped, including on failure. See [role deployment and recovery (Chinese)](ROLES.md). These resource budgets do not establish workload capacity or native-client fault acceptance.

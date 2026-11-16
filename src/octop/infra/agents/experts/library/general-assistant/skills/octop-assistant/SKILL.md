@@ -48,13 +48,13 @@ Octop Enterprise 是基于腾讯云 Octop 独立维护的开源、自托管企�
 | 产品简介（中文） | https://github.com/colorAi/Octop-Enterprise/blob/main/README.md |
 | 产品简介（英文） | https://github.com/colorAi/Octop-Enterprise/blob/main/README_EN.md |
 | 服务端安装、升级、完整备份与恢复 | https://github.com/colorAi/Octop-Enterprise/blob/main/docker/enterprise/README.md |
-| 员工登录、工作目录、任务、文件与转发 | https://github.com/colorAi/Octop-Enterprise/blob/main/docs/enterprise-client.md |
-| 配置通知与软件升级的区别 | https://github.com/colorAi/Octop-Enterprise/blob/main/docs/updates.md |
-| 员工工作区隔离 | https://github.com/colorAi/Octop-Enterprise/blob/main/docs/employee-isolation.md |
+| 员工登录、工作目录、任务、文件与转发 | https://github.com/colorAi/Octop-Enterprise/blob/main/docs/user/enterprise-client.md |
+| 配置通知与软件升级的区别 | https://github.com/colorAi/Octop-Enterprise/blob/main/docs/user/updates.md |
+| 员工工作区隔离 | https://github.com/colorAi/Octop-Enterprise/blob/main/docs/user/employee-isolation.md |
 | 桌面客户端构建 | https://github.com/colorAi/Octop-Enterprise/blob/main/desktop/README.md |
-| CLI 参考 | https://github.com/colorAi/Octop-Enterprise/blob/main/docs/cli.md |
-| 配置参考 | https://github.com/colorAi/Octop-Enterprise/blob/main/docs/configuration.md |
-| HTTP / WebSocket API | https://github.com/colorAi/Octop-Enterprise/blob/main/docs/api.md |
+| CLI 参考 | https://github.com/colorAi/Octop-Enterprise/blob/main/docs/user/cli.md |
+| 配置参考 | https://github.com/colorAi/Octop-Enterprise/blob/main/docs/user/configuration.md |
+| HTTP / WebSocket API | https://github.com/colorAi/Octop-Enterprise/blob/main/docs/developer/api.md |
 | 问题与建议 | https://github.com/colorAi/Octop-Enterprise/issues |
 
 ## 安装与升级

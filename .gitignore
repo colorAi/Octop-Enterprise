@@ -111,6 +111,7 @@ scripts/dev-local-link.sh
 fnos/native/app/site-packages/
 
 # Local agent planning docs (not for upstream)
+/.internal/
 docs/superpowers/
 scripts/lh_image_install_octop_tencentos.sh
 .worktrees/

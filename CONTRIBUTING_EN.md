@@ -39,4 +39,4 @@ Real PostgreSQL tests use a dedicated test database; see the communication servi
 
 Contribute only code and material you have the right to provide. Your changes are submitted under the root MIT license; third-party content must retain its license and provenance, and material with redistribution restrictions must not go into the public source package.
 
-Pull requests should describe the change and verification results. Versions, tags and formal releases are managed by the maintainers; see the [source release notes](docs/open-source-release_EN.md).
+Pull requests should describe the change and verification results. Versions, tags and formal releases are managed by the maintainers; see the [source release notes](docs/developer/open-source-release_EN.md).

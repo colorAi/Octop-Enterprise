@@ -14,6 +14,10 @@ LIBRARY = Path("src/octop/infra/agents/experts/library")
 LINK = re.compile(r"!?\[[^\]\n]*\]\((<[^>]+>|[^\s)]+)(?:\s+[^)]*)?\)")
 FENCE = re.compile(r"^(`{3,}|~{3,}).*?\n.*?^\1\s*$", re.MULTILINE | re.DOTALL)
 SOURCE_ONLY_EXCLUSIONS = (
+    ".internal/",
+    "docs/design/",
+    "docs/internal/",
+    "docs/superpowers/",
     "fnos/",
     "scripts/build-fpk.sh",
     "scripts/fnos/",
@@ -22,6 +26,8 @@ SOURCE_ONLY_EXCLUSIONS = (
     "tests/unit/test_release_download_links.py",
     "docs/octop-introduction.html",
 )
+PUBLIC_DOC_DIRECTORIES = ("docs/user/", "docs/developer/", "docs/assets/")
+PUBLIC_DOC_INDEXES = {"docs/README.md", "docs/README_EN.md", "docs/AGENTS.md"}
 INHERITED_INSTALLERS = {
     "scripts/install.sh",
     "scripts/install-octop.sh",
@@ -78,6 +84,13 @@ def check_distribution(root: Path) -> list[str]:
         if not path.is_file():
             continue
         name = path.relative_to(root).as_posix()
+        if (
+            name.startswith("docs/")
+            and path.suffix == ".md"
+            and name not in PUBLIC_DOC_INDEXES
+            and not name.startswith(PUBLIC_DOC_DIRECTORIES)
+        ):
+            errors.append(f"unclassified documentation: {name}")
         if not (
             name.startswith(
                 ("fnos/", "scripts/", "desktop/", "docker/", "docs/", ".github/workflows/")
@@ -156,21 +169,9 @@ def check(root: Path) -> list[str]:
     else:
         errors.append("PUBLIC_SOURCE.json missing; run against an exported source snapshot")
 
-    docs = set(root.glob("*.md")) | set((root / "docs").glob("*.md"))
-    docs |= {
-        root / name
-        for name in (
-            "docker/README.md",
-            "docker/README_CN.md",
-            "docker/enterprise/README.md",
-            "docker/enterprise/README_EN.md",
-            "desktop/README.md",
-            "desktop/portable/README.md",
-            "services/communication/README.md",
-            "scripts/README.md",
-            "fnos/README.md",
-        )
-    }
+    docs = set(root.glob("*.md"))
+    for directory in ("docs", "docker", "desktop", "services/communication", "scripts"):
+        docs.update((root / directory).rglob("*.md"))
     for path in sorted(docs):
         if not path.is_file():
             continue

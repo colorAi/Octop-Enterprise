@@ -572,7 +572,7 @@
 
 ### 新增
 - 插件管理页支持从本地 ZIP 上传安装插件，可选覆盖已安装的同名插件，无需先把插件托管到 HTTP 直链
-- Docker 沙箱 backend（agent `config.backend.type=docker` 或存储 `kind=docker`）；Admin Docker 卡片、本机 Docker 探测/安装；详见 [docs/agent-backend-file-io.md](docs/agent-backend-file-io.md) §13
+- Docker 沙箱 backend（agent `config.backend.type=docker` 或存储 `kind=docker`）；Admin Docker 卡片、本机 Docker 探测/安装；当前配置与维护见[服务端工作区隔离](docs/user/employee-isolation.md)
 - 强制密码策略并优化账户与子代理（subagent）使用体验
 - 浏览器 HITL 流式交互与网关抢占能力
 - 新增每用户模型与推理（reasoning）偏好设置

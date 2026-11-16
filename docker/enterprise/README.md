@@ -101,7 +101,7 @@ curl -sS http://127.0.0.1:8088/api/health/ready
 
 1. 浏览器打开已配置的员工访问地址，使用刚创建的管理员账号登录。
 2. 在左侧“管理 → 模型”配置至少一个可用模型服务；在“管理 → 用户”创建测试员工并授予所需权限，准备可供员工使用的专家。
-3. 给员工分发与服务器兼容的 Mac/Windows 企业客户端。只部署服务器不能自动生成完整的员工安装包，构建入口见[客户端构建指南](../../docs/client-build.md)。
+3. 给员工分发与服务器兼容的 Mac/Windows 企业客户端。只部署服务器不能自动生成完整的员工安装包，构建入口见[客户端构建指南](../../docs/developer/client-build.md)。
 4. 员工在桌面客户端登录后，在聊天侧栏选择“添加项目文件夹”，再选择专家并创建对话。让专家读取项目中的样例文件并输出摘要，确认成果和历史可查看。旧单目录客户端的操作见对应版本指南。
 5. 检查同事消息、附件与实际需要的群聊，再修改测试员工权限并核对配置通知。手动发布配置通知的入口是左侧“管理 → 应用设置”的“应用更新”标签。完整企业备份与恢复还需另做演练。
 
@@ -231,8 +231,8 @@ make check-enterprise ARGS='--section packaging'
 
 真实数据库测试通过 `OCTOP_IM_TEST_DATABASE_URL` 和 `OCTOP_IM_TEST_OWNER` 指向**专用临时 PostgreSQL**；测试创建/删除带测试前缀的数据库。不要使用生产地址。不配置时有跳过项，不能视作真实 PG 验收。
 
-企业 payload 的准备步骤见[客户端构建指南](../../docs/client-build.md)。`desktop/portable/bootstrap-runtime.sh` 和 `desktop/portable/package.sh` 生成便携 Python 与基础依赖；还需补齐同架构 ffmpeg/ffprobe、pandas 等企业工具材料，基础便携包不能直接作为完整企业 payload。目标机器用包内解释器运行 `verify_company_runtime.py`。`package-company.py` 核对 Octop METADATA 版本与当前源码全部 Python 文件摘要，写入 shell/Octop/Harness/两个协议/commit/dirty/source SHA-256，拒绝旧版 payload，即使其版本号碰巧相同。生成登录资源的步骤在共享 Wails 构建中执行，Go embed 也要求 JS/CSS 同时存在。
+企业 payload 的准备步骤见[客户端构建指南](../../docs/developer/client-build.md)。`desktop/portable/bootstrap-runtime.sh` 和 `desktop/portable/package.sh` 生成便携 Python 与基础依赖；还需补齐同架构 ffmpeg/ffprobe、pandas 等企业工具材料，基础便携包不能直接作为完整企业 payload。目标机器用包内解释器运行 `verify_company_runtime.py`。`package-company.py` 核对 Octop METADATA 版本与当前源码全部 Python 文件摘要，写入 shell/Octop/Harness/两个协议/commit/dirty/source SHA-256，拒绝旧版 payload，即使其版本号碰巧相同。生成登录资源的步骤在共享 Wails 构建中执行，Go embed 也要求 JS/CSS 同时存在。
 
 四架构解包后可用 `make check-enterprise ARGS='--section packaging --manifest-dir /path/to/unpacked'` 检查版本矩阵。支持的构建目标是 macOS arm64/amd64 和 Windows amd64/arm64；每次发行应分别记录构建与 manifest、原生工具烟测、安装/升级/卸载、签名/公证、登录/断线/撤销的结果和日期。矩阵检查与包内目标烟测不等于真实安装或签名验收，具体状态以对应发行记录为准。
 
-员工操作与功能范围见[企业客户端指南](../../docs/enterprise-client.md)。
+员工操作与功能范围见[企业客户端指南](../../docs/user/enterprise-client.md)。

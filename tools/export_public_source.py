@@ -13,6 +13,7 @@ from pathlib import Path
 
 EXCLUDED = (
     ".git/",
+    ".internal/",
     "PUBLIC_SOURCE.json",
     ".cursor/",
     ".claude/",
@@ -55,6 +56,9 @@ EXCLUDED = (
     "docs/assets/use-08-browser-ai.png",
     "docs/user-guide.html",
     "docs/octop-introduction.html",
+    "docs/design/",
+    "docs/internal/",
+    "docs/superpowers/",
     "docs/company-desktop-hybrid.md",
     "docs/company-desktop-upgrade-plan.md",
     "docs/company-desktop-runtime-delivery.md",
@@ -65,6 +69,8 @@ EXCLUDED = (
     "docs/upstream-sync-20261017.md",
     "docs/design/upstream-review-20261106.md",
 )
+PUBLIC_DOC_DIRECTORIES = ("docs/user/", "docs/developer/", "docs/assets/")
+PUBLIC_DOC_INDEXES = {"docs/README.md", "docs/README_EN.md", "docs/AGENTS.md"}
 SECRET_PATTERNS = (
     re.compile(
         rb"-----BEGIN (?:RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----(?:\r?\n|\\n)+[A-Za-z0-9+/]{32,}"
@@ -121,6 +127,16 @@ def export(root: Path, destination: Path) -> int:
             data = source.read_bytes()
         else:
             continue  # Deleted tracked files are intentionally absent from this snapshot.
+        if (
+            name.startswith("docs/")
+            and name.endswith(".md")
+            and name not in PUBLIC_DOC_INDEXES
+            and not name.startswith(PUBLIC_DOC_DIRECTORIES)
+        ):
+            raise ValueError(
+                f"Unclassified documentation: {name}; use docs/user/, docs/developer/ "
+                "or the local .internal/docs/ archive"
+            )
         if any(pattern.search(data) for pattern in SECRET_PATTERNS):
             raise ValueError(f"Potential credential found; export stopped (value redacted): {name}")
         target_name = name
@@ -151,7 +167,7 @@ def export(root: Path, destination: Path) -> int:
         "These files are reference copies with an inactive .disabled extension. "
         "They do not run in GitHub Actions. Before enabling any release automation, "
         "adapt the package name, repository, images, signing identities and credentials. "
-        "See ../../docs/open-source-release.md.\n",
+        "See ../../docs/developer/open-source-release.md.\n",
         encoding="utf-8",
     )
     # Re-exporting an imported source repository regenerates this note and its hash.

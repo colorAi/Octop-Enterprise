@@ -39,4 +39,4 @@ go test ./internal/groups ./internal/store
 
 只贡献有权提供的代码和资料。自有改动按根目录 MIT 许可提交；引入第三方内容须保留许可和来源，不能把限制再分发的材料放入公开源码包。
 
-提交 PR 时说明修改内容和验证结果。版本、标签与正式发行由维护者统一管理；源码导出与发行要求见[源码发行说明](docs/open-source-release.md)。
+提交 PR 时说明修改内容和验证结果。版本、标签与正式发行由维护者统一管理；源码导出与发行要求见[源码发行说明](docs/developer/open-source-release.md)。

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Pre-commit gate: make precommit (format BE+FE + lint + typecheck + testmon-scoped
-# tests) + dashboard build. The full suite still runs in CI (`make all`); this is a
-# fast, change-aware local gate so commits don't wait on the whole test matrix.
+# Documentation commits validate public scope, source exports and related tests.
+# Application commits run make precommit plus the dashboard build. The full suite
+# still runs in CI (`make all`).
 # Enable once per clone:  make install-hooks
 # Bypass (emergency only): SKIP_PRECOMMIT=1 git commit ...
 # Or: git commit --no-verify
@@ -21,6 +21,97 @@ STAGED_FILES=()
 while IFS= read -r line; do
   [[ -n "$line" ]] && STAGED_FILES+=("$line")
 done < <(git diff --cached --name-only --diff-filter=ACMR || true)
+
+echo "[pre-commit] documentation publication scope"
+while IFS= read -r -d '' path; do
+  case "$path" in
+    .internal/*|docs/design/*|docs/internal/*|docs/superpowers/*)
+      echo "[pre-commit] Internal document must remain local: $path" >&2
+      exit 1
+      ;;
+    docs/*.md)
+      case "$path" in
+        docs/README.md|docs/README_EN.md|docs/AGENTS.md|docs/user/*|docs/developer/*|docs/assets/*) ;;
+        *)
+          echo "[pre-commit] Classify document under docs/user/ or docs/developer/: $path" >&2
+          exit 1
+          ;;
+      esac
+      ;;
+  esac
+done < <(git ls-files -z -- .internal docs)
+
+CHECK_FILES=()
+while IFS= read -r path; do
+  [[ -n "$path" ]] && CHECK_FILES+=("$path")
+done < <(git diff --cached --name-only --no-renames)
+
+if python3 - "${CHECK_FILES[@]}" <<'PY'
+import ast
+import re
+import subprocess
+import sys
+
+publication_files = {
+    ".gitignore", ".githooks/pre-commit",
+    "tools/export_public_source.py", "tools/check_public_source.py",
+    "tests/unit/deployment/test_export_public_source.py",
+}
+
+def content(reference, name):
+    return subprocess.check_output(
+        ["git", "show", reference + ":" + name], text=True, stderr=subprocess.DEVNULL
+    )
+
+def runtime_tree(text):
+    tree = ast.parse(text, type_comments=True)
+    if tree.body and isinstance(tree.body[0], ast.Expr):
+        value = tree.body[0].value
+        if isinstance(value, ast.Constant) and isinstance(value.value, str):
+            tree.body.pop(0)
+    return ast.dump(tree)
+
+for name in sys.argv[1:]:
+    if name.endswith(".md") or name.startswith("docs/assets/") or name in publication_files:
+        continue
+    try:
+        before, after = content("HEAD", name), content("", name)
+        if name.startswith("src/") and name.endswith(".py"):
+            if runtime_tree(before) == runtime_tree(after):
+                continue
+        if name == "Makefile":
+            pattern = r"docs/[A-Za-z0-9_./-]+\.md"
+            if re.sub(pattern, "DOCUMENT", before) == re.sub(pattern, "DOCUMENT", after):
+                continue
+    except (subprocess.CalledProcessError, SyntaxError):
+        pass
+    raise SystemExit(1)
+PY
+then
+  echo "[pre-commit] documentation and publication checks"
+  git diff --cached --check
+  uv run --no-sync --frozen ruff check tools/export_public_source.py tools/check_public_source.py tests/unit/deployment/test_export_public_source.py
+  uv run --no-sync --frozen ruff format --check tools/export_public_source.py tools/check_public_source.py tests/unit/deployment/test_export_public_source.py
+  uv run --no-sync --frozen python - <<'PY'
+import os
+import subprocess
+import tempfile
+from pathlib import Path
+
+with tempfile.TemporaryDirectory(prefix="octop-docs-check-") as directory:
+    base = Path(directory)
+    subprocess.run([
+        "uv", "run", "--no-sync", "--frozen", "pytest", "-q", "-o", "addopts=",
+        "--basetemp", str(base / "tests"),
+        "tests/unit/deployment/test_export_public_source.py",
+    ], env={**os.environ, "PYTEST_ADDOPTS": ""}, check=True)
+    source = base / "public"
+    subprocess.run(["python3", "tools/export_public_source.py", "--output", str(source)], check=True)
+    subprocess.run(["python3", "tools/check_public_source.py", "--root", str(source)], check=True)
+PY
+  echo "[pre-commit] documentation checks passed"
+  exit 0
+fi
 
 echo "[pre-commit] make precommit  (format-all + lint + typecheck + testmon-scoped test)"
 make precommit

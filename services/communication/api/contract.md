@@ -163,10 +163,10 @@ implemented by the additive protocol below.
 
 当前实现要求能力协议 2、schema 21；保留 v1 路由和签名用途，旧 Worker 不可领取新群任务。
 
-该协议用于公司群、部门群、项目群的单轮专家调用，实施规则见
-[`company-group-experts-plan.md`](../../../docs/design/company-group-experts-plan.md)，
+该协议用于公司群、部门群、项目群的单轮专家调用，用户操作和部署条件见
+[群聊专家指南](../../../docs/user/group-experts.md)，
 执行归属、模型快照和 Python 接口见
-[`execution-contract.md`](../../../docs/design/execution-contract.md)。
+[`execution-contract.md`](../../../docs/developer/execution-contract.md)。
 本节路由已接入。`group_settings.experts_enabled` 默认 `false`；Python 验证固定
 Worker 拓扑后签发至多 15 秒的运行能力证明，Go 只在证明有效时受理启用和新调用。
 

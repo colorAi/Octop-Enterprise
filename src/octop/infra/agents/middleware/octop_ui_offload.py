@@ -9,7 +9,7 @@ Model-request converters only serialize ``message.content`` — ``artifact`` is
 kept on the message (history, WS frames) but never sent to the model. So for
 large envelopes we move ``data`` to ``artifact`` here, leaving the model a slim
 envelope with ``data_ref: "artifact"``. The dashboard resolves the reference
-when rendering. Design: ``docs/octop-ui-payload-offload.md``.
+when rendering. Contract: ``docs/developer/tool-payloads.md``.
 """
 
 from __future__ import annotations

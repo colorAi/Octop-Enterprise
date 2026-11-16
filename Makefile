@@ -45,7 +45,7 @@ help:
 	@echo "  build-wheel      Build Python wheel only (assumes frontend built)"
 	@echo ""
 	@echo "Publish targets:"
-	@echo "  publish          Disabled for this distribution (see docs/open-source-release.md)"
+	@echo "  publish          Disabled for this distribution (see docs/developer/open-source-release.md)"
 	@echo "  publish-test     Disabled for this distribution"
 	@echo ""
 	@echo "Development targets:"
@@ -128,7 +128,7 @@ build-wheel:
 
 .PHONY: publish
 publish:
-	@echo "Octop Enterprise: automated package publishing is disabled. See docs/open-source-release.md."
+	@echo "Octop Enterprise: automated package publishing is disabled. See docs/developer/open-source-release.md."
 	@exit 1
 
 .PHONY: publish-test

@@ -10,6 +10,8 @@
 
 README 与公开使用文档面向使用者，描述当前产品、操作步骤和必要限制；不写命名变更解释、当次整理过程、私库状态、个人工作记录或未确定的发布计划，也不为使用短称添加冗余解释。构建前提放在构建文档，维护者发行流程放在发行文档；保留准确的来源、许可和兼容性说明。
 
+文档按读者存放：员工及管理员指南放 `docs/user/`，公开架构、接口、构建和维护者发行规范放 `docs/developer/`，图片放 `docs/assets/`。内部计划、评审、修复过程、部署回执和验收待办统一放本地 `.internal/docs/`（已被 Git 和源码导出忽略），不得强制加入 Git，也不再新建 `docs/design/`。内部资料完成后应另写描述当前行为的公开说明，不把过程记录直接搬入公开目录。公开文档不得链接内部资料。详细规则见 `docs/AGENTS.md`；新增、移动文档后检查全部公开文档的链接和导出范围。
+
 Navigation guide for AI coding agents working in this repository.
 
 ## 1. Collaboration principles
@@ -208,7 +210,7 @@ cd dashboard && npx tsc -b             # frontend typecheck (after UI changes)
 make build-frontend                     # dashboard/ → src/octop/dashboard/
 ```
 
-**Git hooks (required for local commits):** after cloning, run **`make install-hooks`** once. That sets `core.hooksPath=.githooks` so every `git commit` runs **`make precommit`** (which first runs **`format-all`**: backend Ruff + dashboard Prettier write, then lint / typecheck / testmon-scoped tests) and dashboard **`npm run build`**. Formatted files that were already staged are re-added so the commit includes the formatted content. Bypass only in emergencies: `SKIP_PRECOMMIT=1 git commit …` or `git commit --no-verify`. Do **not** skip hooks to land red tests — fix the suite first (CI runs on Linux **and** Windows).
+**Git hooks (required for local commits):** after cloning, run **`make install-hooks`** once to set `core.hooksPath=.githooks`. Every commit first rejects tracked internal or unclassified documentation. Documentation and publication-tool commits run the related export tests, scoped Ruff checks and a complete temporary source-export/link check; they do not build the application. Comment-only Python module changes and documentation-path updates in Makefile can use this gate when executable content is unchanged. Other commits run **`make precommit`** (format-all, lint, typecheck and testmon-scoped tests) and dashboard **`npm run build`**. Formatted staged files are re-added. Bypass only in emergencies: `SKIP_PRECOMMIT=1 git commit …` or `git commit --no-verify`. Do **not** skip hooks to land red tests — fix the affected checks first.
 
 ## 7. Key patterns
 
@@ -318,7 +320,7 @@ User-facing datetime display and cron/scheduling defaults MUST use the server ti
 
 **Language:** Keep the existing locale resolution (user preference → `Accept-Language` / dashboard i18n → channel hints → `DEFAULT_LOCALE`). Language is **not** a `config.json` key — do not add one unless explicitly requested.
 
-**Workspace storage:** `infra/backend/resolver.py` resolves harness `BackendProtocol` from agent config; remote backends use `probe.py` for fast tree listing. Docker sandbox (`type: "docker"` / storage `kind=docker`) uses `sandbox_scope` + `sandbox_prefix` (Octop default `octop_sandbox`) — see `docs/agent-backend-file-io.md` §13.
+**Workspace storage:** `infra/backend/resolver.py` resolves harness `BackendProtocol` from agent config; remote backends use `probe.py` for fast tree listing. Docker sandbox (`type: "docker"` / storage `kind=docker`) uses `sandbox_scope` + `sandbox_prefix` (Octop default `octop_sandbox`) — see `docs/developer/workspace-files.md` and `docs/user/employee-isolation.md`.
 
 **Connectors:** `infra/connectors/` — catalog, OAuth registry, MCP gateway; HTTP surface in `api/routers/connectors.py`.
 
@@ -364,7 +366,7 @@ Boundary rules are in [§5](#5-module-boundaries). Additionally:
 | Question | Location |
 |----------|----------|
 | How does auth work? | `api/deps.py`, `api/middleware/jwt_auth.py`, `api/routers/auth.py` |
-| LDAP (directory) login | `infra/auth/ldap/`, `api/routers/auth_ldap.py`; config row is `sso_providers.kind='ldap'`; guide: `docs/ldap.md` |
+| LDAP (directory) login | `infra/auth/ldap/`, `api/routers/auth_ldap.py`; config row is `sso_providers.kind='ldap'`; guide: `docs/user/ldap.md` |
 | Setup wizard (password file, tokens) | `infra/setup/`, `api/routers/setup.py` |
 | TLS / Let's Encrypt | `infra/setup/tls/`, `api/routers/tls.py` |
 | `octop run` boot sequence | `launch.py`, `cli/run_cmd.py` |
@@ -383,7 +385,7 @@ Boundary rules are in [§5](#5-module-boundaries). Additionally:
 | Workspace backend resolution | `infra/backend/resolver.py`, `infra/backend/adapter.py` |
 | Connectors & OAuth | `infra/connectors/`, `api/routers/connectors.py` |
 | OpenAPI tags and API intro | `api/openapi_meta.py` |
-| Human-readable API reference | `docs/api.md` |
+| Human-readable API reference | `docs/developer/api.md` |
 | SharedServices / RepoBundle | `infra/db/services.py` |
 | Branching & release | [§10](#10-change-workflow) Branching & release; `CONTRIBUTING.md`; `.cursor/skills/publish` |
 
@@ -401,7 +403,7 @@ Boundary rules are in [§5](#5-module-boundaries). Additionally:
 - 需要冻结发行时可使用临时 `release/x.y.z` 分支，合入 `main` 后再由维护者安排标签。
 - 不沿用上游分支同步、自动发布或生产标签工作流；公开副本中的上游工作流均为 inactive。
 - 只运行受影响模块及关联检查；版本升级、Git 提交、标签和发布须按维护者明确安排，不主动推送。
-- 贡献与发行细节见 `CONTRIBUTING.md` 和 `docs/open-source-release.md`。
+- 贡献与发行细节见 `CONTRIBUTING.md` 和 `docs/developer/open-source-release.md`。
 
 ## 11. Communication
 

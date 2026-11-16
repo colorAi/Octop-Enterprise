@@ -42,6 +42,8 @@ def test_export_includes_dirty_and_untracked_source_but_not_private_material(
     (root / "README.md").write_text("current content\n")
     files = {
         "src/new.py": "current source\n",
+        "docs/user/start.md": "# Getting started\n",
+        "docs/developer/api.md": "# API reference\n",
         "services/communication/server.go": "package main\n",
         "dashboard/vendor/required.tgz": "required dependency\n",
         "dashboard/src/components/ClientConfigUpdatePrompt/index.tsx": "export default function Prompt() {}\n",
@@ -54,6 +56,8 @@ def test_export_includes_dirty_and_untracked_source_but_not_private_material(
         ".github/workflows/release.yml": "name: upstream release\n",
         ".env": "private configuration\n",
         "output/receipt.json": "private receipt\n",
+        ".internal/docs/plans/new-feature.md": "unpublished rollout plan\n",
+        "docs/design/new-feature-plan.md": "legacy internal plan\n",
         "docs/company-desktop-runtime-delivery.md": "internal deployment\n",
         "docs/upstream-sync-20261017.md": "internal delivery receipt\n",
         "docs/user-guide.html": "unmaintained generated guide\n",
@@ -77,6 +81,8 @@ def test_export_includes_dirty_and_untracked_source_but_not_private_material(
     assert (target / "README.md").read_text() == "current content\n"
     for name in (
         "src/new.py",
+        "docs/user/start.md",
+        "docs/developer/api.md",
         "services/communication/server.go",
         "dashboard/vendor/required.tgz",
         "dashboard/src/components/ClientConfigUpdatePrompt/index.tsx",
@@ -95,6 +101,158 @@ def test_export_includes_dirty_and_untracked_source_but_not_private_material(
     assert str(root) not in json.dumps(manifest)
     with pytest.raises(ValueError, match="must not exist"):
         exporter.export(root, target)
+
+
+def test_export_rejects_unclassified_docs_before_creating_output(tmp_path: Path) -> None:
+    root = tmp_path / "repo"
+    _repo(root)
+    document = root / "docs/new-update-plan.md"
+    document.parent.mkdir()
+    document.write_text("# Internal plan\n")
+    target = tmp_path / "public"
+    with pytest.raises(ValueError, match="Unclassified documentation"):
+        exporter.export(root, target)
+    assert not target.exists()
+
+
+def test_export_accepts_a_doc_move_before_the_old_path_is_untracked(tmp_path: Path) -> None:
+    root = tmp_path / "repo"
+    _repo(root)
+    old = root / "docs/reference.md"
+    old.parent.mkdir()
+    old.write_text("# Reference\n")
+    subprocess.run(["git", "-C", str(root), "add", str(old)], check=True)
+    new = root / "docs/developer/reference.md"
+    new.parent.mkdir()
+    old.rename(new)
+    target = tmp_path / "public"
+    exporter.export(root, target)
+    assert not (target / "docs/reference.md").exists()
+    assert (target / "docs/developer/reference.md").read_text() == "# Reference\n"
+
+
+def test_tracked_internal_docs_are_not_exported_and_leaks_fail_validation(tmp_path: Path) -> None:
+    root = tmp_path / "repo"
+    _repo(root)
+    private = root / ".internal/docs/reviews/review.md"
+    private.parent.mkdir(parents=True)
+    private.write_text("# Internal review\n")
+    subprocess.run(["git", "-C", str(root), "add", "-f", str(private)], check=True)
+    target = tmp_path / "public"
+    exporter.export(root, target)
+    assert not (target / ".internal").exists()
+    assert checker.check(target) == []
+    leaked = target / ".internal/docs/reviews/review.md"
+    leaked.parent.mkdir(parents=True)
+    leaked.write_text("# Internal review\n")
+    assert "unsupported distribution material: .internal/" in checker.check_distribution(target)
+
+
+def test_nested_public_doc_links_and_layout_are_checked(tmp_path: Path) -> None:
+    root = tmp_path / "repo"
+    _repo(root)
+    guide = root / "docs/user/start.md"
+    guide.parent.mkdir(parents=True)
+    guide.write_text("# Start\n[Missing guide](absent.md)\n")
+    target = tmp_path / "public"
+    exporter.export(root, target)
+    errors = checker.check(target)
+    assert "broken local link/image: docs/user/start.md -> absent.md" in errors
+    (target / "docs/misplaced.md").write_text("# Unclassified\n")
+    assert "unclassified documentation: docs/misplaced.md" in checker.check_distribution(target)
+
+
+@pytest.mark.skipif(os.name != "posix", reason="Bash pre-commit hook fixture")
+@pytest.mark.parametrize(
+    "name,accepted",
+    [
+        (".internal/docs/reviews/private.md", False),
+        ("docs/design/new-plan.md", False),
+        ("docs/new-plan.md", False),
+        ("docs/user/new-guide.md", True),
+    ],
+)
+def test_commit_hook_blocks_private_or_unclassified_docs(tmp_path, name, accepted):
+    root = tmp_path / "repo"
+    _repo(root)
+    document = root / name
+    document.parent.mkdir(parents=True)
+    document.write_text("# Documentation\n")
+    subprocess.run(["git", "-C", str(root), "add", "-f", name], check=True)
+    # Exercise the real publication guard without running unrelated application gates.
+    commands = tmp_path / "commands"
+    commands.mkdir()
+    for command in ("make", "npm", "uv"):
+        stub = commands / command
+        stub.write_text("#!/bin/sh\nexit 0\n")
+        stub.chmod(0o755)
+    (root / "dashboard").mkdir()
+    result = subprocess.run(
+        ["bash", str(_PATH.parents[1] / ".githooks/pre-commit")],
+        cwd=root,
+        env={
+            **os.environ,
+            "PATH": str(commands) + os.pathsep + os.environ["PATH"],
+            "SKIP_PRECOMMIT": "0",
+        },
+        capture_output=True,
+        text=True,
+    )
+    assert (result.returncode == 0) is accepted, result.stdout + result.stderr
+    if not accepted:
+        assert name in result.stderr
+
+
+@pytest.mark.skipif(os.name != "posix", reason="Bash pre-commit hook fixture")
+@pytest.mark.parametrize(
+    "before,after,documentation_only",
+    [
+        (
+            '"""Old module documentation."""\nvalue = 1\n',
+            '"""New documentation."""\nvalue = 1\n',
+            True,
+        ),
+        ("value = 1\n", "value = 2\n", False),
+        ("value = 1\n", None, False),
+        (None, "value = 1\n", False),
+    ],
+)
+def test_commit_hook_keeps_application_changes_on_the_application_gate(
+    tmp_path, before, after, documentation_only
+):
+    root = tmp_path / "repo"
+    _repo(root)
+    source = root / "src/example.py"
+    source.parent.mkdir()
+    if before is not None:
+        source.write_text(before)
+        subprocess.run(["git", "-C", str(root), "add", "src/example.py"], check=True)
+        subprocess.run(["git", "-C", str(root), "commit", "-qm", "source"], check=True)
+    if after is None:
+        source.unlink()
+    else:
+        source.write_text(after)
+    subprocess.run(["git", "-C", str(root), "add", "-A"], check=True)
+    commands = tmp_path / "commands"
+    commands.mkdir()
+    for command in ("make", "npm", "uv"):
+        stub = commands / command
+        stub.write_text("#!/bin/sh\nexit 0\n")
+        stub.chmod(0o755)
+    (root / "dashboard").mkdir()
+    result = subprocess.run(
+        ["bash", str(_PATH.parents[1] / ".githooks/pre-commit")],
+        cwd=root,
+        env={
+            **os.environ,
+            "PATH": str(commands) + os.pathsep + os.environ["PATH"],
+            "SKIP_PRECOMMIT": "0",
+        },
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert ("documentation and publication checks" in result.stdout) is documentation_only
 
 
 def test_export_rejects_private_key_and_does_not_write_output(tmp_path: Path) -> None:

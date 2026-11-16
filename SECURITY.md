@@ -20,4 +20,4 @@ Octop Enterprise 是独立维护的 Octop 衍生项目。请向本项目维护�
 - 备份可能包含凭据、会话和业务文件，需要访问控制及离机加密。
 - 自托管不等于推理均在内网，模型和外部服务由部署方配置。
 
-详见[企业部署](docker/enterprise/README.md)和[员工隔离](docs/employee-isolation.md)（English）。
+详见[企业部署](docker/enterprise/README.md)和[员工隔离](docs/user/employee-isolation.md)（English）。
