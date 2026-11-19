@@ -17,7 +17,7 @@
     !define INFO_PRODUCTNAME "Octop Enterprise"
 !endif
 !ifndef INFO_PRODUCTVERSION
-    !define INFO_PRODUCTVERSION "1.0.1b4"
+    !define INFO_PRODUCTVERSION "1.0.1b5"
 !endif
 !ifndef INFO_COPYRIGHT
     !define INFO_COPYRIGHT "(c) 2026, Octop Enterprise contributors"
