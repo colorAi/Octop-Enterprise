@@ -166,3 +166,31 @@ func ReadFile(project, path string) (FileContent, error) {
 	}
 	return out, nil
 }
+
+// ReadProjectFile translates a virtual path or a path from a previous
+// installation while keeping the read inside the selected project.
+func ReadProjectFile(project Project, path string) (FileContent, error) {
+	if filepath.IsAbs(path) && contains(project.Path, path) {
+		return ReadFile(project.Path, path)
+	}
+	portable := strings.ReplaceAll(path, "\\", "/")
+	previous, relative := "", ""
+	for _, root := range project.PreviousPaths {
+		root = strings.TrimRight(strings.ReplaceAll(root, "\\", "/"), "/")
+		if len(root) <= len(previous) {
+			continue
+		}
+		if rel, ok := relativeToPortableRoot(portable, root); ok {
+			previous, relative = root, rel
+		}
+	}
+	if previous != "" {
+		if !portableArchivePath(relative) {
+			return FileContent{}, errors.New("project_path_invalid")
+		}
+		path = relative
+	} else if strings.HasPrefix(path, "/") && !strings.HasPrefix(path, "//") {
+		path = strings.TrimPrefix(path, "/")
+	}
+	return ReadFile(project.Path, path)
+}

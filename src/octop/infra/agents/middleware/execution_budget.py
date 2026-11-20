@@ -11,6 +11,7 @@ from langchain.agents.middleware import AgentMiddleware
 
 from octop.infra.db.repos.execution import ExecutionConflict
 from octop.infra.execution.service import current_execution
+from octop.infra.utils.turn_failure import model_not_executed
 
 
 class ExecutionBudgetMiddleware(AgentMiddleware[Any, Any]):
@@ -48,14 +49,22 @@ class ExecutionBudgetMiddleware(AgentMiddleware[Any, Any]):
             tokens=reservation,
             quota_remaining=None,
         )
+        active.model_failure = None
         try:
             setting = (
                 "max_completion_tokens" if "max_completion_tokens" in settings else "max_tokens"
             )
             response = await handler(request.override(model_settings={**settings, setting: output}))
-        except BaseException:
+        except BaseException as exc:
+            rejected = model_not_executed(exc)
+            active.model_failure = "rejected" if rejected else "unconfirmed"
             with suppress(Exception):
-                await service.io.run(service.repo.settle_model, *active.fence, key=key, actual=None)
+                await service.io.run(
+                    service.repo.settle_model,
+                    *active.fence,
+                    key=key,
+                    actual=0 if rejected else None,
+                )
             raise
         usage = [
             getattr(message, "usage_metadata", None) for message in getattr(response, "result", [])

@@ -6,6 +6,7 @@ import json
 import sqlite3
 from pathlib import Path
 from urllib.parse import quote
+from uuid import uuid4
 
 from octop.infra.db.pool import DatabasePool, SqlitePool
 from octop.infra.db.repos._base import now_ts
@@ -75,7 +76,7 @@ def restore_sqlite_into_pool(backup_file: Path, pool: SqlitePool) -> None:
 # User helpers for migration restores
 # ---------------------------------------------------------------------------
 
-# All columns in the users table (must match schema in 001_initial.sql).
+# Account fields preserved independently of the backup's resource assignments.
 _USER_COLUMNS = (
     "id",
     "username",
@@ -88,6 +89,9 @@ _USER_COLUMNS = (
     "preferences_json",
     "login_failed_count",
     "login_locked_until",
+    "permissions",
+    "expert_access_mode",
+    "role_name",
 )
 _USER_COLS_SQL = ", ".join(_USER_COLUMNS)
 _USER_PLACEHOLDERS = ", ".join("?" for _ in _USER_COLUMNS)
@@ -95,9 +99,12 @@ _USER_PLACEHOLDERS = ", ".join("?" for _ in _USER_COLUMNS)
 
 def capture_users_from_pool(pool: DatabasePool) -> list[tuple[object, ...]]:
     """Return all rows from the live *users* table as plain tuples."""
+    columns = _USER_COLS_SQL
+    if pool.dialect == "postgresql":
+        columns = columns.replace("permissions,", "permissions::text AS permissions,")
     with pool.connect() as conn:
-        rows = conn.execute(f"SELECT {_USER_COLS_SQL} FROM users").fetchall()
-    return [tuple(r) for r in rows]
+        rows = conn.execute(f"SELECT {columns} FROM users ORDER BY id").fetchall()
+    return [tuple(row[col] for col in _USER_COLUMNS) for row in rows]
 
 
 def upsert_users_into_pool(pool: DatabasePool, users: list[tuple[object, ...]]) -> None:
@@ -107,22 +114,26 @@ def upsert_users_into_pool(pool: DatabasePool, users: list[tuple[object, ...]]) 
     """
     if not users:
         return
-    set_clause = ", ".join(f"{col} = ?" for col in _USER_COLUMNS[1:])
-    dialect = pool.dialect
+    set_clause = ", ".join(f"{col}=excluded.{col}" for col in _USER_COLUMNS[1:])
     with pool.transaction() as conn:
         for row in users:
-            pk = row[0]
-            rest = row[1:]
-            cur = conn.execute(f"UPDATE users SET {set_clause} WHERE id = ?", (*rest, pk))
-            if dialect == "sqlite":
-                updated = int(conn.execute("SELECT changes()").fetchone()[0]) > 0
-            else:
-                updated = int(getattr(cur, "rowcount", 0) or 0) > 0
-            if not updated:
-                conn.execute(
-                    f"INSERT INTO users({_USER_COLS_SQL}) VALUES ({_USER_PLACEHOLDERS})",
-                    row,
-                )
+            # Keep the old ID around for ownership remapping while freeing the
+            # login name claimed by the preserved account.
+            conn.execute(
+                "UPDATE users SET username=? WHERE username=? AND id<>?",
+                (f"restore-{uuid4().hex}", row[1], row[0]),
+            )
+        conn.executemany(
+            f"INSERT INTO users({_USER_COLS_SQL}) VALUES ({_USER_PLACEHOLDERS})"
+            f" ON CONFLICT(id) DO UPDATE SET {set_clause}",
+            users,
+        )
+        if pool.dialect == "postgresql":
+            conn.execute(
+                "SELECT setval(seq, GREATEST(MAX(id), pg_sequence_last_value(seq)), true)"
+                " FROM users CROSS JOIN"
+                " (SELECT pg_get_serial_sequence('users','id')::regclass AS seq) s GROUP BY seq"
+            )
 
 
 def prune_users_not_in(pool: DatabasePool, saved_ids: list[object]) -> None:

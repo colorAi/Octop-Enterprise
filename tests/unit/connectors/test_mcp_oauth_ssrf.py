@@ -3,15 +3,55 @@
 from __future__ import annotations
 
 from unittest.mock import AsyncMock, patch
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
 from octop.infra.connectors.oauth.mcp import (
     _ensure_mcp_oauth_url,
     _validate_metadata_endpoints,
+    build_authorize_url,
     exchange_authorization_code,
+    fetch_authorization_metadata,
     issuer_for_kind,
 )
+
+
+@pytest.mark.asyncio
+async def test_path_scoped_issuer_discovers_rfc8414_metadata() -> None:
+    issuer = "https://mcp.example.org/tenant/oauth"
+    metadata = {
+        "issuer": issuer,
+        "authorization_endpoint": f"{issuer}/authorize",
+        "token_endpoint": f"{issuer}/token",
+    }
+    response = AsyncMock()
+    response.raise_for_status = lambda: None
+    response.json = lambda: metadata
+    with (
+        patch(
+            "octop.infra.connectors.oauth.mcp.safe_request", AsyncMock(return_value=response)
+        ) as request,
+        patch("octop.infra.connectors.oauth.mcp._ensure_mcp_oauth_url", AsyncMock()),
+    ):
+        assert await fetch_authorization_metadata(issuer) == metadata
+    assert request.await_args.args == (
+        "GET",
+        "https://mcp.example.org/.well-known/oauth-authorization-server/tenant/oauth",
+    )
+
+
+def test_authorize_url_keeps_endpoint_query_parameters() -> None:
+    url = build_authorize_url(
+        {"authorization_endpoint": "https://mcp.example.org/authorize?audience=docs&state=old"},
+        client_id="app",
+        redirect_uri="https://app.example/cb",
+        state="current",
+        code_challenge="challenge",
+    )
+    query = parse_qs(urlsplit(url).query)
+    assert query["audience"] == ["docs"]
+    assert query["state"] == ["current"]
 
 
 @pytest.mark.asyncio

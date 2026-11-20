@@ -20,6 +20,14 @@ TERMINAL = frozenset({"completed", "failed", "cancelled"})
 MAX_PAYLOAD = 1024 * 1024
 DESKTOP_MODEL_UNKNOWN_HOLD_SECONDS = 30
 GROUP_EXPERT_UNKNOWN_HOLD_SECONDS = 30
+PERSONAL_MODEL_UNKNOWN_HOLD_SECONDS = 30
+_RUNNING_ADMISSION_COUNT = (
+    "SELECT COUNT(*) FROM execution_runs r"
+    " WHERE r.state IN ('running','cancel_requested','unknown') AND r.operation<>'desktop'"
+    " AND (r.state<>'unknown' OR (r.operation='group_expert' AND r.updated_at>?)"
+    " OR (r.operation<>'group_expert' AND EXISTS"
+    " (SELECT 1 FROM execution_sessions s WHERE s.run_id=r.run_id)))"
+)
 
 
 class ExecutionConflict(ValueError):
@@ -786,8 +794,7 @@ class ExecutionRepo:
                 0
             ]
             active = conn.execute(
-                "SELECT COUNT(*) FROM execution_runs WHERE state IN ('running','cancel_requested','unknown') AND operation<>'desktop' "
-                "AND (state<>'unknown' OR operation<>'group_expert' OR updated_at>?)",
+                _RUNNING_ADMISSION_COUNT,
                 (now - GROUP_EXPERT_UNKNOWN_HOLD_SECONDS,),
             ).fetchone()[0]
             if active >= limit:
@@ -1150,8 +1157,7 @@ class ExecutionRepo:
                     "SELECT max_running FROM execution_control WHERE id=1"
                 ).fetchone()[0]
                 active = conn.execute(
-                    "SELECT COUNT(*) FROM execution_runs WHERE state IN ('running','cancel_requested','unknown') AND operation<>'desktop' "
-                    "AND (state<>'unknown' OR operation<>'group_expert' OR updated_at>?)",
+                    _RUNNING_ADMISSION_COUNT,
                     (now - GROUP_EXPERT_UNKNOWN_HOLD_SECONDS,),
                 ).fetchone()[0]
                 if active >= limit:
@@ -1177,6 +1183,7 @@ class ExecutionRepo:
         final_frames: list[dict[str, Any]] | None = None,
         model_receipt: tuple[str, int | None] | None = None,
         model_estimate: int | None = None,
+        release_model_session: bool = False,
         group_result: dict[str, Any] | None = None,
         group_usage: dict[str, Any] | None = None,
         group_reason: str = "",
@@ -1250,6 +1257,15 @@ class ExecutionRepo:
                     "UPDATE execution_tools SET state='unknown' WHERE run_id=? AND state='sent'",
                     (run,),
                 )
+                if (
+                    release_model_session
+                    and row["operation"] in {"chat", "cron", "call"}
+                    and not conn.execute(
+                        "SELECT 1 FROM execution_tools WHERE run_id=? AND state<>'completed'",
+                        (run,),
+                    ).fetchone()
+                ):
+                    conn.execute("DELETE FROM execution_sessions WHERE run_id=?", (run,))
 
     def reserve_model(
         self,
@@ -1295,8 +1311,16 @@ class ExecutionRepo:
             ]
             if limit > 0:
                 count = conn.execute(
-                    "SELECT COUNT(*) " + active_reservations,
-                    (hold_cutoff, now - GROUP_EXPERT_UNKNOWN_HOLD_SECONDS),
+                    "SELECT COUNT(*) "
+                    + active_reservations
+                    + " AND (r.state<>'unknown' OR r.operation IN ('desktop','group_expert')"
+                    " OR r.updated_at>? OR EXISTS"
+                    " (SELECT 1 FROM execution_sessions held WHERE held.run_id=r.run_id))",
+                    (
+                        hold_cutoff,
+                        now - GROUP_EXPERT_UNKNOWN_HOLD_SECONDS,
+                        now - PERSONAL_MODEL_UNKNOWN_HOLD_SECONDS,
+                    ),
                 ).fetchone()[0]
                 if count >= limit:
                     raise ExecutionConflict("model_capacity_exceeded")

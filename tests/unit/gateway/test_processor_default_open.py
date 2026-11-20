@@ -13,6 +13,12 @@ from octop.infra.gateway.process.processor import GlobalProcessor
 from octop.infra.gateway.slash.dispatcher import SlashDispatcher
 
 
+def _agent_manager_with_admin_model_access() -> MagicMock:
+    manager = MagicMock()
+    manager._repos.user_repo.get.return_value = SimpleNamespace(role="admin", disabled=False)
+    return manager
+
+
 @pytest.mark.asyncio
 async def test_im_call_merges_default_open_mcp_servers() -> None:
     captured: dict[str, object] = {}
@@ -21,7 +27,7 @@ async def test_im_call_merges_default_open_mcp_servers() -> None:
         captured["request"] = request
         yield MagicMock()
 
-    agent_manager = MagicMock()
+    agent_manager = _agent_manager_with_admin_model_access()
     agent_manager.merge_turn_mcp_servers = MagicMock(return_value=["docs__1"])
     agent_manager.default_mcp_servers = MagicMock(return_value=[])
     agent_manager.default_knowledge_base_ids = MagicMock(return_value=[])
@@ -34,9 +40,22 @@ async def test_im_call_merges_default_open_mcp_servers() -> None:
         side_effect=lambda ref, **_k: ref
     )
     agent_manager.get_thread_model = MagicMock(return_value=None)
+    agent_manager.resolve_fallback_model_ref.return_value = "demo/reasoning"
+    agent_manager.providers.get_model_reasoning_capability.return_value = {
+        "adapter": "openai_reasoning_effort",
+        "efforts": ["low", "high"],
+        "default_effort": "low",
+    }
 
     thread_registry = MagicMock()
     thread_registry.get_or_create_by_key = AsyncMock(return_value="thr-im")
+    thread_registry.get_thread.return_value = SimpleNamespace(
+        model_ref=None,
+        reasoning_mode="enabled",
+        reasoning_effort="high",
+        conversation_mode=None,
+        pending_plan_path=None,
+    )
     thread_registry.touch_last_active = MagicMock()
     thread_registry.set_title_if_null = MagicMock()
 
@@ -75,6 +94,9 @@ async def test_im_call_merges_default_open_mcp_servers() -> None:
     )
     agent_manager.prepare_chat_mcp.assert_awaited_once()
     assert captured["request"]["mcp_servers"] == ["docs__1"]
+    assert captured["request"]["configurable"]["octop_reasoning_overrides"] == {
+        "model_fields": {"reasoning_effort": "high"}
+    }
 
 
 @pytest.mark.asyncio
@@ -85,7 +107,7 @@ async def test_im_call_skips_default_open_mcp_for_team_host() -> None:
         captured["request"] = request
         yield MagicMock()
 
-    agent_manager = MagicMock()
+    agent_manager = _agent_manager_with_admin_model_access()
     agent_manager.merge_turn_mcp_servers = MagicMock(return_value=None)
     agent_manager.default_mcp_servers = MagicMock(return_value=["docs__1"])
     agent_manager.default_knowledge_base_ids = MagicMock(return_value=[])
@@ -139,7 +161,7 @@ async def test_im_call_skips_default_open_mcp_for_team_host() -> None:
 @pytest.mark.asyncio
 async def test_dashboard_request_ignores_explicit_mcp_for_team_host() -> None:
     """Team hosts never attach connectors, even when the client sends picks."""
-    agent_manager = MagicMock()
+    agent_manager = _agent_manager_with_admin_model_access()
     agent_manager.merge_turn_mcp_servers = MagicMock(return_value=["docs__1"])
     agent_manager.prepare_chat_mcp = AsyncMock(return_value=[])
     agent_manager.get_row = MagicMock(return_value=MagicMock(kind="team"))
@@ -189,7 +211,7 @@ async def test_dashboard_request_ignores_explicit_mcp_for_team_host() -> None:
 @pytest.mark.asyncio
 async def test_dashboard_request_trusts_explicit_opt_out() -> None:
     """Dashboard mcp_servers=[] must not re-inject default_open connectors."""
-    agent_manager = MagicMock()
+    agent_manager = _agent_manager_with_admin_model_access()
     agent_manager.merge_turn_mcp_servers = MagicMock(return_value=None)
     agent_manager.prepare_chat_mcp = AsyncMock(return_value=[])
     agent_manager.get_row = MagicMock(return_value=None)
@@ -239,7 +261,7 @@ async def test_dashboard_request_trusts_explicit_opt_out() -> None:
 
 @pytest.mark.asyncio
 async def test_dashboard_request_attaches_knowledge_base_ids_without_prepending() -> None:
-    agent_manager = MagicMock()
+    agent_manager = _agent_manager_with_admin_model_access()
     agent_manager.merge_turn_mcp_servers = MagicMock(return_value=None)
     agent_manager.get_row = MagicMock(return_value=None)
     agent_manager.default_mcp_servers = MagicMock(return_value=[])

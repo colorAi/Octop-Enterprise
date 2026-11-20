@@ -66,17 +66,9 @@ import {
 } from "./welcomeManifest";
 import { fetchConfigMdFiles } from "./expertFileGroups";
 import {
-  buildBackendSpec,
   DEFAULT_BACKEND,
-  ensureBubblewrapAfterProbe,
-  ensureBwrapMessage,
-  ensureBwrapToastKind,
   parseBackendSpec,
-  probeRootDir,
-  rootDirProbeMessage,
-  shouldProbeRootDir,
   supportsHostSkillPackages,
-  validatePathMappings,
   type PathMapping,
 } from "./agentBackendForm";
 import AgentBackendFields from "./AgentBackendFields";
@@ -390,48 +382,13 @@ function EditAgentDrawerBody({
 
   const handleSave = useCallback(async () => {
     const values = await form.validateFields();
-    if (values.backend_choice === "composite") {
-      const pathError = validatePathMappings(pathMappings, t);
-      if (pathError) {
-        message.error(pathError);
-        return;
-      }
-    }
-    if (shouldProbeRootDir(values.backend_choice, values.root_dir)) {
-      const probe = await probeRootDir(values.root_dir ?? "/");
-      if (!probe.ok) {
-        message.error(
-          `${rootDirProbeMessage(probe, t)}\n${t(
-            "experts.rootDirProbe.guidance",
-          )}`,
-        );
-        return;
-      }
-    }
     setSaving(true);
-    let bwrapToast: { kind: "success" | "warning"; text: string } | null = null;
     try {
-      if (shouldProbeRootDir(values.backend_choice, values.root_dir)) {
-        const bwrap = await ensureBubblewrapAfterProbe();
-        const kind = ensureBwrapToastKind(bwrap.status);
-        if (kind !== "none") {
-          bwrapToast = { kind, text: ensureBwrapMessage(bwrap, t) };
-        }
-      }
-
-      const backendSpec = buildBackendSpec(
-        values.backend_choice,
-        values.composite_default ?? DEFAULT_BACKEND,
-        pathMappings,
-        values.root_dir,
-      );
-
       const nextColor = isCuratedPalette(colorPalette)
         ? expertPaletteColor(colorPalette)
         : colorPalette;
       const nextConfig = omitAgentRuntimeConfig({
         ...agentConfig,
-        backend: backendSpec,
         enable_trajectory: values.enable_trajectory === true,
         conversation_mode: values.conversation_mode,
       });
@@ -498,11 +455,6 @@ function EditAgentDrawerBody({
       }
 
       message.success(t("common.saveSuccess"));
-      if (bwrapToast?.kind === "success") {
-        message.success(bwrapToast.text);
-      } else if (bwrapToast?.kind === "warning") {
-        message.warning(bwrapToast.text);
-      }
       const defaultModel = defaultModelFromForm(values.default_model);
       onSaved({
         agent_id: agent.agent_id,
@@ -528,7 +480,6 @@ function EditAgentDrawerBody({
     iconUrl,
     onClose,
     onSaved,
-    pathMappings,
     skillPackagesSupported,
     t,
   ]);

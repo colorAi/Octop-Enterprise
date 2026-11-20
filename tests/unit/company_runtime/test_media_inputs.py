@@ -16,6 +16,13 @@ def test_reference_inputs_preserve_original_bytes_and_confine_paths(tmp_path):
     original.write_bytes(data)
     result = image_reference_inputs(project, [str(original)])
     assert base64.b64decode(result[0].split(",", 1)[1]) == data
+    old_root = tmp_path / "old-project"
+    assert (
+        image_reference_inputs(
+            project, ["/原图.png", str(old_root / "原图.png")], previous_roots=[str(old_root)]
+        )
+        == result * 2
+    )
     outside = tmp_path / "outside.png"
     outside.write_bytes(data)
     with pytest.raises(ValueError, match="inside this project"):
@@ -46,7 +53,7 @@ async def test_native_image_api_does_not_resolve_company_files_or_urls(company, 
     from types import SimpleNamespace
 
     agent = server.app_runtime.agent_registry.get_agent("expert")
-    agent.config.media_generation = SimpleNamespace(has_api_key=lambda: True, image_enabled=True)
+    agent.config.media_generation = SimpleNamespace(has_image_provider=lambda: True)
     await acquire(client)
     response = await client.http.post(
         "tasks/task1/images",

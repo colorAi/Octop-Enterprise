@@ -15,6 +15,7 @@ from octop.api.common.runtime_routing import runtime_agent, runtime_owner
 from octop.api.deps import resolve_user_from_token
 from octop.infra.db.repos.execution import ExecutionConflict
 from octop.infra.errors import OctopError
+from octop.infra.utils.locale import resolve_request_locale
 
 
 class RuntimeActivityMiddleware:
@@ -78,9 +79,10 @@ class RuntimeActivityMiddleware:
             except OctopError as exc:
                 from starlette.responses import JSONResponse
 
-                await JSONResponse(status_code=exc.status, content=exc.to_envelope())(
-                    scope, receive, send
-                )
+                await JSONResponse(
+                    status_code=exc.status,
+                    content=exc.to_envelope(locale=resolve_request_locale(request)),
+                )(scope, receive, send)
                 return
             except ExecutionConflict as exc:
                 await (await execution_error_response(request, exc))(scope, receive, send)

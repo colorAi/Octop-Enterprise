@@ -1,6 +1,7 @@
 import asyncio
 import json
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 from langchain_core.messages import AIMessage
@@ -36,6 +37,41 @@ def test_source_tool_switches_are_the_authority():
     assert policy["tools"] == ["company_web_search", "company_generate_video"]
     assert policy["search_tools"] == ["brave_search"]
     assert source_tool_policy({"web_search_tools": False, "media_generation": False})["tools"] == []
+
+
+@pytest.mark.asyncio
+async def test_group_media_reports_disabled_routes_and_confirmed_rejection(monkeypatch):
+    from octop_harness.config import MediaGenerationConfig, MediaProviderConfig
+    from octop_harness.media.errors import MediaGenerationError
+
+    config = MediaGenerationConfig(
+        providers=[MediaProviderConfig(id="only-image", api_key="test", video_enabled=False)]
+    )
+    groups = SimpleNamespace(
+        services=SimpleNamespace(settings_repo=None, secret_repo=None),
+        io=SimpleNamespace(run=AsyncMock(return_value=config)),
+    )
+    media = SimpleNamespace(
+        generate_image=AsyncMock(
+            side_effect=MediaGenerationError("rejected", code="content_rejected", category="safety")
+        ),
+        generate_video=AsyncMock(side_effect=AssertionError("disabled route invoked")),
+    )
+    monkeypatch.setattr("octop_harness.media.registry.create_media_manager", lambda *_: media)
+    runtime = GroupTools(
+        groups, None, {"identity": {"call_id": "one", "user_id": 1}, "snapshot": {"tools": []}}
+    )
+    await runtime.open()
+    try:
+        assert (await runtime.generate("video", prompt="draft"))[
+            "error"
+        ] == "company_video_service_unavailable"
+        assert (await runtime.generate("image", prompt="draft"))[
+            "error"
+        ] == "company_image_content_rejected"
+        media.generate_video.assert_not_awaited()
+    finally:
+        await runtime.close()
 
 
 @pytest.mark.asyncio

@@ -11,11 +11,11 @@ class KnowledgeAccess:
     def __init__(self, services: Any) -> None:
         self.services = services
 
-    def _employee(self, user_id: int) -> None:
+    def _employee(self, user_id: int, *, target_role: str | None = None) -> None:
         user = self.services.user_repo.get(user_id)
         if user is None:
             raise OctopError(ErrorCode.NOT_FOUND, "user not found")
-        if user.role == "admin":
+        if (target_role if target_role is not None else user.role) == "admin":
             raise OctopError(
                 ErrorCode.FORBIDDEN, "administrators already have full knowledge access"
             )
@@ -35,8 +35,10 @@ class KnowledgeAccess:
             ],
         }
 
-    def validate(self, user_id: int, kb_ids: list[str]) -> list[str]:
-        self._employee(user_id)
+    def validate(
+        self, user_id: int, kb_ids: list[str], *, target_role: str | None = None
+    ) -> list[str]:
+        self._employee(user_id, target_role=target_role)
         selected = list(dict.fromkeys(kb_ids))
         available = {base.id for base in self.services.knowledge_repo.list_managed()}
         if not set(selected).issubset(available):

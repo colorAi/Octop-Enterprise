@@ -1,10 +1,28 @@
 import { useEffect, useState } from "react";
 import { Button, Image, Space, Typography } from "antd";
 import type { LocalArtifact } from "@/api/desktopRuntime";
+import { useDesktopProjects } from "@/context/DesktopProjectsContext";
+import { useDesktopWorkspace } from "@/context/DesktopWorkspaceContext";
 import styles from "../index.module.less";
 
 export function isLocalPreviewImage(path: string): boolean {
   return /\.(png|jpe?g|gif|webp)$/i.test(path);
+}
+
+export function useLocalImagePreviewScope(): string {
+  const desktop = useDesktopWorkspace();
+  const projects = useDesktopProjects();
+  return JSON.stringify([
+    desktop.state?.state,
+    desktop.state?.owner_user_id,
+    desktop.state?.path,
+    desktop.state?.grant?.id,
+    desktop.state?.grant?.version,
+    projects.state?.supported,
+    Object.values(projects.state?.projects ?? {}).map(
+      ({ id, path, revision, authorized }) => [id, path, revision, authorized],
+    ),
+  ]);
 }
 
 /** A native-generated PNG thumbnail is the only accepted image source. */

@@ -9,6 +9,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from langchain_core.tools import BaseTool, StructuredTool
 
+from octop.config import OctopConfig
+from octop.infra.connectors.builder import build_http_mcp_spec
+from octop.infra.connectors.catalog import get_catalog_entry
 from octop.infra.connectors.mcp_tool_cache import (
     fingerprint_mcp_spec,
     wrap_tools_for_shared_use,
@@ -41,6 +44,61 @@ def test_fingerprint_stable_and_ignores_enabled() -> None:
         }
     )
     assert a != c
+
+
+@pytest.mark.asyncio
+async def test_tencent_docs_loads_table_tools_with_nested_arguments(tmp_path) -> None:
+    from langchain_core.utils.function_calling import convert_to_openai_tool
+    from langchain_mcp_adapters.client import MultiServerMCPClient
+
+    from octop.infra.agents.manager import AgentManager
+    from octop.infra.utils.paths import PathLayout
+
+    manager = object.__new__(AgentManager)
+    manager._mcp_tool_cache = {}
+    manager._mcp_tool_cache_locks = {}
+    manager._mcp_tool_cache_guard = asyncio.Lock()
+    manager._paths = PathLayout(tmp_path)
+
+    raw_schema = {
+        "type": "object",
+        "properties": {
+            "scope": {"type": "object", "properties": {"table": {"type": "string"}}},
+            "records": {
+                "type": "array",
+                "items": {"type": "object", "properties": {"name": {"type": "string"}}},
+            },
+        },
+        "required": ["records"],
+    }
+    invoke = AsyncMock(return_value="ok")
+    remote = [
+        StructuredTool(
+            name=f"docs_{name}", description=name, args_schema=raw_schema, coroutine=invoke
+        )
+        for name in ("smartsheet.add_records", "smartcanvas.edit", "manage.search_file", "outside")
+    ]
+    entry = get_catalog_entry("tencent-docs")
+    assert entry is not None
+    spec = build_http_mcp_spec(
+        entry=entry, instance_id="docs", creds={"token": "fake"}, config=OctopConfig()
+    )
+    with patch.object(MultiServerMCPClient, "get_tools", AsyncMock(return_value=remote)):
+        tools = await manager._get_or_load_mcp_tools(1, "docs", spec)
+    by_name = {tool.name: tool for tool in tools}
+    assert set(by_name) == {
+        "docs_smartsheet_add_records",
+        "docs_smartcanvas_edit",
+        "docs_manage_search_file",
+    }
+    assert by_name["docs_smartsheet_add_records"].args_schema == raw_schema
+    parameters = convert_to_openai_tool(by_name["docs_smartsheet_add_records"])["function"][
+        "parameters"
+    ]
+    assert parameters["properties"] == raw_schema["properties"]
+    arguments = {"scope": {"table": "tasks"}, "records": [{"name": "draft"}]}
+    assert await by_name["docs_smartsheet_add_records"].ainvoke(arguments) == "ok"
+    invoke.assert_awaited_once_with(**arguments)
 
 
 @pytest.mark.asyncio

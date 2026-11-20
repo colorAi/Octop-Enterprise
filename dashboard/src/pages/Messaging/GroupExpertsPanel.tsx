@@ -128,6 +128,9 @@ export default function GroupExpertsPanel({
     data?.candidates.filter(
       (v) => !active.some((b) => b.source_agent_id === v.source_agent_id),
     ) ?? [];
+  const selectedInvite = choices.find(
+    (v) => `${v.source_agent_id}:${v.source_row_id}` === invite,
+  );
   return (
     <section aria-label={t("groupExperts.title")} style={{ margin: "20px 0" }}>
       <h3>
@@ -228,7 +231,7 @@ export default function GroupExpertsPanel({
             <Space.Compact style={{ width: "100%", margin: "12px 0" }}>
               <Select
                 aria-label={t("groupExperts.choose")}
-                value={invite}
+                value={selectedInvite ? invite : undefined}
                 onChange={setInvite}
                 showSearch
                 optionFilterProp="label"
@@ -243,27 +246,29 @@ export default function GroupExpertsPanel({
                 disabled={
                   busy ||
                   active.length >= 3 ||
-                  !invite ||
+                  !selectedInvite ||
                   !data.ready ||
                   !data.experts_enabled
                 }
                 onClick={() => {
-                  const source = choices.find(
-                    (v) => `${v.source_agent_id}:${v.source_row_id}` === invite,
-                  );
-                  if (source)
-                    void run(`invite:${invite}`, (request_id) =>
-                      communicationApi.inviteExpert(
-                        group,
-                        {
-                          request_id,
-                          source_agent_id: source.source_agent_id,
-                          source_row_id: source.source_row_id,
-                          revision: data.scope_revision,
-                        },
-                        organization,
-                      ),
+                  if (!selectedInvite) return;
+                  void run(`invite:${invite}`, async (request_id) => {
+                    const result = await communicationApi.inviteExpert(
+                      group,
+                      {
+                        request_id,
+                        source_agent_id: selectedInvite.source_agent_id,
+                        source_row_id: selectedInvite.source_row_id,
+                        revision: data.scope_revision,
+                      },
+                      organization,
                     );
+                    if (alive.current)
+                      setInvite((current) =>
+                        current === invite ? undefined : current,
+                      );
+                    return result;
+                  });
                 }}
               >
                 {t("groupExperts.invite")}

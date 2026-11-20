@@ -277,8 +277,8 @@ export function MediaGenerationSettingsPanel() {
         ...values,
         display_name: values.display_name.trim(),
         base_url: values.base_url.trim(),
-        image_model: values.image_model.trim(),
-        video_model: values.video_model.trim(),
+        image_model: (values.image_model ?? editingProvider.image_model).trim(),
+        video_model: (values.video_model ?? editingProvider.video_model).trim(),
         api_key: values.api_key.trim(),
       };
     } catch {

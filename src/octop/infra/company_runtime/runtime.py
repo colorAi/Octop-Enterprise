@@ -45,6 +45,7 @@ from octop.infra.company_runtime.local import (
     atomic_json,
     image_reference_inputs,
     local_attachment_metadata,
+    project_media_path,
 )
 from octop.infra.company_runtime.memory_middleware import CompanyMemoryMiddleware
 from octop.infra.company_runtime.model_context import company_model_profile
@@ -407,7 +408,7 @@ class EnterpriseRuntime:
             "project_path": str(project),
             "project_id": params.get("project_id"),
             "project_revision": int(params.get("project_revision", 1)),
-            "project_previous_roots": params.get("project_previous_roots", []),
+            "project_previous_roots": params.get("project_previous_roots") or [],
         }
         task_dir = self.state / "tasks" / task["task_id"]
         if await offload((task_dir / "task.json").exists):
@@ -587,7 +588,7 @@ class EnterpriseRuntime:
                 directory,
                 lambda event: self.emit({**event, "thread_id": thread}),
                 tool_path=self.tool_path,
-                previous_roots=task.get("project_previous_roots", []),
+                previous_roots=task.get("project_previous_roots") or [],
             )
 
             async def authorize() -> None:
@@ -639,8 +640,13 @@ class EnterpriseRuntime:
             async def save_company_generation(
                 kind: str, body: dict[str, Any], filename: str
             ) -> str:
-                target = (project / filename).resolve()
-                if not target.is_relative_to(project) or target == project or target.exists():
+                try:
+                    target = await offload(
+                        project_media_path, project, filename, backend.previous_roots, write=True
+                    )
+                except (OSError, ValueError) as exc:
+                    raise ToolException("output_path_conflict") from exc
+                if target.exists():
                     raise ToolException("output_path_conflict")
                 operation_body = {**body, "filename": filename}
                 if kind != "images":
@@ -700,7 +706,10 @@ class EnterpriseRuntime:
                 """
                 try:
                     references = await offload(
-                        image_reference_inputs, project, reference_images or []
+                        image_reference_inputs,
+                        project,
+                        reference_images or [],
+                        previous_roots=backend.previous_roots,
                     )
                 except (OSError, ValueError) as exc:
                     raise ToolException(str(exc)) from exc
@@ -729,7 +738,14 @@ class EnterpriseRuntime:
                 """
                 paths = [*[p for p in (first_frame, last_frame) if p], *(reference_images or [])]
                 try:
-                    references = iter(await offload(image_reference_inputs, project, paths))
+                    references = iter(
+                        await offload(
+                            image_reference_inputs,
+                            project,
+                            paths,
+                            previous_roots=backend.previous_roots,
+                        )
+                    )
                 except (OSError, ValueError) as exc:
                     raise ToolException(str(exc)) from exc
                 body = {
@@ -769,8 +785,8 @@ class EnterpriseRuntime:
                 import mimetypes
 
                 def read_audio() -> dict[str, str]:
-                    path = (project / file_path).resolve(strict=True)
-                    if not path.is_relative_to(project) or not path.is_file():
+                    path = project_media_path(project, file_path, backend.previous_roots)
+                    if not path.is_file():
                         raise ValueError("audio_file_outside_project")
                     mime = mimetypes.guess_type(path.name)[0] or ""
                     if not mime.startswith("audio/"):

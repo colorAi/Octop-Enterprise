@@ -19,6 +19,12 @@ export function diffComposerFiles(
   const file_overrides: ComposerFileOverride[] = [];
   const omit_files: string[] = [];
   for (const [name, content] of currMap) {
+    if (
+      DEFAULT_PROMPT_FILES.includes(name) &&
+      !origMap.has(name) &&
+      content === ""
+    )
+      continue;
     if (origMap.get(name) !== content) {
       file_overrides.push({ name, content });
     }

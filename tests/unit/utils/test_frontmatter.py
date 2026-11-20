@@ -2,7 +2,16 @@
 
 from __future__ import annotations
 
+import pytest
+
 from octop.infra.utils.frontmatter import is_agent_file, parse_frontmatter
+
+
+@pytest.mark.parametrize(("bom", "newline"), [("", "\r\n"), ("\ufeff", "\n"), ("\ufeff", "\r\n")])
+def test_skill_frontmatter_with_bom_or_crlf(bom: str, newline: str) -> None:
+    text = bom + newline.join(("---", "name: demo", "description: Example", "---", "", "Body"))
+    assert is_agent_file(text)
+    assert parse_frontmatter(text) == ({"name": "demo", "description": "Example"}, "Body")
 
 
 def test_frontmatter_at_first_line() -> None:

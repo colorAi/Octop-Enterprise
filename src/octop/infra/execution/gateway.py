@@ -38,17 +38,17 @@ class GatewayExecution:
         return current_execution.get() is None
 
     async def cron(self, command: Any) -> None:
+        from octop.infra.cron.delivery import prepare_cron_session
+
         await self.server.employee_resources.authorize(command.user_id, command.agent_id)
         at = command.scheduled_at or "manual:" + uuid.uuid4().hex
         run = await self.service.io.run(self.service.repo.scheduled, command.cron_id, at)
         if run is None:
             gateway = self.server.app_runtime.gateway
-            if command.fresh_thread:
-                await gateway.thread_registry.reset_by_session_key(command.session_key)
-            session = gateway.require_session(command.agent_id, command.session_key)
-            if session.user_id != command.user_id:
-                raise ExecutionConflict("thread_not_owned")
-            payload = asdict(replace(command, fresh_thread=False, scheduled_at=at))
+            session = await prepare_cron_session(gateway, command)
+            payload = asdict(
+                replace(command, fresh_thread=False, scheduled_at=at, thread_id=session.thread_id)
+            )
             run = await self.service.io.run(
                 self.service.repo.submit,
                 user=command.user_id,

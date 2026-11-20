@@ -1,8 +1,11 @@
-import { LocalImagePreview, isLocalPreviewImage } from "./LocalImagePreview";
+import {
+  LocalImagePreview,
+  isLocalPreviewImage,
+  useLocalImagePreviewScope,
+} from "./LocalImagePreview";
 import { Alert, Button, Image, Space, Typography } from "antd";
 import { useTranslation } from "react-i18next";
 import { message } from "@/utils/antdMessage";
-import { useDesktopWorkspace } from "@/context/DesktopWorkspaceContext";
 import { requireDesktopRuntime } from "@/api/desktopRuntime";
 import type { ChatMessage } from "../hooks/useChat";
 import styles from "../index.module.less";
@@ -54,14 +57,8 @@ export function localFileResults(messages: ChatMessage[]) {
 
 export function LocalFileResults({ messages }: { messages: ChatMessage[] }) {
   const { t } = useTranslation();
-  const desktop = useDesktopWorkspace();
   const native = Boolean(window.__octopRuntime);
-  const previewScope = JSON.stringify([
-    desktop.state?.owner_user_id,
-    desktop.state?.path,
-    desktop.state?.grant?.id,
-    desktop.state?.grant?.version,
-  ]);
+  const previewScope = useLocalImagePreviewScope();
   const local = new Map<
     string,
     {

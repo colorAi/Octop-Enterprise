@@ -55,6 +55,15 @@
   overscroll-behavior: contain;
 }
 
+// Keep the start of a wide page inside the scroll area.
+.docxWrap :global(.docx-doc-wrapper) {
+  align-items: flex-start;
+}
+
+.docxWrap :global(.docx-doc-wrapper > section.docx-doc) {
+  margin-inline: auto;
+}
+
 .pptxWrap {
   flex: 1;
   min-height: 0;

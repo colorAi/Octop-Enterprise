@@ -61,15 +61,56 @@ def local_attachment_metadata(project: Path, files: list[dict[str, Any]]) -> lis
     return metadata
 
 
-def image_reference_inputs(project: Path, references: list[str]) -> list[str]:
+def _project_path_key(
+    project: Path, key: str, previous_roots: Sequence[str], *, allow_previous: bool = True
+) -> str:
+    native = Path(key)
+    if native.is_absolute() and native.is_relative_to(project):
+        return native.relative_to(project).as_posix()
+    normalized = key.replace("\\", "/")
+    for root in sorted(previous_roots, key=len, reverse=True):
+        root = root.replace("\\", "/").rstrip("/")
+        if not root:
+            continue
+        candidate, prefix = normalized, root
+        if ntpath.splitdrive(root)[0]:
+            candidate, prefix = candidate.casefold(), prefix.casefold()
+        if candidate == prefix or candidate.startswith(prefix + "/"):
+            if not allow_previous:
+                raise ValueError("local_output_uses_old_project_root")
+            relative = normalized[len(root) :].lstrip("/") or "."
+            if ".." in relative.split("/"):
+                raise ValueError("Path traversal outside project is not allowed")
+            return relative
+    return key
+
+
+def project_media_path(
+    project: Path, key: str, previous_roots: Sequence[str] = (), *, write: bool = False
+) -> Path:
+    root = project.resolve()
+    relative = _project_path_key(root, key, previous_roots, allow_previous=not write)
+    if relative.startswith("/") and not relative.startswith("//"):
+        relative = relative[1:]
+    if ntpath.splitdrive(relative)[0] or ".." in relative.replace("\\", "/").split("/"):
+        raise ValueError("Media file must be inside this project")
+    target = (root / relative).resolve()
+    if target == root or not target.is_relative_to(root):
+        raise ValueError("Media file must be inside this project")
+    return target
+
+
+def image_reference_inputs(
+    project: Path, references: list[str], *, previous_roots: Sequence[str] = ()
+) -> list[str]:
     """Upload only explicitly selected project images to the image-editing tool."""
     if len(references) > 4:
         raise ValueError("At most four reference images are supported")
     encoded = []
     total = 0
     for reference in references:
-        path = (project / reference).resolve(strict=True)
-        if not path.is_relative_to(project.resolve()) or not path.is_file():
+        path = project_media_path(project, reference, previous_roots)
+        if not path.is_file():
             raise ValueError("Reference image must be inside this project")
         mime = mimetypes.guess_type(path.name)[0]
         if mime not in {"image/png", "image/jpeg", "image/webp"}:
@@ -233,11 +274,7 @@ class ProjectBackend(HarnessLocalShellBackend):
         )
         self.project, self.state, self.emit = project, state, emit
         self.tool_path = tool_path
-        self.previous_roots = sorted(
-            (p.replace("\\", "/").rstrip("/") for p in previous_roots if p),
-            key=len,
-            reverse=True,
-        )
+        self.previous_roots = tuple(previous_roots)
         self.packages = os.environ.get("OCTOP_COMPANY_PACKAGES", "")
         self.processes: set[asyncio.subprocess.Process] = set()
         self.written_files: set[str] = set()
@@ -245,21 +282,7 @@ class ProjectBackend(HarnessLocalShellBackend):
     def _resolve_path(self, key: str) -> Path:
         # File tools accept both project-relative paths and the native absolute
         # paths shown in shell output; preserve virtual-root escape checks.
-        native = Path(key)
-        if native.is_absolute() and native.is_relative_to(self.project):
-            key = native.relative_to(self.project).as_posix()
-        else:
-            normalized = key.replace("\\", "/")
-            for root in self.previous_roots:
-                candidate, prefix = normalized, root
-                if len(root) > 1 and root[1] == ":":
-                    candidate, prefix = candidate.lower(), prefix.lower()
-                if candidate == prefix or candidate.startswith(prefix + "/"):
-                    key = normalized[len(root) :].lstrip("/") or "."
-                    if ".." in key.split("/"):
-                        raise ValueError("Path traversal outside project is not allowed")
-                    break
-        return super()._resolve_path(key)
+        return super()._resolve_path(_project_path_key(self.project, key, self.previous_roots))
 
     def write(self, file_path: str, content: str) -> WriteResult:
         result = super().write(file_path, content)

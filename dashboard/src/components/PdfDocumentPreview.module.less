@@ -196,13 +196,14 @@
 .pdfDocument {
   display: flex;
   flex-direction: column;
-  align-items: center;
+  align-items: flex-start;
   gap: 12px;
 }
 
 .pdfPageSlot {
   position: relative;
   flex: 0 0 auto;
+  margin-inline: auto;
   overflow: hidden;
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
   background: #fff;

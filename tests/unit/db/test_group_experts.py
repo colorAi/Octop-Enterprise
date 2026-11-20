@@ -475,6 +475,34 @@ def test_provider_changes_are_transactional_and_never_restore_old_snapshot(group
     assert e.group.admit(context(e)) == first  # Original acceptance receipt is immutable.
 
 
+@pytest.mark.parametrize("edit", ["rotate", "disable", "model_removed"])
+def test_scope_refresh_preserves_binding_while_provider_update_is_pending(group_env, edit):
+    e = group_env
+    identity = {"source_agent_id": e.source.agent_id, "source_row_id": e.source.id}
+    e.group.save_scope(
+        actor=e.admin,
+        request_id="keep-binding",
+        conversation_id="group-one",
+        department_id="department-one",
+        sources=[identity],
+        expected_revision=1,
+    )
+    updates = {
+        "rotate": {"api_key": "next"},
+        "disable": {"enabled": False},
+        "model_removed": {"models_json": "[]"},
+    }
+    e.repos.provider_repo.update(e.provider, **updates[edit])
+    assert e.group.available_sources() == []
+    e.group.refresh()
+    with e.pool.connect() as conn:
+        revoked = conn.execute(
+            "SELECT COUNT(*) FROM group_expert_binding_revocations WHERE conversation_id=?",
+            ("group-one",),
+        ).fetchone()[0]
+    assert revoked == int(edit != "rotate")
+
+
 def test_provider_rollback_and_recreation_keep_identity_isolated(group_env):
     e = group_env
     before = e.group.provider_version(e.provider)

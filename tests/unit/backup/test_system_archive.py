@@ -1016,7 +1016,7 @@ def test_migration_restore_remaps_ownership_to_admin_user_id_2(tmp_path: Path) -
     src_layout = PathLayout(tmp_path / "src")
     src_layout.root.mkdir()
     migration_archive = tmp_path / "migration-remap.tar.gz"
-    src_pool = _make_migration_backup(src_layout, migration_archive, username="lc_user")
+    src_pool = _make_migration_backup(src_layout, migration_archive, username="octop_admin")
     src_pool.close()
 
     tgt_layout = PathLayout(tmp_path / "tgt")

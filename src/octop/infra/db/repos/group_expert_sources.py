@@ -6,6 +6,7 @@ import json
 from typing import Any
 
 from octop.infra.db.repos.execution import MAX_PAYLOAD, wire
+from octop.infra.db.repos.providers import ProviderRow
 
 
 def _scope_export(
@@ -129,25 +130,39 @@ def publish_objects(
             )
 
 
-def available_sources(conn: Any) -> list[dict[str, Any]]:
+def available_sources(conn: Any, *, retain_pending: bool = False) -> list[dict[str, Any]]:
     rows = conn.execute(
         "SELECT s.* FROM group_expert_source_versions s JOIN agents a ON a.agent_id=s.source_agent_id AND a.id=s.source_row_id "
         "JOIN expert_assignment_source policy ON policy.source_user_id=a.user_id JOIN users u ON u.id=a.user_id "
-        "WHERE a.enabled=1 AND a.kind='expert' AND u.role='admin' AND u.disabled=0 AND s.invalid_reason='' ORDER BY s.source_agent_id"
+        "WHERE a.enabled=1 AND a.kind='expert' AND u.role='admin' AND u.disabled=0 "
+        "AND s.invalid_reason IN ('','group_expert_configuration_changed') ORDER BY s.source_agent_id"
     ).fetchall()
     result = []
     for row in rows:
         snapshot = json.loads(row["snapshot_json"])
-        current = conn.execute(
-            "SELECT 1 FROM group_expert_provider_versions WHERE provider_id=? AND generation=? AND revision=? AND deleted=0",
-            (
-                snapshot["provider_id"],
-                snapshot["provider_generation"],
-                snapshot["provider_revision"],
-            ),
+        provider = conn.execute(
+            "SELECT p.*, v.revision AS provider_revision FROM group_expert_provider_versions v"
+            " JOIN providers p ON p.id=v.provider_id"
+            " WHERE v.provider_id=? AND v.generation=? AND v.deleted=0 AND p.enabled=1",
+            (snapshot.get("provider_id"), snapshot.get("provider_generation")),
         ).fetchone()
-        if not current:
+        if provider is None:
             continue
+        current = provider["provider_revision"] == snapshot["provider_revision"]
+        if row["invalid_reason"] or not current:
+            # The old authorization revision still fences admissions in both
+            # services. Keep bindings while the same model awaits publication.
+            name, _, model = snapshot["model_ref"].partition("/")
+            if (
+                not retain_pending
+                or current
+                or provider["name"] != name
+                or not any(
+                    isinstance(item, dict) and item.get("id") == model
+                    for item in ProviderRow.from_row(provider).get_models()
+                )
+            ):
+                continue
         display = json.loads(row["display_json"])
         result.append(
             {
@@ -167,7 +182,7 @@ def available_sources(conn: Any) -> list[dict[str, Any]]:
 def refresh_scopes(conn: Any, now: int) -> None:
     from octop.infra.db.repos.group_experts import digest, enqueue
 
-    sources = available_sources(conn)
+    sources = available_sources(conn, retain_pending=True)
     for scope in conn.execute(
         "SELECT * FROM group_expert_scopes ORDER BY conversation_id"
     ).fetchall():

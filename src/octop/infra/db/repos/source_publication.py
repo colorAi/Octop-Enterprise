@@ -31,7 +31,7 @@ class SourcePublicationRepo:
                 (user,),
             )
             conn.execute(
-                "UPDATE resource_source_heads SET editing=1,failed=0,dirty_revision=dirty_revision+1 WHERE user_id=?",
+                "UPDATE resource_source_heads SET editing=1,dirty_revision=dirty_revision+1 WHERE user_id=?",
                 (user,),
             )
             return dict(
@@ -44,6 +44,14 @@ class SourcePublicationRepo:
         with self.db.transaction() as conn:
             conn.execute(
                 "UPDATE resource_source_heads SET editing=0,failed=1 WHERE user_id=?", (user,)
+            )
+
+    def reject_before_write(self, user: int, revision: int) -> None:
+        with self.db.transaction() as conn:
+            conn.execute(
+                "UPDATE resource_source_heads SET editing=0,"
+                "failed=CASE WHEN dirty_revision<>? THEN 1 ELSE failed END WHERE user_id=?",
+                (revision, user),
             )
 
     def dirty(self) -> None:

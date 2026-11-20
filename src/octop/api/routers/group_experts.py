@@ -320,4 +320,10 @@ async def authorization_status(
     if not user.is_admin:
         raise OctopError(ErrorCode.FORBIDDEN, "administrator required")
     service = getattr(server, "group_experts", None)
-    return {"data": {"syncing": bool(service and await service.io.run(service.repo.syncing))}}
+    return {
+        "data": {
+            "syncing": bool(
+                service and service.bridge.enabled and await service.io.run(service.repo.syncing)
+            )
+        }
+    }

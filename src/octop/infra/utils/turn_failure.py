@@ -8,10 +8,31 @@ from contextlib import contextmanager
 from contextvars import ContextVar, Token
 from typing import Any
 
+import httpx
+
 logger = logging.getLogger(__name__)
 
 _DETAIL_MAX = 500
 _TURN_MODEL: ContextVar[str] = ContextVar("octop_turn_model", default="")
+
+
+def model_not_executed(exc: BaseException) -> bool:
+    """Only rejection/pre-connect failures prove a reserved request did not run."""
+    status = (
+        exc.response.status_code
+        if isinstance(exc, httpx.HTTPStatusError)
+        else getattr(exc, "status_code", None)
+    )
+    if isinstance(status, int):
+        return status in {400, 401, 403, 404, 405, 413, 415, 422, 429}
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout)):
+            return True
+        current = current.__cause__
+    return False
 
 
 def _truncate(text: str) -> str:

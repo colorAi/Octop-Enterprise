@@ -124,6 +124,13 @@ func expertResult(h *H, call, state string) map[string]any {
 func TestGroupExpertInvitationLimitsAndImmutableHistory(t *testing.T) {
 	h, conv, _ := expertSetup(t)
 	b := inviteExpert(h, conv, 0)
+	var systemMessage string
+	if err := h.D.Store.Pool.QueryRow(context.Background(), `SELECT id FROM messages WHERE conversation_id=$1 AND system_kind='group.expert.joined'`, conv).Scan(&systemMessage); err != nil {
+		t.Fatal(err)
+	}
+	if code, body := h.request(admin, "POST", "/messages/"+systemMessage+"/recall", nil); code != 403 {
+		t.Fatalf("system messages must reject recall with 403: %d %v", code, body)
+	}
 	first := b["binding_id"].(string)
 	if inviteExpert(h, conv, 0)["binding_id"] != first {
 		t.Fatal("duplicate invitation")

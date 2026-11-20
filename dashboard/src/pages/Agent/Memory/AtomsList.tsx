@@ -5,7 +5,7 @@
  * star importance, percentage confidence, relative timestamps, and no raw metadata IDs.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Button,
   Progress,
@@ -69,8 +69,12 @@ export default function AtomsList({ agentId }: Props) {
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   const [entities, setEntities] = useState<EntityItem[]>([]);
   const [createOpen, setCreateOpen] = useState(false);
+  const [refresh, setRefresh] = useState(0);
+  const confirmation = useRef<{ destroy(): void } | null>(null);
 
-  const load = useCallback(async () => {
+  useEffect(() => {
+    if (!agentId) return;
+    let current = true;
     setLoading(true);
     const body: ListAtomsBody = {
       offset: (page - 1) * PAGE_SIZE,
@@ -78,48 +82,83 @@ export default function AtomsList({ agentId }: Props) {
     };
     if (kind) body.candidate_type = kind;
     if (importance) body.importance_min = importance;
-    try {
-      const r = await memoryDashboardApi.listAtoms(agentId, body);
-      setItems(r.items);
-      setTotal(r.total);
-    } finally {
-      setLoading(false);
-    }
-  }, [agentId, page, kind, importance]);
+    void memoryDashboardApi
+      .listAtoms(agentId, body)
+      .then(
+        (r) => {
+          if (!current) return;
+          setItems(r.items);
+          setTotal(r.total);
+        },
+        () => {
+          if (!current) return;
+          setItems([]);
+          setTotal(0);
+        },
+      )
+      .finally(() => {
+        if (current) setLoading(false);
+      });
+    return () => {
+      current = false;
+    };
+  }, [agentId, page, kind, importance, refresh]);
 
   useEffect(() => {
     if (!agentId) return;
-    void load();
+    let current = true;
     void memoryDashboardApi
       .listEntities(agentId, {
         limit: 200,
         order_by: "atom_count",
         order: "desc",
       })
-      .then((r) => setEntities(r.items))
-      .catch(() => setEntities([]));
-  }, [agentId, load]);
+      .then((r) => {
+        if (current) setEntities(r.items);
+      })
+      .catch(() => {
+        if (current) setEntities([]);
+      });
+    return () => {
+      current = false;
+    };
+  }, [agentId, refresh]);
+
+  useEffect(() => {
+    setSelected(null);
+    setCreateOpen(false);
+    return () => {
+      confirmation.current?.destroy();
+      confirmation.current = null;
+    };
+  }, [agentId]);
 
   const handleDeprecate = (atom: AtomItem) => {
-    confirmDeprecateAtom({
+    const handle = confirmDeprecateAtom({
       agentId,
       atom,
       onSuccess: () => {
+        if (confirmation.current !== handle) return;
+        confirmation.current = null;
         setSelected(null);
-        void load();
+        setRefresh((value) => value + 1);
       },
     });
+    confirmation.current = handle;
   };
 
   const handleEdit = (atom: AtomItem) => {
-    confirmEditAtom({
+    const handle = confirmEditAtom({
       agentId,
       atom,
       onSuccess: (next) => {
+        if (confirmation.current !== handle) return;
+        confirmation.current = null;
         setSelected(next);
-        void load();
+        setRefresh((value) => value + 1);
       },
     });
+    confirmation.current = handle;
   };
 
   const toolbar = (
@@ -317,17 +356,7 @@ export default function AtomsList({ agentId }: Props) {
         agentId={agentId}
         entities={entities}
         onClose={() => setCreateOpen(false)}
-        onSuccess={() => {
-          void load();
-          void memoryDashboardApi
-            .listEntities(agentId, {
-              limit: 200,
-              order_by: "atom_count",
-              order: "desc",
-            })
-            .then((r) => setEntities(r.items))
-            .catch(() => undefined);
-        }}
+        onSuccess={() => setRefresh((value) => value + 1)}
       />
     </>
   );

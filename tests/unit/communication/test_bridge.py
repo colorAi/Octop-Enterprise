@@ -36,6 +36,7 @@ def test_whitelist_and_credential_signature():
     assert match_route("GET", "/contacts").permission == "contacts"
     assert match_route("GET", "/presence").permission == "contacts"
     assert match_route("POST", "/groups").permission == "groups_create"
+    assert match_route("GET", "/groups/group1/expert-calls/call1") is not None
     assert match_route("POST", "/organization/company-group").permission == "departments"
     for method, path in [
         ("POST", "/groups/arbitrary/unknown"),

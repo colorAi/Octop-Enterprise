@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any
 
 from langchain_core.messages import AIMessage, HumanMessage
@@ -46,6 +46,34 @@ class CronDeliveryCommand:
     model: str | None
     mcp_servers: tuple[str, ...]
     scheduled_at: str | None = None
+    thread_id: str | None = None
+
+    @property
+    def fresh_dashboard(self) -> bool:
+        return self.fresh_thread and self.session_key == ThreadRegistry.dashboard_key(
+            agent_id=self.agent_id, user_id=self.user_id
+        )
+
+
+async def prepare_cron_session(gateway: Gateway, command: CronDeliveryCommand) -> SessionRow:
+    registry = gateway.thread_registry
+    created = command.fresh_dashboard and registry.get_session(command.session_key) is None
+    if created:
+        await registry.get_or_create(
+            agent_id=command.agent_id,
+            user_id=command.user_id,
+            channel_type=ThreadRegistry.CHANNEL_DASHBOARD,
+            channel_subject_id=str(command.user_id),
+        )
+    session = gateway.require_session(command.agent_id, command.session_key)
+    if session.user_id != command.user_id:
+        raise ValueError(
+            f"session {command.session_key!r} does not belong to user {command.user_id!r}"
+        )
+    if command.fresh_thread and not created:
+        await registry.reset_by_session_key(command.session_key)
+        session = gateway.require_session(command.agent_id, command.session_key)
+    return session
 
 
 class CronDeliveryService:
@@ -74,23 +102,31 @@ class CronDeliveryService:
             return
 
         async def _locked() -> None:
-            if command.fresh_thread:
-                await self._gateway.thread_registry.reset_by_session_key(command.session_key)
-            session = self._gateway.require_session(command.agent_id, command.session_key)
-            if session.user_id != command.user_id:
-                raise ValueError(
-                    f"session {command.session_key!r} does not belong to user {command.user_id!r}"
-                )
+            session = await prepare_cron_session(self._gateway, command)
+            if command.thread_id is not None and command.thread_id != session.thread_id:
+                thread = self._repos.thread_repo.get(command.thread_id)
+                if (
+                    thread is None
+                    or thread.user_id != command.user_id
+                    or thread.agent_id != command.agent_id
+                    or thread.session_key != command.session_key
+                ):
+                    raise ValueError(f"cron thread {command.thread_id!r} is unavailable")
+                session = replace(session, thread_id=command.thread_id)
             if command.task_type == "text":
                 await self._deliver_text(command, session)
             else:
                 await self._deliver_agent(command, session)
 
-        await self._gateway.run_in_session(
-            command.agent_id,
-            command.session_key,
-            _locked,
-        )
+        if command.fresh_dashboard:
+            await self._gateway.run_in_session(
+                command.agent_id,
+                command.session_key,
+                _locked,
+                unbound_dashboard_user=command.user_id,
+            )
+        else:
+            await self._gateway.run_in_session(command.agent_id, command.session_key, _locked)
 
     async def _deliver_text(
         self,

@@ -10,7 +10,7 @@ from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable
 from contextlib import suppress
 from contextvars import ContextVar
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 from octop.infra.db.repos.execution import TERMINAL, ExecutionRepo
 from octop.infra.db.repos.execution import ExecutionConflict as ExecutionConflict
@@ -56,10 +56,11 @@ def public_frames(
     ]
 
 
-@dataclass(frozen=True)
+@dataclass
 class ActiveExecution:
     service: ExecutionService
     run: dict[str, Any]
+    model_failure: Literal["rejected", "unconfirmed"] | None = None
 
     @property
     def fence(self) -> tuple[str, str, str, int]:
@@ -225,6 +226,8 @@ class ExecutionService:
                     pending = asyncio.ensure_future(deliveries.get())
                 done, _ = await asyncio.wait({pending}, timeout=0.075)
                 if not done:
+                    if producer.cancelled():
+                        raise asyncio.CancelledError
                     await self._emit(active, frames)
                     size = 0
                     continue
@@ -313,10 +316,19 @@ class ExecutionService:
                 )
                 break
         except BaseException as exc:
-            # Exceptions/cancellation can happen after external writes. Never infer
-            # failure or release occupancy from a lost coroutine alone.
+            if active.model_failure == "rejected":
+                with suppress(Exception):
+                    await self.io.run(self.repo.transition, *active.fence, "failed")
+                    return
+            # _stream has joined the producer. The repo still checks for unknown
+            # tool effects before releasing a session after a model-only failure.
             with suppress(Exception):
-                await self.io.run(self.repo.transition, *active.fence, "unknown")
+                await self.io.run(
+                    self.repo.transition,
+                    *active.fence,
+                    "unknown",
+                    release_model_session=active.model_failure is not None,
+                )
             logger.warning(
                 "execution interrupted; result remains unknown run=%s", run["run_id"], exc_info=True
             )

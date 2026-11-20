@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -17,6 +18,8 @@ from octop.infra.db.repos.sessions import SessionRepo
 from octop.infra.db.repos.thread_messages import ThreadMessageRepo
 from octop.infra.db.repos.threads import ThreadRepo
 from octop.infra.db.repos.users import UserRepo
+from octop.infra.execution.gateway import GatewayExecution
+from octop.infra.gateway.gateway import Gateway
 from octop.infra.gateway.threads import ThreadRegistry
 
 
@@ -313,7 +316,7 @@ async def test_fresh_thread_resets_before_require_session() -> None:
         repos=MagicMock(),
     )
     await service.deliver(_command(fresh_thread=True, task_type="text"))
-    assert order == ["reset", "require"]
+    assert order == ["require", "reset", "require"]
 
 
 @pytest.mark.asyncio
@@ -331,8 +334,69 @@ async def test_wrong_user_rejects_session() -> None:
         repos=MagicMock(),
     )
     with pytest.raises(ValueError, match="does not belong to user"):
-        await service.deliver(_command())
+        await service.deliver(_command(fresh_thread=True))
+    gateway.thread_registry.reset_by_session_key.assert_not_called()
     gateway.push_session_text.assert_not_awaited()
+
+
+@pytest.mark.parametrize("scheduled_at", [None, "2026-11-19T00:00:00+00:00"])
+@pytest.mark.parametrize("role_split", [False, True])
+@pytest.mark.asyncio
+async def test_fresh_dashboard_cron_recovers_missing_binding(
+    tmp_path: Path, role_split: bool, scheduled_at: str | None
+) -> None:
+    db, session = _seed_dashboard_thread(tmp_path, thread_id="deleted")
+    registry = ThreadRegistry(session_repo=SessionRepo(db), thread_repo=ThreadRepo(db))
+    registry.delete_thread("deleted")
+    assert registry.get_session(session.session_key) is None
+    gateway = Gateway.__new__(Gateway)
+    gateway._thread_registry = registry
+
+    async def under_lock(_channel_id, _key, operation):
+        await operation()
+
+    gateway._channel_manager = SimpleNamespace(run_in_session=under_lock)
+    gateway.push_session_text = AsyncMock()
+    gateway.notify_dashboard_push = AsyncMock()
+    manager = MagicMock()
+    manager.get_agent.return_value.aappend_messages = AsyncMock(return_value=[])
+    repos = SimpleNamespace(user_repo=UserRepo(db), thread_repo=ThreadRepo(db))
+    delivery = CronDeliveryService(gateway=gateway, agent_manager=manager, repos=repos)
+    command = _command(
+        fresh_thread=True, session_key=session.session_key, scheduled_at=scheduled_at
+    )
+
+    if role_split:
+        server = SimpleNamespace(
+            app_runtime=SimpleNamespace(gateway=gateway),
+            employee_resources=SimpleNamespace(authorize=AsyncMock()),
+        )
+        repo = MagicMock()
+        repo.scheduled.return_value = None
+        repo.submit.return_value = {"user_id": 1, "agent_id": "a1", "run_id": "run1"}
+        repo.get.return_value = {"state": "completed"}
+
+        async def io_run(func, *args, **kwargs):
+            return func(*args, **kwargs)
+
+        async def replay(_run_id, **_kwargs):
+            kwargs = repo.submit.call_args.kwargs
+            await delivery.deliver(CronDeliveryCommand(**kwargs["request"]["command"]))
+            yield {}
+
+        adapter = GatewayExecution.__new__(GatewayExecution)
+        adapter.server = server
+        adapter.service = SimpleNamespace(io=SimpleNamespace(run=io_run), repo=repo, replay=replay)
+        await adapter.cron(command)
+    else:
+        await delivery.deliver(command)
+
+    restored = registry.get_session(session.session_key)
+    assert restored is not None
+    assert (restored.user_id, restored.agent_id) == (1, "a1")
+    assert restored.thread_id != "deleted"
+    assert gateway.push_session_text.await_args.args[0].thread_id == restored.thread_id
+    db.close()
 
 
 @pytest.mark.asyncio

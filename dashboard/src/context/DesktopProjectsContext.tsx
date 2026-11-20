@@ -59,8 +59,12 @@ export function DesktopProjectsProvider({ children }: { children: ReactNode }) {
   const online = workspace.state?.state === "online";
   const available = Boolean(window.__octopRuntime?.projects);
   const apply = useCallback((next: DesktopProjectState | null) => {
-    setDesktopProjectSnapshot(next);
-    setState(next);
+    const normalized = next
+      ? { ...next, projects: next.projects ?? {}, threads: next.threads ?? {} }
+      : null;
+    setDesktopProjectSnapshot(normalized);
+    setState(normalized);
+    return normalized;
   }, []);
   const refresh = useCallback(() => setRevision((r) => r + 1), []);
   useEffect(() => {
@@ -130,9 +134,9 @@ export function DesktopProjectsProvider({ children }: { children: ReactNode }) {
             ? (await bridge.sync!({ project_ids: [params.project_id!] })).state
             : await bridge.select(params);
         if (request !== sequence.current) return null;
-        apply(next);
+        const applied = apply(next);
         if (action === "sync") refresh();
-        return next;
+        return applied;
       } catch (err) {
         if (request === sequence.current)
           setError(err instanceof Error ? err.message : "无法选择项目");

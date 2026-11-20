@@ -69,13 +69,14 @@ def parse_frontmatter(text: str) -> tuple[dict[str, Any], str]:
     The frontmatter block may be preceded by HTML comments or empty lines;
     the first ``---`` ... ``---`` fence anywhere in the file is used.
     """
-    positions = _find_frontmatter(text)
+    content = text.removeprefix("\ufeff")
+    positions = _find_frontmatter(content)
     if positions is None:
         return {}, text
     start, end = positions
     # start points to the opening ---, end points past the closing ---
-    raw = text[start + 3 : end - 4]  # skip opening ---\n, exclude closing \n---
-    body = text[end:].lstrip("\n")
+    raw = content[start + 3 : end - 4]  # skip opening ---\n, exclude closing \n---
+    body = content[end:].lstrip("\r\n")
     try:
         meta = yaml.safe_load(raw) or {}
         if not isinstance(meta, dict):
@@ -91,4 +92,4 @@ def is_agent_file(text: str) -> bool:
     Leading HTML comments and empty lines are tolerated; the first
     ``---\\n`` fence in the file is recognized as the frontmatter start.
     """
-    return _find_frontmatter(text) is not None
+    return _find_frontmatter(text.removeprefix("\ufeff")) is not None

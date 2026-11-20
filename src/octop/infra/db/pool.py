@@ -75,7 +75,8 @@ class SqlitePool:
                 raise
 
     def close(self) -> None:
-        self._conn.close()
+        with self._lock:
+            self._conn.close()
 
 
 class _CompatRow(Mapping[str, Any]):

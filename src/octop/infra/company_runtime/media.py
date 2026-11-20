@@ -37,7 +37,9 @@ async def generate(
         if settings is not None
         else agent.config.media_generation
     )
-    if config is None or not config.has_api_key() or not getattr(config, kind + "_enabled"):
+    if config is None or not (
+        config.has_image_provider() if kind == "image" else config.has_video_provider()
+    ):
         raise denied(f"company_{kind}_service_unavailable", 503)
     operation = body["operation_id"]
     references = body.get("reference_images") or []

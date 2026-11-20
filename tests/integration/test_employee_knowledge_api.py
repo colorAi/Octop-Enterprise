@@ -97,3 +97,35 @@ async def test_employee_knowledge_assignment_browsing_revocation_and_acl(env):
         operation = spec["paths"]["/api/users/{user_id}/knowledge-bases"][method]
         assert operation["summary"]
         assert operation["responses"]["200"]["content"]["application/json"]["schema"]
+
+
+async def test_demote_administrator_and_assign_resources_in_one_request(env):
+    client, server, admin_auth = env
+    await create_user(client, admin_auth, username="former_admin", role="admin")
+    services = server.services
+    target = services.user_repo.get_by_username("former_admin")
+    admin = services.user_repo.get_by_username("admin")
+    base = services.knowledge_repo.create_base(owner_user_id=admin.id, name="Onboarding")
+    services.provider_repo.create(
+        name="demo",
+        kind="openai",
+        base_url="https://model.example/v1",
+        api_key="test",
+        models_json='[{"id":"demo-model","enabled":true}]',
+    )
+
+    response = await client.patch(
+        f"/api/users/{target.id}",
+        headers=admin_auth,
+        json={
+            "role": "user",
+            "knowledge_base_ids": [base.id],
+            "model_access": {"model_refs": ["demo/demo-model"], "expected_revision": "0"},
+        },
+    )
+    assert response.status_code == 200, response.text
+    assert services.user_repo.get(target.id).role == "user"
+    assert services.knowledge_repo.assigned_base_ids(target.id) == [base.id]
+    from octop.infra.users.model_access import ModelAccess
+
+    assert ModelAccess(services).get(target.id)["model_refs"] == ["demo/demo-model"]

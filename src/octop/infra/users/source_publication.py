@@ -26,6 +26,11 @@ _draft: ContextVar[bool] = ContextVar("octop_source_draft", default=False)
 _FORMAT = "octop.source-resources.v4"
 
 
+class SourceSaveRejected(Exception):
+    def __init__(self, *, before_write: bool) -> None:
+        self.before_write = before_write
+
+
 class SourcePublication:
     def __init__(self, resources: Any, *, executor: tuple[str, str] | None = None) -> None:
         self.resources = resources
@@ -165,9 +170,11 @@ class SourcePublication:
         shards = getattr(self.resources.registry, "runtime_shards", None)
         async with self._lock, shards.activity(None) if shards is not None else nullcontext():
             user = await self._source()
-            touched = set()
+            touched: set[int] = set()
+            draft_revision: int | None = None
             if user is not None:
-                await self.resources._read(self.repo.begin, user)
+                head = await self.resources._read(self.repo.begin, user)
+                draft_revision = head["dirty_revision"]
                 touched.add(user)
             token = _draft.set(True)
             try:
@@ -179,6 +186,11 @@ class SourcePublication:
                         touched.add(selected)
                     await self._publish(selected)
                     touched.discard(selected)
+            except SourceSaveRejected as exc:
+                if exc.before_write and user is not None and draft_revision is not None:
+                    await self.resources._read(self.repo.reject_before_write, user, draft_revision)
+                    touched.discard(user)
+                raise
             finally:
                 _draft.reset(token)
                 for source in touched:

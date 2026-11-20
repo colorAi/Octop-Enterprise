@@ -629,6 +629,9 @@ async def upload_agent_avatar(
     """Store an uploaded image in the agent workspace and set ``icon_url``."""
     data = await file.read()
     workspace = await require_agent_workspace(agent_id, user=user, server=server, owner_only=True)
+    from octop.infra.users.expert_access import ExpertAccess
+
+    ExpertAccess(server.services).assert_manage(agent_id)
     await write_workspace_avatar(workspace, data)
     icon_url = agent_avatar_api_path(agent_id)
     assert server.app_runtime is not None
@@ -678,6 +681,9 @@ async def delete_agent_avatar(
 ) -> Response:
     """Remove the workspace avatar file and clear ``icon_url``."""
     workspace = await require_agent_workspace(agent_id, user=user, server=server, owner_only=True)
+    from octop.infra.users.expert_access import ExpertAccess
+
+    ExpertAccess(server.services).assert_manage(agent_id)
     await delete_workspace_avatar(workspace)
     assert server.app_runtime is not None
     server.app_runtime.agent_registry.set_icon_url(agent_id, None)

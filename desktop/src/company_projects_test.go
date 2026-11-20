@@ -277,6 +277,9 @@ func TestProjectNativeStartAndFilesRemainBoundAfterSelection(t *testing.T) {
 	if params["project_id"] != a.ID || params["project_root"] != a.Path || app.runtimeEpoch != epoch {
 		t.Fatal(params)
 	}
+	if previous, ok := params["project_previous_roots"].([]any); !ok || len(previous) != 0 {
+		t.Fatal("new project must send an empty path array to Python", params)
+	}
 	if _, err = app.projectStartParamsLocked("nonce", app.companyURL, json.RawMessage(`{"thread_id":"missing"}`)); err == nil {
 		t.Fatal("unbound thread used current project")
 	}

@@ -548,20 +548,22 @@ async def fork_thread(
     local_repo = getattr(server.services, "company_runtime_repo", None)
     if local_repo and await asyncio.to_thread(local_repo.binding, thread_id):
         raise OctopError(ErrorCode.FORBIDDEN, "请通过原电脑的项目入口创建本机会话分支")
-    harness = server.app_runtime.agent_registry.get_agent(agent_id)
-    return await fork_dashboard_thread(
-        thread_registry=server.app_runtime.gateway.thread_registry,
-        harness=harness,
-        source=row,
-        user_id=effective_uid,
-        message_id=body.message_id,
-        content=body.content,
-        assistant_turns_from_end=body.assistant_turns_from_end,
-        locale=resolve_request_locale(request),
-        thread_message_repo=server.services.thread_message_repo,
-        history_archive=getattr(server.app_runtime, "history_archive", None),
-        device_repo=server.services.device_repo,
-    )
+    from octop.infra.history.reader import history_runtime
+
+    async with history_runtime(server.app_runtime.agent_registry, agent_id) as harness:
+        return await fork_dashboard_thread(
+            thread_registry=server.app_runtime.gateway.thread_registry,
+            harness=harness,
+            source=row,
+            user_id=effective_uid,
+            message_id=body.message_id,
+            content=body.content,
+            assistant_turns_from_end=body.assistant_turns_from_end,
+            locale=resolve_request_locale(request),
+            thread_message_repo=server.services.thread_message_repo,
+            history_archive=getattr(server.app_runtime, "history_archive", None),
+            device_repo=server.services.device_repo,
+        )
 
 
 @router.post(

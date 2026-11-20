@@ -203,7 +203,7 @@ def test_project_migration_preserves_legacy_records(tmp_path, monkeypatch):
         with db.connect() as conn:
             assert conn.execute("SELECT COUNT(*) FROM company_projects").fetchone()[0] == 0
             assert conn.execute("SELECT COUNT(*) FROM company_project_threads").fetchone()[0] == 0
-            assert conn.execute("SELECT version FROM _schema_version").fetchone()[0] == 32
+            assert conn.execute("SELECT version FROM _schema_version").fetchone()[0] == 36
         assert any(v == 31 for v, _ in discover("postgresql"))
     finally:
         db.close()
@@ -325,7 +325,14 @@ async def test_project_leases_serialize_experts_and_adopt_only_original_installa
 
 
 @pytest.mark.asyncio
-async def test_real_project_runtime_shared_files_isolated_history_and_fork(company, tmp_path):
+@pytest.mark.parametrize(
+    "native_paths",
+    [{}, {"project_previous_roots": None}, {"project_previous_roots": []}],
+    ids=["omitted", "null", "empty"],
+)
+async def test_real_project_runtime_shared_files_isolated_history_and_fork(
+    company, tmp_path, native_paths
+):
     import asyncio
     import json
     import sys
@@ -367,6 +374,7 @@ async def test_real_project_runtime_shared_files_isolated_history_and_fork(compa
                 "project_id": "project-a",
                 "project_root": str(workspace),
                 "text": "write report",
+                **native_paths,
             }
         )
         await asyncio.wait_for(runtime.work["writer-project"], 30)
@@ -411,6 +419,7 @@ async def test_real_project_runtime_shared_files_isolated_history_and_fork(compa
                 "project_id": "project-a",
                 "project_root": str(workspace),
                 "text": "read the existing report",
+                **native_paths,
             }
         )
         await asyncio.wait_for(runtime.work["reader-project"], 30)
@@ -445,6 +454,7 @@ async def test_real_project_runtime_shared_files_isolated_history_and_fork(compa
                 "project_id": "project-a",
                 "project_root": str(workspace),
                 "text": "continue",
+                **native_paths,
             }
         )
         await asyncio.wait_for(runtime.work["forked-project"], 30)

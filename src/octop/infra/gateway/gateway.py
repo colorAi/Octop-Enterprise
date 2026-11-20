@@ -441,11 +441,20 @@ class Gateway:
         agent_id: str,
         session_key: str,
         operation: Callable[[], Awaitable[None]],
+        *,
+        unbound_dashboard_user: int | None = None,
     ) -> None:
         """Serialize a proactive operation with inbound turns for its session."""
-        session = self.require_session(agent_id, session_key)
         manager = self._require_channel_manager()
-        channel_id = self._channel_id_for_session(session)
+        if (
+            unbound_dashboard_user is not None
+            and session_key
+            == ThreadRegistry.dashboard_key(agent_id=agent_id, user_id=unbound_dashboard_user)
+            and self._thread_registry.get_session(session_key) is None
+        ):
+            channel_id = WS_CHANNEL_ID
+        else:
+            channel_id = self._channel_id_for_session(self.require_session(agent_id, session_key))
         await manager.run_in_session(channel_id, session_key, operation)
 
     async def push_text_from_session(

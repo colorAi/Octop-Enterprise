@@ -1099,7 +1099,8 @@ func (s *Service) handleClear(w http.ResponseWriter, r *http.Request) {
 func (s *Service) handleRecall(w http.ResponseWriter, r *http.Request) {
 	a, _ := auth.From(r)
 	msgID := r.PathValue("id")
-	var convID, sender string
+	var convID string
+	var sender *string
 	var seq int64
 	var created time.Time
 	err := s.D.Store.Pool.QueryRow(r.Context(), `SELECT conversation_id, sender_id, seq, created_at FROM messages WHERE id=$1`, msgID).
@@ -1112,7 +1113,7 @@ func (s *Service) handleRecall(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteErrorOf(w, r, httpx.ErrStorage)
 		return
 	}
-	if sender != a.UserID {
+	if sender == nil || *sender != a.UserID {
 		httpx.WriteError(w, r, httpx.ErrForbidden.WithMessage("只能撤回自己的消息"))
 		return
 	}

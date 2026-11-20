@@ -209,6 +209,60 @@ async def test_model_budget_settles_usage_and_keeps_unknown_requests_reserved(se
         await service.io.drain()
 
 
+@pytest.mark.parametrize("failure", ["rejected", "connect", "timeout", "cancelled"])
+async def test_finished_model_failure_unblocks_the_execution_queue(setup, failure):
+    import asyncio
+
+    import httpx
+
+    from octop.infra.agents.middleware.execution_budget import ExecutionBudgetMiddleware
+    from tests.unit.db.test_execution import fence, submit
+
+    pool, repo, user = setup
+    repo.configure(running=1, models=1, queued=8, user_queued=4)
+    submit(repo, user)
+    first = repo.claim("worker", "boot1")
+    service = ExecutionService(repo, node="worker", incarnation="boot1", role="worker")
+    request = ModelRequest(model=SimpleNamespace(model_name="test"), messages=[], tools=[])
+    error = {
+        "rejected": httpx.HTTPStatusError(
+            "rejected",
+            request=httpx.Request("POST", "https://model.example"),
+            response=httpx.Response(429),
+        ),
+        "connect": httpx.ConnectError("connection unavailable"),
+        "timeout": httpx.ReadTimeout("response lost"),
+        "cancelled": asyncio.CancelledError(),
+    }[failure]
+
+    async def handler(_run, _decision):
+        await ExecutionBudgetMiddleware().awrap_model_call(request, AsyncMock(side_effect=error))
+        yield {}
+
+    service.handler = handler
+    await service._execute(first)
+    saved = repo.reconciliation(first["run_id"])
+    unknown = failure in {"timeout", "cancelled"}
+    assert saved["run"]["state"] == ("unknown" if unknown else "failed")
+    assert len(saved["models"]) == int(unknown)
+    assert repo.active("one") is None
+    assert submit(repo, user)["run_id"] == first["run_id"]
+    submit(repo, user, key="next-turn")
+    new = repo.claim("worker", "boot1")
+    assert new
+    if unknown:
+        with pytest.raises(ValueError, match="model_capacity_exceeded"):
+            repo.reserve_model(
+                *fence(new), key="next", provider="test", tokens=100, quota_remaining=None
+            )
+        with pool.connect() as conn:
+            conn.execute(
+                "UPDATE execution_runs SET updated_at=0 WHERE run_id=?", (first["run_id"],)
+            )
+    repo.reserve_model(*fence(new), key="next", provider="test", tokens=100, quota_remaining=None)
+    await service.io.drain()
+
+
 async def test_durable_call_preserves_tool_messages_and_deduplicates(setup):
     pool, repo, _ = setup
     calls = []

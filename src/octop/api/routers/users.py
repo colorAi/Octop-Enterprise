@@ -635,12 +635,14 @@ async def patch_user(
     row = server.user_manager.get_row(user_id)
     if row is None:
         raise OctopError(ErrorCode.NOT_FOUND, "user not found")
-    if body.knowledge_base_ids is not None and (not actor.is_admin or body.role == Role.ADMIN):
+    role_template = _resolve_role_template(server, body.role) if body.role is not None else None
+    target_role = role_template[0] if role_template is not None else str(row.role)
+    if body.knowledge_base_ids is not None and (not actor.is_admin or target_role == Role.ADMIN):
         raise OctopError(
             ErrorCode.FORBIDDEN, "only administrators may assign knowledge to employees"
         )
     if body.model_access is not None:
-        if not actor.is_admin or body.role == Role.ADMIN:
+        if not actor.is_admin or target_role == Role.ADMIN:
             raise OctopError(
                 ErrorCode.FORBIDDEN, "only administrators may assign models to employees"
             )
@@ -650,10 +652,17 @@ async def patch_user(
             user_id,
             body.model_access.model_refs,
             body.model_access.expected_revision,
+            target_role=target_role,
         )
     knowledge_access = KnowledgeAccess(server.services)
     knowledge_ids = (
-        await management_read(server, knowledge_access.validate, user_id, body.knowledge_base_ids)
+        await management_read(
+            server,
+            knowledge_access.validate,
+            user_id,
+            body.knowledge_base_ids,
+            target_role=target_role,
+        )
         if body.knowledge_base_ids is not None
         else None
     )
@@ -661,9 +670,7 @@ async def patch_user(
         _assert_can_assign(actor, body.permissions)
         # An administrator account keeps full access. The form stores that as
         # an empty permission list, which is not a removal of user management.
-        stays_admin = (
-            body.role == Role.ADMIN if body.role is not None else str(row.role) == Role.ADMIN
-        )
+        stays_admin = target_role == Role.ADMIN
         if not stays_admin:
             _assert_not_last_user_manager(
                 server,
@@ -671,10 +678,8 @@ async def patch_user(
                 target_user_id=user_id,
                 new_permissions=body.permissions,
             )
-    if body.role is not None:
-        role_id, template_name, template_perms, template_policies = _resolve_role_template(
-            server, body.role
-        )
+    if role_template is not None:
+        role_id, template_name, template_perms, template_policies = role_template
         if user_id == actor.id and role_id != Role.ADMIN:
             raise OctopError(ErrorCode.FORBIDDEN, "cannot demote yourself")
         _require_admin_to_grant_admin(actor, role_id)

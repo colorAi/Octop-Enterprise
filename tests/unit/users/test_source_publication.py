@@ -152,8 +152,8 @@ async def test_failed_legacy_publication_exposes_capabilities_without_publishing
     assert publication.repo.head(e.admin) == head
 
 
-@pytest.mark.parametrize("failed", [False, True])
-async def test_http_save_publishes_background_writes_before_acknowledging(resources, failed):
+@pytest.mark.parametrize("rejection", [None, 403, 409])
+async def test_http_save_publishes_background_writes_before_acknowledging(resources, rejection):
     from types import SimpleNamespace
 
     import httpx
@@ -170,8 +170,10 @@ async def test_http_save_publishes_background_writes_before_acknowledging(resour
 
     @app.patch("/api/agents/source/workspace/file")
     async def save(background: BackgroundTasks):
+        if rejection == 403:
+            raise HTTPException(403, "denied")
         await e.agents["source"].workspace.aupload_many([("SOUL.md", b"draft")])
-        if failed:
+        if rejection == 409:
             raise HTTPException(409, "rejected")
         background.add_task(e.agents["source"].workspace.aupload_many, [("SOUL.md", b"finished")])
         return {"saved": True}
@@ -189,9 +191,10 @@ async def test_http_save_publishes_background_writes_before_acknowledging(resour
         transport=httpx.ASGITransport(app=app), base_url="http://test"
     ) as client:
         result = await client.patch("/api/agents/source/workspace/file")
-        assert result.status_code == (409 if failed else 200)
+        assert result.status_code == (rejection or 200)
     after = (await e.service.snapshot(uid, aid))["definition"]["files"].get("SOUL.md")
-    assert after == (before if failed else "finished")
+    assert after == (before if rejection else "finished")
+    assert publication.repo.head(e.admin)["failed"] == int(rejection == 409)
 
 
 async def test_expired_publisher_cannot_commit_even_without_replacement(resources):

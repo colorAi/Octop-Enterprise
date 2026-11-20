@@ -125,6 +125,7 @@ def _build_remote_spec(entry: ConnectorCatalogEntry, creds: dict[str, Any]) -> d
             "transport": "http",
             "url": "https://docs.qq.com/openapi/mcp",
             "headers": {"Authorization": token},
+            "preserve_args_schema": True,
         }
         if entry.allowed_tools is not None:
             spec["allowed_tools"] = list(entry.allowed_tools)
@@ -540,7 +541,7 @@ def build_mcp_server_configs_for_user(
                         inst.kind,
                     )
                 continue
-            configs[inst.mcp_server_name] = build_http_mcp_spec(
+            spec = build_http_mcp_spec(
                 entry=entry,
                 instance_id=inst.instance_id,
                 creds=creds,
@@ -552,8 +553,12 @@ def build_mcp_server_configs_for_user(
                     inst.mcp_server_name,
                     inst.kind,
                     entry.mcp_mode,
-                    configs[inst.mcp_server_name].get("transport"),
+                    spec.get("transport"),
                 )
+            # AgentManager registers these HTTP tools after harness startup.
+            if spec.get("preserve_args_schema"):
+                spec.pop("transport")
+            configs[inst.mcp_server_name] = spec
         except Exception:
             logger.exception("failed to build MCP spec for instance %s", inst.instance_id)
 

@@ -68,33 +68,23 @@ const ColleagueMentionInput = forwardRef<ColleagueMentionInputRef, Props>(
       setExperts([]);
       setLoading(true);
       setError(undefined);
-      void communicationApi.members(groupId, controller.signal).then(
-        (result) => {
-          if (!controller.signal.aborted) {
-            setMembers(result.items);
-            setLoading(false);
-          }
-        },
-        (reason: unknown) => {
-          if (!controller.signal.aborted) {
-            setError(reason);
-            setLoading(false);
-          }
-        },
-      );
-      void communicationApi
-        .groupExperts(groupId, false, controller.signal)
-        .then((value) => {
-          if (
-            !controller.signal.aborted &&
-            value.ready &&
-            value.experts_enabled
-          )
-            setExperts(
-              value.items.filter((v) => v.state === "active" && v.can_call),
-            );
-        })
-        .catch(() => undefined);
+      void Promise.allSettled([
+        communicationApi.members(groupId, controller.signal),
+        communicationApi.groupExperts(groupId, false, controller.signal),
+      ]).then(([people, bots]) => {
+        if (controller.signal.aborted) return;
+        if (people.status === "fulfilled") setMembers(people.value.items);
+        else setError(people.reason);
+        if (
+          bots.status === "fulfilled" &&
+          bots.value.ready &&
+          bots.value.experts_enabled
+        )
+          setExperts(
+            bots.value.items.filter((v) => v.state === "active" && v.can_call),
+          );
+        setLoading(false);
+      });
       return () => controller.abort();
     }, [open, groupId, revision]);
 
@@ -357,9 +347,10 @@ const ColleagueMentionInput = forwardRef<ColleagueMentionInputRef, Props>(
                 return;
               }
               if (event.key === "Enter" || event.key === "Tab") {
-                event.preventDefault();
-                if (!loading && !error && candidates[activeIndex])
+                if (!loading && !error && candidates[activeIndex]) {
+                  event.preventDefault();
                   choose(candidates[activeIndex]);
+                }
                 return;
               }
             }

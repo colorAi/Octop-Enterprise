@@ -9,6 +9,17 @@ import {
 } from "./composerFiles";
 
 describe("diffComposerFiles", () => {
+  it("leaves seeded prompts in place when the blank editor placeholder is untouched", () => {
+    expect(diffComposerFiles([], ensurePromptFiles([])).file_overrides).toEqual(
+      [],
+    );
+    expect(
+      diffComposerFiles(
+        [{ name: "AGENTS.md", content: "previous" }],
+        [{ name: "AGENTS.md", content: "" }],
+      ).file_overrides,
+    ).toEqual([{ name: "AGENTS.md", content: "" }]);
+  });
   it("reports edited, added, and removed files", () => {
     expect(
       diffComposerFiles(

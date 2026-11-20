@@ -12,7 +12,7 @@ import hashlib
 import tempfile
 from dataclasses import replace
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import quote
 
 from langchain_core.tools import tool
@@ -37,7 +37,7 @@ class ImageInput(BaseModel):
 class VideoInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
     prompt: str = Field(min_length=1, max_length=8000)
-    duration: int = Field(default=5, ge=2, le=15)
+    duration: int = Field(default=5, ge=4, le=15)
     aspect_ratio: str = Field(default="16:9", pattern=r"^(16:9|9:16|1:1)$")
 
 
@@ -106,7 +106,8 @@ class GroupTools:
         if name not in self.tools:
             raise ExecutionConflict("group_expert_tool_not_authorized")
 
-    async def generate(self, kind: str, **body: Any) -> dict[str, Any]:
+    async def generate(self, kind: Literal["image", "video"], **body: Any) -> dict[str, Any]:
+        from octop_harness.media.errors import MediaGenerationError
         from octop_harness.media.models import ImageGenerationRequest, VideoGenerationRequest
         from octop_harness.media.registry import create_media_manager
 
@@ -115,21 +116,45 @@ class GroupTools:
             secret_repo=self.groups.services.secret_repo,
         )
         config = await self.groups.io.run(settings.harness_config)
-        if config is None or not config.has_api_key() or not getattr(config, kind + "_enabled"):
+        if config is None or not (
+            config.has_image_provider() if kind == "image" else config.has_video_provider()
+        ):
             return {"error": f"company_{kind}_service_unavailable"}
         # The output directory is a fixed relative path in this call's workspace.
         config = replace(config, output_dir="generated")
         manager = create_media_manager(config, self.workspace)
-        if kind == "image":
-            result = await manager.generate_image(ImageGenerationRequest(**body, count=1))
-        else:
-            result = await manager.generate_video(VideoGenerationRequest(**body))
+        try:
+            if kind == "image":
+                result = await manager.generate_image(ImageGenerationRequest(**body, count=1))
+            else:
+                result = await manager.generate_video(VideoGenerationRequest(**body))
+        except MediaGenerationError as exc:
+            if exc.category not in {"validation", "safety"}:
+                raise
+            return {
+                "error": f"company_{kind}_{exc.code}",
+                "instruction": "Do not repeat this generation request.",
+            }
         assets = []
         for artifact in result.artifacts:
             data = await self.workspace.adownload_bytes(artifact.path)
             if data is None:
-                raise ExecutionConflict("group_expert_artifact_unavailable")
-            assets.append(await self.upload(data, artifact.media_type, Path(artifact.path).name))
+                return {"error": "group_expert_artifact_unavailable"}
+            try:
+                assets.append(
+                    await self.upload(data, artifact.media_type, Path(artifact.path).name)
+                )
+            except ExecutionConflict as exc:
+                if str(exc) not in {
+                    "group_expert_artifact_invalid",
+                    "group_expert_artifact_too_large",
+                }:
+                    raise
+                return {"error": str(exc)}
+            except OctopError as exc:
+                if exc.status not in {400, 413, 415, 422}:
+                    raise
+                return {"error": "group_expert_artifact_invalid"}
         return {
             "status": "completed",
             "attachments": assets,

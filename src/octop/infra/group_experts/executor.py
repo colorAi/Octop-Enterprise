@@ -9,7 +9,6 @@ import time
 from contextlib import suppress
 from typing import Any
 
-import httpx
 from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage, messages_to_dict
 from langchain_core.utils.function_calling import convert_to_openai_tool
 from pydantic import ValidationError
@@ -20,6 +19,7 @@ from octop.infra.errors import OctopError
 from octop.infra.execution.service import ActiveExecution
 from octop.infra.group_experts.snapshots import format_answer
 from octop.infra.group_experts.tools import GroupTools
+from octop.infra.utils.turn_failure import model_not_executed
 
 _BOUNDARY = (
     "Answer this group question with one final reply. Use the tools provided for this "
@@ -32,25 +32,6 @@ _BOUNDARY = (
 )
 MAX_TOOL_CALLS = 4
 MAX_MODEL_ROUNDS = 6
-
-
-def model_not_executed(exc: BaseException) -> bool:
-    """Only rejection/pre-connect failures prove a reserved request did not run."""
-    status = (
-        exc.response.status_code
-        if isinstance(exc, httpx.HTTPStatusError)
-        else getattr(exc, "status_code", None)
-    )
-    if isinstance(status, int):
-        return status in {400, 401, 403, 404, 405, 413, 415, 422, 429}
-    seen: set[int] = set()
-    current: BaseException | None = exc
-    while current is not None and id(current) not in seen:
-        seen.add(id(current))
-        if isinstance(current, (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout)):
-            return True
-        current = current.__cause__
-    return False
 
 
 def build_model(provider: Any, snapshot: dict[str, Any], tools: list[Any] | None = None) -> Any:
@@ -185,6 +166,8 @@ class GroupExpertExecutor:
             provider = await groups.io.run(
                 groups.services.provider_repo.get, snapshot["provider_id"]
             )
+            if provider is None:
+                raise ExecutionConflict("group_expert_configuration_changed")
             user = await groups.io.run(groups.services.user_repo.get, value["identity"]["user_id"])
             if snapshot.get("tools"):
                 runtime = self.tools_factory(groups, active, value)

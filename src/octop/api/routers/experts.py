@@ -74,6 +74,7 @@ from octop.infra.agents.experts.skillhub_market import (
 )
 from octop.infra.errors import ErrorCode, OctopError
 from octop.infra.history.trajectory.settings import apply_enable_trajectory
+from octop.infra.users.expert_access import ExpertAccess
 from octop.infra.utils.locale import resolve_user_locale
 
 router = APIRouter()
@@ -552,6 +553,7 @@ async def publish_agent_expert(
     source = require_agent_owner_row(agent_id, user=user, as_user=None, server=server)
     if not user_owns_agent(source, user):
         raise OctopError(ErrorCode.FORBIDDEN, "agent not owned by user")
+    ExpertAccess(server.services).assert_manage(agent_id)
     assert server.app_runtime is not None
     assert server.services is not None
     workspace = server.app_runtime.agent_registry.workspace_for_agent(agent_id)
@@ -589,6 +591,7 @@ async def refresh_published_expert(
     if row.source_agent_id is None:
         raise OctopError(ErrorCode.NOT_FOUND, "published expert source agent not found")
     source = require_agent_owner_row(row.source_agent_id, user=user, as_user=None, server=server)
+    ExpertAccess(server.services).assert_manage(row.source_agent_id)
     assert server.app_runtime is not None
     assert server.services is not None
     workspace = server.app_runtime.agent_registry.workspace_for_agent(row.source_agent_id)

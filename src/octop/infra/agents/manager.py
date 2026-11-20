@@ -946,6 +946,16 @@ class AgentManager:
             out.pop("system_files_path", None)
         if pin_workspace_dir and "workspace_dir" in current_raw:
             out["workspace_dir"] = current_raw["workspace_dir"]
+        if pin_workspace_dir:
+            from octop.infra.backend.isolation import isolation_enabled
+
+            if isolation_enabled():
+                # The public config exposes the effective Docker backend even
+                # when an older stored backend is available outside isolation.
+                if "backend" in current_raw:
+                    out["backend"] = current_raw["backend"]
+                else:
+                    out.pop("backend", None)
         return out
 
     async def update(self, agent_id: str, **kwargs: Any) -> AgentRow:
@@ -976,6 +986,7 @@ class AgentManager:
             parsed_profile_cfg = parse_config_json(
                 kwargs["config_json"] if isinstance(kwargs["config_json"], str) else None
             )
+            requested_backend = parsed_profile_cfg.get("backend")
             parsed_profile_cfg = self._preserve_internal_layout(
                 agent_id, parsed_profile_cfg, pin_workspace_dir=True
             )
@@ -986,7 +997,7 @@ class AgentManager:
                 raise_if_backend_outside_user_root(
                     self._repos.user_policy_repo,
                     owner_row.user_id,
-                    parsed_profile_cfg.get("backend"),
+                    requested_backend,
                 )
             lifted = extract_profile_from_config(parsed_profile_cfg)
             kwargs["config_json"] = dumps_config(parsed_profile_cfg)
@@ -1859,6 +1870,10 @@ class AgentManager:
                 if inst.status != "active":
                     continue
                 await svc.ensure_fresh_credentials(inst.instance_id, inst.kind)
+                if inst.kind == "tencent-docs":
+                    for cache_key in list(self._mcp_tool_cache):
+                        if cache_key[:2] == (uid, inst.mcp_server_name):
+                            self._mcp_tool_cache.pop(cache_key, None)
             await self._reload_agent(agent_id)
         finally:
             self._connector_user_override.pop(agent_id, None)
@@ -1937,6 +1952,7 @@ class AgentManager:
         from octop.infra.backend.isolation import host_mcp, isolation_enabled
         from octop.infra.connectors.mcp_tool_cache import (
             fingerprint_mcp_spec,
+            load_tools_with_remote_schema,
             wrap_tools_for_shared_use,
         )
 
@@ -1971,7 +1987,12 @@ class AgentManager:
 
             global_env = load_env_file(env_file_path(self._paths.root))
             load_spec = overlay_stdio_spec_env(spec, global_env)
-            raw = await aload_mcp_tools({server_name: load_spec})
+            if load_spec.get("preserve_args_schema"):
+                raw = await load_tools_with_remote_schema(server_name, load_spec)
+                if not raw:
+                    return []
+            else:
+                raw = await aload_mcp_tools({server_name: load_spec})
             from octop.infra.agents.plugins.plugin_tool_names import (  # noqa: PLC0415
                 sanitize_plugin_tool_names,
             )
@@ -3079,6 +3100,17 @@ class AgentManager:
                 agent_id=row.agent_id,
                 mcp_server_configs=cfg.mcp_server_configs,
             )
+            for name, spec in cfg.mcp_server_configs.items():
+                if not isinstance(spec, dict) or not spec.get("preserve_args_schema"):
+                    continue
+                try:
+                    tools = await self._get_or_load_mcp_tools(
+                        uid, name, {**spec, "transport": "http"}
+                    )
+                    if tools:
+                        agent.append_mcp_tools(tools)
+                except Exception:
+                    logger.warning("Failed to load MCP tools from server %r", name, exc_info=True)
         if not team_host:
             _sanitize_bound_mcp_tools(agent)
         if team_host:

@@ -64,8 +64,23 @@ def test_real_postgres_restore_rolls_back_on_error(tmp_path: Path):
             admin.execute(sql.SQL("DROP DATABASE {} WITH (FORCE)").format(sql.Identifier(name)))
 
 
-@pytest.mark.parametrize("include_chats", [False, True])
-def test_real_postgres_company_archive_relations(tmp_path, include_chats):
+@pytest.mark.parametrize(
+    ("archive_version", "include_chats", "fail_migration", "preserve_users"),
+    [
+        (36, False, False, False),
+        (36, True, False, False),
+        (32, False, False, False),
+        (33, False, False, False),
+        (34, False, False, False),
+        (35, False, False, False),
+        (35, True, False, False),
+        (35, False, True, False),
+        (36, False, False, True),
+    ],
+)
+def test_real_postgres_company_archive_relations(
+    tmp_path, monkeypatch, archive_version, include_chats, fail_migration, preserve_users
+):
     import os
     import uuid
 
@@ -74,8 +89,8 @@ def test_real_postgres_company_archive_relations(tmp_path, include_chats):
     from psycopg.conninfo import conninfo_to_dict, make_conninfo
 
     from octop.config import DatabaseConfig, OctopConfig
-    from octop.infra.backup.system_archive import create_system_backup, restore_system_backup
-    from octop.infra.db.migrate import run_migrations
+    from octop.infra.backup import system_archive
+    from octop.infra.db import migrate
     from octop.infra.db.pool import PostgresPool
     from octop.infra.db.repos.company_runtime import CompanyRuntimeRepo
     from octop.infra.db.services import build_shared_services
@@ -92,8 +107,16 @@ def test_real_postgres_company_archive_relations(tmp_path, include_chats):
     dsn = make_conninfo(**params)
     pool = PostgresPool(dsn)
     try:
-        run_migrations(pool)
+        migrations = migrate._discover("postgresql")
+        with monkeypatch.context() as patch:
+            patch.setattr(
+                migrate,
+                "_discover",
+                lambda _: [(v, p) for v, p in migrations if v <= archive_version],
+            )
+            migrate.run_migrations(pool)
         paths = PathLayout(tmp_path)
+        paths.config.write_text('{"label": "archive"}', encoding="utf-8")
         services = build_shared_services(db=pool, paths=paths, config=OctopConfig())
         owner = services.user_repo.create(username="employee", role="user")
         services.agent_repo.create(agent_id="expert", user_id=owner, name="Expert")
@@ -128,7 +151,7 @@ def test_real_postgres_company_archive_relations(tmp_path, include_chats):
             conn.execute("INSERT INTO desktop_file_threads VALUES (?)", ("thread",))
         archive = tmp_path / "system.tar.gz"
         config = DatabaseConfig(driver="postgresql", url=dsn)
-        create_system_backup(
+        system_archive.create_system_backup(
             paths=paths,
             agent_rows=[],
             pool=pool,
@@ -136,10 +159,52 @@ def test_real_postgres_company_archive_relations(tmp_path, include_chats):
             dest=archive,
             include_chats=include_chats,
         )
+        migrate.run_migrations(pool)
         repo.transition("task", "completed")
-        restore_system_backup(
-            archive, paths=paths, pool=pool, db_config=config, restore_config=False
+        paths.config.write_text('{"label": "current"}', encoding="utf-8")
+        extra_user = services.user_repo.create(
+            username="current-only", role="user", permissions=["test_permission"]
         )
+        with pool.connect() as conn:
+            if preserve_users:
+                conn.execute(
+                    "UPDATE users SET expert_access_mode='assigned_only' WHERE id=?", (extra_user,)
+                )
+
+        def restore():
+            return system_archive.restore_system_backup(
+                archive, paths=paths, pool=pool, db_config=config, preserve_users=preserve_users
+            )
+
+        if fail_migration:
+
+            def refuse(_pool):
+                # Fail after migrations have replaced the old schema.
+                migrate.run_migrations(_pool)
+                raise RuntimeError("injected migration failure")
+
+            monkeypatch.setattr(system_archive, "run_migrations", refuse)
+            with pytest.raises(OctopError, match="injected migration failure"):
+                restore()
+            assert services.user_repo.get(extra_user) is not None
+            assert repo.task("task")["status"] == "completed"
+            assert paths.config.read_text(encoding="utf-8") == '{"label": "current"}'
+        else:
+            assert restore()["schema_version"] == 36
+            if preserve_users:
+                retained = services.user_repo.get(extra_user)
+                assert retained is not None
+                assert retained.permissions == ["test_permission"]
+                with pool.connect() as conn:
+                    row = conn.execute(
+                        "SELECT expert_access_mode FROM users WHERE id=?", (extra_user,)
+                    ).fetchone()
+                    assert row[0] == "assigned_only"
+                assert services.user_repo.create(username="later", role="user") > extra_user
+            else:
+                assert services.user_repo.get(extra_user) is None
+            assert paths.config.read_text(encoding="utf-8") == '{"label": "archive"}'
+        assert migrate._current_version(pool) == 36
         assert repo.task("task")["status"] == ("running" if include_chats else "completed")
         assert len(repo.events("task")) == 1
         assert repo.checkpoint("thread", "", None) == {"saved": True, "pending_writes": ["write"]}

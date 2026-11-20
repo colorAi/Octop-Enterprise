@@ -827,6 +827,9 @@ class GlobalProcessor:
             content=content,
             model=model_ref,
             message_kwargs=message_kwargs or None,
+            reasoning_overrides=self._resolve_reasoning_overrides(
+                user_id=user_id, thread_id=thread_id, model_ref=model_ref, meta=None
+            ),
         )
         self.teams.stamp_host_runtime(request, agent_id)
         self._attach_turn_knowledge_config(

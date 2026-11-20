@@ -519,6 +519,27 @@ async def test_update_persists_field_changes(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_isolated_expert_config_save_preserves_stored_backend(tmp_path, monkeypatch):
+    services = _make_services(tmp_path)
+    registry = _make_registry(services)
+    stored = {"type": "filesystem", "root_dir": str(tmp_path), "virtual_mode": True}
+    services.agent_repo.create(
+        agent_id="existing",
+        user_id=None,
+        name="Expert",
+        config_json=json.dumps({"backend": stored}),
+    )
+    monkeypatch.setenv("OCTOP_AGENT_ISOLATION", "docker")
+    monkeypatch.setattr(registry, "_schedule_reload", lambda _: None)
+    row = await registry.update(
+        "existing",
+        config_json=json.dumps({"backend": {"type": "docker"}, "enable_trajectory": True}),
+    )
+    assert json.loads(row.config_json)["backend"] == stored
+    assert json.loads(row.config_json)["enable_trajectory"] is True
+
+
+@pytest.mark.asyncio
 async def test_update_triggers_harness_reload(tmp_path: Path) -> None:
     """update() calls harness.remove to trigger re-registration."""
     services = _make_services(tmp_path)

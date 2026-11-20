@@ -71,6 +71,7 @@ def install(app: Any, server: Any) -> None:
         groups = getattr(server, "group_experts", None)
         if (
             groups is not None
+            and groups.bridge.enabled
             and request.state.octop_user.is_admin
             and request.method not in {"GET", "HEAD", "OPTIONS"}
             and 200 <= response.status_code < 300

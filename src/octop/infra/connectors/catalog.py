@@ -136,6 +136,13 @@ _CATALOG: tuple[ConnectorCatalogEntry, ...] = (
             "manage.search_file",
             "manage.set_privilege",
             "manage.folder_list",
+            "create_excel_by_markdown",
+            "batch_update_sheet_range",
+            "smartsheet.list_tables",
+            "smartsheet.add_fields",
+            "smartsheet.list_records",
+            "smartsheet.add_records",
+            "smartsheet.update_records",
         ),
     ),
     ConnectorCatalogEntry(

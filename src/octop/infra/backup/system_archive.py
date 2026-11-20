@@ -11,6 +11,7 @@ import re
 import shutil
 import tarfile
 import tempfile
+from contextlib import AbstractContextManager, nullcontext
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -30,7 +31,7 @@ from octop.infra.backup.chats import (
     strip_chat_tables_from_sqlite_file,
 )
 from octop.infra.backup.manifest import MANIFEST_VERSION, AgentBackupEntry, BackupManifest
-from octop.infra.backup.pg_dump import dump_postgres, restore_postgres
+from octop.infra.backup.pg_dump import dump_postgres, replace_postgres_for_restore
 from octop.infra.backup.snapshot import (
     capture_jwt_secret_from_pool,
     capture_users_from_pool,
@@ -546,31 +547,56 @@ def restore_system_backup(
                         status=400,
                     )
 
-        ownership_remap: dict[str, int] | None = None
+        database_restore: AbstractContextManager[None]
         if pool.dialect == "postgresql":
-            restore_postgres(db_config.postgresql_conninfo(), db_path)
+            database_restore = replace_postgres_for_restore(
+                db_config.postgresql_conninfo(),
+                db_path,
+                pool=pool,
+                schema_version=manifest.schema_version,
+                recovery_root=paths.root,
+            )
         else:
             if isinstance(pool, SqlitePool):
                 restore_sqlite_into_pool(db_path, pool)
             else:
                 raise OctopError(ErrorCode.INTERNAL_ERROR, "sqlite restore requires SqlitePool")
+            database_restore = nullcontext()
 
-        # Upgrade the restored database before any current-version repository or
-        # preservation helper queries it. This keeps old backups usable after
-        # tables gain required columns or are rebuilt by later migrations.
-        try:
-            run_migrations(pool)
-        except Exception as exc:
-            details = {
-                "archive_schema_version": manifest.schema_version,
-                "runtime_schema_version": runtime_schema_version,
-            }
-            raise OctopError(
-                ErrorCode.BACKUP_SCHEMA_INCOMPATIBLE,
-                f"failed to upgrade backup schema version {manifest.schema_version} "
-                f"to {runtime_schema_version}: {exc}",
-                details=details,
-            ) from exc
+        ownership_remap: dict[str, int] | None = None
+        with database_restore:
+            # Current-version repositories must see the upgraded schema.
+            try:
+                run_migrations(pool)
+            except Exception as exc:
+                raise OctopError(
+                    ErrorCode.BACKUP_SCHEMA_INCOMPATIBLE,
+                    f"failed to upgrade backup schema version {manifest.schema_version} "
+                    f"to {runtime_schema_version}: {exc}",
+                    details={
+                        "archive_schema_version": manifest.schema_version,
+                        "runtime_schema_version": runtime_schema_version,
+                    },
+                ) from exc
+
+            # Remap ownership before pruning imported placeholders and cascading
+            # their dependent records.
+            if saved_users:
+                upsert_users_into_pool(pool, saved_users)
+                if is_migration and effective_owner is not None:
+                    ownership_remap = remap_ownership_to_user(pool, int(effective_owner))
+                prune_users_not_in(pool, [row[0] for row in saved_users])
+
+            if effective_preserve_users:
+                if saved_jwt is not None:
+                    restore_jwt_secret_into_pool(pool, saved_jwt)
+                else:
+                    SecretRepo(pool).get_or_create("jwt", lambda: os.urandom(32))
+
+            preserved_chat_rows, skipped_chat_rows = (
+                restore_preserved_chats(pool, saved_chats) if saved_chats is not None else (0, 0)
+            )
+            schema_version = _current_version(pool)
 
         if restore_config:
             cfg_path = extracted / _CONFIG_DIR / "config.json"
@@ -582,23 +608,6 @@ def restore_system_backup(
                 env_path = env_file_path(paths.root)
                 env_path.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(env_blob_path, env_path)
-
-        # Migration ownership remap must run after the target owner exists and
-        # before pruning backup placeholder users (avoids ON DELETE CASCADE).
-        if saved_users and pool is not None:
-            upsert_users_into_pool(pool, saved_users)
-            if is_migration and effective_owner is not None:
-                ownership_remap = remap_ownership_to_user(pool, int(effective_owner))
-            prune_users_not_in(pool, [row[0] for row in saved_users])
-
-        # Migration backups ship a foreign ``secrets`` table. Prefer the current
-        # instance's JWT secret so outstanding sessions stay valid; only seed a
-        # fresh key when this instance never had one.
-        if effective_preserve_users and pool is not None:
-            if saved_jwt is not None:
-                restore_jwt_secret_into_pool(pool, saved_jwt)
-            else:
-                SecretRepo(pool).get_or_create("jwt", lambda: os.urandom(32))
 
         restored_workspaces = 0
         prefix = f"{_WORKSPACES_DIR}/"
@@ -668,11 +677,6 @@ def restore_system_backup(
                 data = item.read_bytes()
                 store_asset(paths.root / _COMPANY_SKILLS_DIR, data)
                 restored_company_skill_files += 1
-
-        preserved_chat_rows, skipped_chat_rows = (
-            restore_preserved_chats(pool, saved_chats) if saved_chats is not None else (0, 0)
-        )
-        schema_version = _current_version(pool)
 
     result: dict[str, Any] = {
         "schema_version": schema_version,

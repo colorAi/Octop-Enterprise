@@ -346,15 +346,8 @@ func (s *Store) ResolveImportedPath(original string) (string, error) {
 				prefix = strings.ReplaceAll(prefix, "\\", "/")
 			}
 			prefix = strings.TrimRight(prefix, "/")
-			if len(candidate) < len(prefix) {
-				continue
-			}
-			head, rest := candidate[:len(prefix)], candidate[len(prefix):]
-			windows := (len(prefix) > 1 && prefix[1] == ':') || strings.HasPrefix(prefix, "//")
-			if head != prefix && !(windows && strings.EqualFold(head, prefix)) {
-				continue
-			}
-			if rest != "" && !strings.HasPrefix(rest, "/") {
+			rel, found := relativeToPortableRoot(candidate, prefix)
+			if !found {
 				continue
 			}
 			if len(prefix) == best && current == bestCurrent && p.ID != selected.ID {
@@ -362,7 +355,7 @@ func (s *Store) ResolveImportedPath(original string) (string, error) {
 			}
 			if len(prefix) > best || (len(prefix) == best && current && !bestCurrent) {
 				selected = p
-				relative = strings.TrimPrefix(rest, "/")
+				relative = rel
 				best = len(prefix)
 				bestCurrent, ambiguous = current, false
 			}
@@ -389,6 +382,21 @@ func (s *Store) ResolveImportedPath(original string) (string, error) {
 		return "", errors.New("project_path_invalid")
 	}
 	return filepath.Join(selected.Path, rel), nil
+}
+
+func relativeToPortableRoot(candidate, prefix string) (string, bool) {
+	if len(candidate) < len(prefix) {
+		return "", false
+	}
+	head, rest := candidate[:len(prefix)], candidate[len(prefix):]
+	windows := (len(prefix) > 1 && prefix[1] == ':') || strings.HasPrefix(prefix, "//")
+	if head != prefix && !(windows && strings.EqualFold(head, prefix)) {
+		return "", false
+	}
+	if rest != "" && !strings.HasPrefix(rest, "/") {
+		return "", false
+	}
+	return strings.TrimPrefix(rest, "/"), true
 }
 
 // Bind preserves a conversation's project even when the active project changes.

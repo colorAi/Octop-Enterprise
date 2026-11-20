@@ -27,6 +27,27 @@ def test_db_pool_creates_file(tmp_path: Path):
     assert db_path.exists()
 
 
+def test_close_waits_for_the_live_connection(db: SqlitePool):
+    started = threading.Event()
+    closed = threading.Event()
+
+    def close() -> None:
+        started.set()
+        db.close()
+        closed.set()
+
+    closer = threading.Thread(target=close)
+    try:
+        with db.connect() as conn:
+            closer.start()
+            assert started.wait(2)
+            assert not closed.wait(0.05)
+            assert conn.execute("SELECT 1").fetchone()[0] == 1
+    finally:
+        closer.join(timeout=2)
+    assert closed.is_set()
+
+
 @pytest.mark.skipif(os.name != "posix", reason="POSIX-only mode bits")
 def test_db_pool_file_is_0600(tmp_path: Path):
     db_path = tmp_path / "octop.db"

@@ -16,6 +16,25 @@ afterEach(() => {
   delete window.__octopRuntime;
   workspace.state.owner_user_id = 1;
 });
+it("normalizes project maps from a server without multi-project support", async () => {
+  window.__octopRuntime = {
+    projects: {
+      status: vi.fn().mockResolvedValue({
+        supported: false,
+        current_project_id: "",
+        projects: null,
+        threads: null,
+      }),
+    },
+  } as unknown as DesktopRuntimeBridge;
+  const { result } = renderHook(() => useDesktopProjects(), {
+    wrapper: DesktopProjectsProvider,
+  });
+  await waitFor(() => expect(result.current.state?.supported).toBe(false));
+  expect(result.current.state?.projects).toEqual({});
+  expect(result.current.state?.threads).toEqual({});
+  expect(getDesktopProjectSnapshot()?.threads).toEqual({});
+});
 it("ignores a late catalog reply after switching employees", async () => {
   let finish: ((value: unknown) => void) | undefined;
   const status = vi

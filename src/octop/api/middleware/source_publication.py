@@ -9,6 +9,7 @@ from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from octop.infra.errors import OctopError
+from octop.infra.users.source_publication import SourceSaveRejected
 
 
 class SourcePublicationMiddleware:
@@ -27,9 +28,10 @@ class SourcePublicationMiddleware:
             or path.startswith("/api/plugins/")
             or (
                 bool(re.fullmatch(r"/api/agents(?:/[^/]+)?", path))
+                or bool(re.fullmatch(r"/api/agents/from-expert/[^/]+", path))
                 or bool(
                     re.match(
-                        r"/api/agents/[^/]+/(?:workspace|skills|initialize|bootstrap|clone)(?:/|$)",
+                        r"/api/agents/[^/]+/(?:workspace|skills|initialize|bootstrap|clone|avatar)(?:/|$)",
                         path,
                     )
                 )
@@ -74,15 +76,14 @@ class SourcePublicationMiddleware:
                 raise ValueError("source_save_response_too_large")
             messages.append(message)
 
-        class RejectedSave(Exception):
-            pass
-
         try:
             async with publisher.mutation():
                 await self.app(scope, receive, collect)
                 if status >= 400:
-                    raise RejectedSave()
-        except RejectedSave:
+                    # Permission checks and request validation reject before
+                    # saving. A conflict can follow a partial workspace write.
+                    raise SourceSaveRejected(before_write=status in (401, 403, 405, 422))
+        except SourceSaveRejected:
             pass
         except Exception as exc:
             response = JSONResponse(

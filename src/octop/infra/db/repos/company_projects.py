@@ -246,6 +246,7 @@ class CompanyProjectRepo:
     def threads(
         self, project_id: str, owner: int, limit: int, offset: int, *, after: str | None = None
     ) -> list[dict[str, Any]]:
+        args: tuple[str, int, int, int] | tuple[str, int, str, int]
         if after is None:
             order = (
                 " ORDER BY t.pinned DESC, CASE WHEN t.last_active>0 THEN t.last_active "

@@ -26,8 +26,10 @@ import {
   inferKindFromNameAndMime,
   stripLocalAttachmentHints,
 } from "../utils/chatAttachments";
-import { LocalImagePreview } from "./LocalImagePreview";
-import { useDesktopWorkspace } from "../../../context/DesktopWorkspaceContext";
+import {
+  LocalImagePreview,
+  useLocalImagePreviewScope,
+} from "./LocalImagePreview";
 import { ChatMediaPlayer } from "./ChatMediaPlayer";
 import { useAuthImageSrc } from "../../../hooks/useAuthImageSrc";
 import {
@@ -274,13 +276,7 @@ function ImageGallery({
   images: ChatAttachment[];
   agentId?: string | null;
 }) {
-  const desktop = useDesktopWorkspace();
-  const previewScope = JSON.stringify([
-    desktop.state?.owner_user_id,
-    desktop.state?.path,
-    desktop.state?.grant?.id,
-    desktop.state?.grant?.version,
-  ]);
+  const previewScope = useLocalImagePreviewScope();
   if (!images || images.length === 0) return null;
 
   return (

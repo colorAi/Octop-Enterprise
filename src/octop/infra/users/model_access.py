@@ -72,9 +72,9 @@ class ModelAccess:
             self.require(user_id, "")
         return allowed[0]
 
-    def _employee(self, user_id: int) -> Any:
+    def _employee(self, user_id: int, *, target_role: str | None = None) -> Any:
         row = self._user(user_id)
-        if row.role == "admin":
+        if (target_role if target_role is not None else row.role) == "admin":
             raise OctopError(ErrorCode.FORBIDDEN, "administrators already have full model access")
         return row
 
@@ -84,9 +84,14 @@ class ModelAccess:
         return {**state, "items": self.catalog()}
 
     def validate(
-        self, user_id: int, model_refs: list[str], expected_revision: str
+        self,
+        user_id: int,
+        model_refs: list[str],
+        expected_revision: str,
+        *,
+        target_role: str | None = None,
     ) -> tuple[list[str], str | None]:
-        self._employee(user_id)
+        self._employee(user_id, target_role=target_role)
         selected = sorted(set(model_refs))
         available = {model["ref"] for model in self.catalog()}
         if not set(selected).issubset(available):

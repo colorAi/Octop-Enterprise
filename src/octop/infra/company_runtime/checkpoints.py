@@ -6,7 +6,7 @@ import asyncio
 import json
 from collections import defaultdict
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import aiosqlite
 from langchain_core.runnables import RunnableConfig
@@ -105,12 +105,9 @@ class LocalCheckpointSaver(RemoteCheckpointSaver):
             return None
         # SQLite's default lookup orders by checkpoint ID, including a seed
         # generated on a computer whose clock may be ahead of this one.
-        current = await (await self._store()).aget_tuple(
-            {
-                **config,
-                "configurable": {**config["configurable"], "checkpoint_id": checkpoint_id},
-            }
-        )
+        scoped = cast(RunnableConfig, dict(config))
+        scoped["configurable"] = {**config["configurable"], "checkpoint_id": checkpoint_id}
+        current = await (await self._store()).aget_tuple(scoped)
         if current is None and scope["checkpoint_id"]:
             current = await super().aget_tuple(config)
             if current is not None:

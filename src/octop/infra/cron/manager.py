@@ -212,6 +212,14 @@ class CronManager:
                 raise OctopError(ErrorCode.NOT_FOUND, f"cron job {cron_id!r} not found")
             if trigger is not None or enabled_bool is True:
                 self._mail_source(trigger or existing.trigger, existing.user_id)
+            if session_key is not None and session_key != existing.session_key:
+                target = self._gateway.thread_registry.get_session(session_key)
+                if target is None:
+                    raise OctopError(ErrorCode.NOT_FOUND, "cron target session not found")
+                if target.agent_id != existing.agent_id or target.user_id != existing.user_id:
+                    raise OctopError(
+                        ErrorCode.FORBIDDEN, "cron target session belongs to another owner"
+                    )
             repo_kwargs: dict[str, Any] = {
                 "trigger": trigger,
                 "name": name,

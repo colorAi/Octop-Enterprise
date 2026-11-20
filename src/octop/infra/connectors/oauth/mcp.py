@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import time
 from typing import Any
-from urllib.parse import urlencode, urlparse
+from urllib.parse import parse_qsl, urlencode, urlparse, urlsplit
 
 import httpx
 
@@ -69,7 +69,12 @@ async def _validate_metadata_endpoints(metadata: dict[str, Any], *, issuer: str)
 
 
 async def fetch_authorization_metadata(issuer: str) -> dict[str, Any]:
-    metadata_url = f"{issuer.rstrip('/')}/.well-known/oauth-authorization-server"
+    parts = urlsplit(issuer)
+    metadata_url = parts._replace(
+        path="/.well-known/oauth-authorization-server" + parts.path.rstrip("/"),
+        query="",
+        fragment="",
+    ).geturl()
     await _ensure_mcp_oauth_url(metadata_url, issuer=issuer, field="issuer_metadata")
     r = await safe_request("GET", metadata_url, timeout=20.0)
     r.raise_for_status()
@@ -133,7 +138,13 @@ def build_authorize_url(
         params["scope"] = scope
     if resource:
         params["resource"] = resource
-    return f"{metadata['authorization_endpoint']}?{urlencode(params)}"
+    endpoint = urlsplit(str(metadata["authorization_endpoint"]))
+    existing = [
+        (key, value)
+        for key, value in parse_qsl(endpoint.query, keep_blank_values=True)
+        if key not in params
+    ]
+    return endpoint._replace(query=urlencode([*existing, *params.items()])).geturl()
 
 
 def _http_error_detail(resp: Any) -> str:

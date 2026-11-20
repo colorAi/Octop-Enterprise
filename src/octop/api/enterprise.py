@@ -29,6 +29,7 @@ from octop.api.routers import communication, executions, group_expert_internal, 
 from octop.infra.company_runtime import MODEL_STREAM_READ_TIMEOUT_SECONDS
 from octop.infra.errors import OctopError
 from octop.infra.execution.service import ExecutionConflict
+from octop.infra.utils.locale import resolve_request_locale
 
 _HOP = frozenset(
     {
@@ -87,8 +88,10 @@ def build_web_app(
         return await management_read(server, server.services.execution_repo.route, owner) or origin
 
     @app.exception_handler(OctopError)
-    async def octop_error(_: Request, exc: OctopError) -> JSONResponse:
-        return JSONResponse(status_code=exc.status, content=exc.to_envelope())
+    async def octop_error(request: Request, exc: OctopError) -> JSONResponse:
+        return JSONResponse(
+            status_code=exc.status, content=exc.to_envelope(locale=resolve_request_locale(request))
+        )
 
     @app.get("/api/health")
     async def health() -> dict[str, Any]:
@@ -149,7 +152,7 @@ def build_web_app(
         except ExecutionConflict as exc:
             return await execution_error_response(request, exc)
         except OctopError as exc:
-            return JSONResponse(status_code=exc.status, content=exc.to_envelope())
+            return await octop_error(request, exc)
         url = selected + request.url.path
         if request.url.query:
             url += "?" + request.url.query

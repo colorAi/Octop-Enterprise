@@ -200,7 +200,10 @@ func (a *App) performProjectAction(nonce, base, method string, raw json.RawMessa
 	if !a.projectSupported {
 		a.companyMu.Unlock()
 		if method == "project_status" {
-			return projectState{Supported: false}, nil
+			return projectState{Catalog: companyprojects.Catalog{
+				Projects: map[string]companyprojects.Project{},
+				Threads:  map[string]string{},
+			}}, nil
 		}
 		return nil, errors.New("project_runtime_required")
 	}
@@ -334,6 +337,12 @@ func (a *App) performProjectAction(nonce, base, method string, raw json.RawMessa
 	if !ok {
 		return nil, errors.New("thread_project_missing")
 	}
+	if method == "project_fork" {
+		project, err = store.ForID(project.ID)
+		if err != nil {
+			return nil, err
+		}
+	}
 	if method == "project_files" || method == "project_read" {
 		project, err = store.ForID(project.ID)
 		if err != nil {
@@ -343,7 +352,7 @@ func (a *App) performProjectAction(nonce, base, method string, raw json.RawMessa
 		if method == "project_files" {
 			result, err = companyprojects.ListFiles(project.Path, params.Path, params.Query)
 		} else {
-			result, err = companyprojects.ReadFile(project.Path, params.Path)
+			result, err = companyprojects.ReadProjectFile(project, params.Path)
 		}
 		if scopeErr := check(); scopeErr != nil {
 			return nil, scopeErr
@@ -529,7 +538,7 @@ func (a *App) projectStartParamsLocked(nonce, base string, raw json.RawMessage) 
 				return nil, err
 			}
 			params["project_id"], params["project_root"], params["project_revision"] = p.ID, p.Path, p.Revision
-			params["project_previous_roots"] = p.PreviousPaths
+			params["project_previous_roots"] = append([]string{}, p.PreviousPaths...)
 		} else {
 			return nil, errors.New("thread_project_missing")
 		}

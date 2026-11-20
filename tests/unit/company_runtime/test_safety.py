@@ -100,7 +100,7 @@ async def test_image_generation_receipt_and_download_scope(company, monkeypatch)
     install_agent(server)
     data = b"generated-test-image"
     agent = server.app_runtime.agent_registry.get_agent("expert")
-    agent.config.media_generation = SimpleNamespace(has_api_key=lambda: True, image_enabled=True)
+    agent.config.media_generation = SimpleNamespace(has_image_provider=lambda: True)
     agent.workspace.adownload_bytes = AsyncMock(return_value=data)
     generate = AsyncMock(
         return_value=SimpleNamespace(
@@ -131,7 +131,7 @@ async def test_image_download_failure_is_reported_without_regenerating(company, 
     server, client, _, _ = company
     install_agent(server)
     agent = server.app_runtime.agent_registry.get_agent("expert")
-    agent.config.media_generation = SimpleNamespace(has_api_key=lambda: True, image_enabled=True)
+    agent.config.media_generation = SimpleNamespace(has_image_provider=lambda: True)
     generate = AsyncMock(
         side_effect=MediaGenerationError(
             "Generated media download timed out.",

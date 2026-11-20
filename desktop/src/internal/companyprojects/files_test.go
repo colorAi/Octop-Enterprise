@@ -31,6 +31,14 @@ func TestProjectFileBrowserAndSearchStayBoundedAndRooted(t *testing.T) {
 	if err != nil || file.Text == nil || *file.Text != "hello" {
 		t.Fatal(file, err)
 	}
+	oldRoot := filepath.Join(outside, "old-project")
+	project := Project{Path: root, PreviousPaths: []string{oldRoot}}
+	for _, path := range []string{"/docs/中文 report.txt", filepath.Join(oldRoot, "docs", "中文 report.txt")} {
+		resolved, err := ReadProjectFile(project, path)
+		if err != nil || resolved.Path != file.Path || resolved.SHA256 != file.SHA256 {
+			t.Fatal(resolved, err)
+		}
+	}
 	for _, path := range []string{"../secret.txt", "link/secret.txt", filepath.Join(outside, "secret.txt")} {
 		if _, err := ReadFile(root, path); err == nil {
 			t.Fatal("read outside project", path)

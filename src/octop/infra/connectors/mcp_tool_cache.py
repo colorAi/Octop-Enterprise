@@ -17,7 +17,34 @@ _FINGERPRINT_KEYS = (
     "command",
     "args",
     "env",
+    "allowed_tools",
+    "tool_arg_aliases",
+    "preserve_args_schema",
 )
+
+
+async def load_tools_with_remote_schema(server_name: str, spec: dict[str, Any]) -> list[Any]:
+    """Load allowlisted tools without replacing nested JSON Schema fields with strings."""
+    from langchain_mcp_adapters.client import MultiServerMCPClient
+    from langchain_mcp_adapters.sessions import StreamableHttpConnection
+    from octop_harness.mcp import _wrap_tool_arguments
+
+    connection: StreamableHttpConnection = {
+        "transport": "streamable_http",
+        "url": spec["url"],
+        "headers": spec["headers"],
+    }
+    client = MultiServerMCPClient({server_name: connection}, tool_name_prefix=True)
+    allowed = set(spec["allowed_tools"])
+    aliases = spec.get("tool_arg_aliases", {})
+    prefix = f"{server_name}_"
+    tools = []
+    for tool in await client.get_tools():
+        name = tool.name.removeprefix(prefix)
+        if name in allowed:
+            _wrap_tool_arguments(tool, aliases=aliases.get(name))
+            tools.append(tool)
+    return tools
 
 
 def fingerprint_mcp_spec(spec: dict[str, Any]) -> str:

@@ -5,10 +5,22 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from typing import Any
 
 from octop.infra.history.legacy import checkpoint_snapshot, checkpoint_wires
 from octop.infra.history.service import HistoryArchive
+
+
+@asynccontextmanager
+async def history_runtime(registry: Any, agent_id: str) -> AsyncIterator[Any]:
+    shards = getattr(registry, "runtime_shards", None)
+    if shards is None:
+        yield registry.get_agent(agent_id)
+    else:
+        async with shards.activity(None, agent_id):
+            yield await registry.ensure_runtime(agent_id)
 
 
 async def read_page(
@@ -22,7 +34,8 @@ async def read_page(
     cursor: str | None = None,
 ) -> dict[str, Any]:
     async def legacy(anchor: dict[str, Any]) -> list[Any]:
-        return await checkpoint_wires(registry.get_agent(agent_id), thread_id, anchor)
+        async with history_runtime(registry, agent_id) as harness:
+            return await checkpoint_wires(harness, thread_id, anchor)
 
     boundary = None
     if cursor and cursor.startswith("legacy:"):
@@ -78,7 +91,8 @@ async def read_page(
                     }
                 }
             }
-        raw, config = await checkpoint_snapshot(registry.get_agent(agent_id), thread_id, anchor)
+        async with history_runtime(registry, agent_id) as harness:
+            raw, config = await checkpoint_snapshot(harness, thread_id, anchor)
         stop = min(len(raw), boundary["before"]) if boundary else max(0, len(raw) - offset)
         start = max(0, stop - limit)
         wires, has_more, before = raw[start:stop], start > 0, start

@@ -36,9 +36,17 @@ def main() -> None:
         runtime = EnterpriseRuntime(emit)
         loop = asyncio.get_running_loop()
         current = asyncio.current_task()
+        closing = False
+
+        def request_stop() -> None:
+            nonlocal closing
+            if not closing and current is not None:
+                closing = True
+                current.cancel()
+
         if sys.platform != "win32" and current:
             for sig in (signal.SIGTERM, signal.SIGINT):
-                loop.add_signal_handler(sig, current.cancel)
+                loop.add_signal_handler(sig, request_stop)
         try:
             while True:
                 line = await loop.run_in_executor(None, sys.stdin.readline)
@@ -74,6 +82,7 @@ def main() -> None:
                 except Exception as exc:
                     emit({"id": request.get("id"), "error": str(exc)})
         finally:
+            closing = True
             await runtime.close()
 
     asyncio.run(run())
