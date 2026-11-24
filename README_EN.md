@@ -94,11 +94,11 @@ For client builds see the [desktop instructions](desktop/README.md); for detaile
 
 ## Community
 
-**Octop Enterprise community group** (Chinese-language). Scan the QR code to join. The supplied invite image states that it is valid **before November 23, 2026**.
+**Octop Enterprise community group** (Chinese-language). Scan the QR code to join.
 
 <div align="center">
 
-<img src="docs/assets/community/octop-group-20261116.png" alt="Octop Enterprise community group QR code" width="300">
+<img src="docs/assets/community/octop-group-20261124.png" alt="Octop Enterprise community group QR code" width="300">
 
 </div>
 

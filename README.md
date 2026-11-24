@@ -94,11 +94,11 @@ GitHub 下载较慢时，可使用[夸克网盘下载](https://pan.quark.cn/s/6d
 
 ## 交流群
 
-**Octop 企业版交流群**。扫码加入，本次二维码标注有效期为 **2026 年 11 月 23 日前**。
+**Octop 企业版交流群**。扫码加入。
 
 <div align="center">
 
-<img src="docs/assets/community/octop-group-20261116.png" alt="Octop 企业版交流群二维码" width="300">
+<img src="docs/assets/community/octop-group-20261124.png" alt="Octop 企业版交流群二维码" width="300">
 
 </div>
 
